@@ -20,7 +20,10 @@ import {
   Slider,
   Select,
   MenuItem,
-  FormControl
+  FormControl,
+  FormLabel,
+  Radio,
+  RadioGroup
 } from '@mui/material';
 import { useModelStore } from 'src/stores/modelStore';
 import {
@@ -30,8 +33,12 @@ import {
   base64ToBlob,
   generateGenericFilename,
   modelFromModelStore,
-  computeRenderTarget
+  computeRenderTarget,
+  screenshotScale,
+  getUnprojectedBounds as getUnprojectedBoundsAt
 } from 'src/utils';
+import { getStrategy } from 'src/utils/coordinateTransforms';
+import { formatViewAngle, normaliseDeg } from 'src/utils/viewRotation';
 import { ModelStore, Coords } from 'src/types';
 import { useDiagramUtils } from 'src/hooks/useDiagramUtils';
 import { useUiStateStore } from 'src/stores/uiStateStore';
@@ -246,10 +253,6 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
     { label: '4x (288 DPI)', value: 4 }
   ];
 
-  // Use original bounds for the base image
-  const bounds = useMemo(() => {
-    return getUnprojectedBounds();
-  }, [getUnprojectedBounds]);
 
   // QA #10 (CI): `data-all-icons-drawn` is vacuously "true" on any paint whose
   // build saw no node with a pending icon — including the hidden Axoview's
@@ -267,22 +270,73 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
       return v.id === currentView;
     }) ?? model.views[0];
   const minNodesForCapture = (exportedView?.items.length ?? 0) > 0 ? 1 : 0;
+
+  // ADR 0051 §5 — the export angle. As viewed by default (the live angle on
+  // screen); the page default when the dialog was opened for one (a file
+  // explorer has no live canvas to speak for). The choice is offered only when
+  // the two differ, and only in iso (the angle has no effect in 2D).
+  const canvasMode = useUiStateStore((state) => state.canvasMode);
+  const liveRotation = useUiStateStore((state) => state.viewRotation);
+  const openOnAngle = useUiStateStore((state) => state.exportImageAngle);
+  const pageDefaultRotation = exportedView?.defaultRotation ?? 0;
+  const isIso = canvasMode === 'ISOMETRIC';
+  const anglesDiffer =
+    isIso && normaliseDeg(liveRotation) !== normaliseDeg(pageDefaultRotation);
+  const [angleSource, setAngleSource] = useState<'asViewed' | 'pageDefault'>(
+    openOnAngle
+  );
+  const exportAngle = !isIso
+    ? 0
+    : angleSource === 'pageDefault'
+      ? pageDefaultRotation
+      : liveRotation;
+
+  // The base image frames the content AT THE EXPORT ANGLE — a rotated diagram
+  // occupies a different screen extent — rather than the main instance's.
+  const bounds = useMemo(() => {
+    if (!exportedView) return getUnprojectedBounds();
+    return getUnprojectedBoundsAt(
+      exportedView,
+      getStrategy(canvasMode, exportAngle).tilePosition
+    );
+  }, [exportedView, canvasMode, exportAngle, getUnprojectedBounds]);
   const minNodesForCaptureRef = useRef(minNodesForCapture);
   useEffect(() => {
     minNodesForCaptureRef.current = minNodesForCapture;
   }, [minNodesForCapture]);
 
+  // ADR 0025 §4 (2026-10-04): the Screenshot preset is 2× within a pixel
+  // budget, so a large diagram stops producing a 100+ MP PNG. The DPI presets
+  // and the custom slider mean exactly the scale they name.
+  const requestedScale =
+    scaleMode === 'screenshot'
+      ? screenshotScale(bounds, exportScale)
+      : exportScale;
+
   // Clamp the requested scale against the browser's canvas limits (ADR 0025 §2).
   // The same calculator runs inside exportAsImage/exportAsSVG; here it drives the
   // user-visible "size was reduced" notice so the cap is never silent (#18).
   const renderTarget = useMemo(
-    () => computeRenderTarget(bounds, exportScale),
-    [bounds, exportScale]
+    () => computeRenderTarget(bounds, requestedScale),
+    [bounds, requestedScale]
   );
 
   // Track when the hidden Axoview has finished its first render cycle
   const axoviewLoadedRef = useRef(false);
   const [axoviewReadySignal, setIsoflowReadySignal] = useState(0);
+
+  // A new export angle remounts the hidden instance (its `key`), so its
+  // readiness must be re-armed: the capture then runs the full initial path —
+  // icon wait, then recapture — exactly as on open (ADR 0051 §5).
+  const lastExportAngleRef = useRef(exportAngle);
+  useEffect(() => {
+    if (lastExportAngleRef.current === exportAngle) return;
+    lastExportAngleRef.current = exportAngle;
+    axoviewLoadedRef.current = false;
+    setImageData(undefined);
+    setSvgData(undefined);
+    setCroppedImageData(undefined);
+  }, [exportAngle]);
 
   // Called by the hidden Axoview's onModelUpdated — fires after its model store
   // is first populated, meaning React has the data and will paint next rAF
@@ -315,30 +369,25 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
     const bgColor = transparentBackground ? 'transparent' : backgroundColor;
 
     try {
-      // Export both PNG and SVG in parallel
-      const [pngData, svgDataResult] = await Promise.all([
-        exportAsImage(
-          containerRef.current as HTMLDivElement,
-          containerSize,
-          exportScale,
-          bgColor
-        ),
-        exportAsSVG(
-          containerRef.current as HTMLDivElement,
-          containerSize,
-          bgColor
-        )
-      ]);
+      // PNG only. The SVG is built when it is asked for (downloadSvgFile): it
+      // is a second full DOM rasterisation — re-encoding the GPU canvas and
+      // re-parsing the result — and running it on every preview capture
+      // doubled the wait for a preview most exports never download as SVG.
+      const pngData = await exportAsImage(
+        containerRef.current as HTMLDivElement,
+        containerSize,
+        requestedScale,
+        bgColor
+      );
 
       setImageData(pngData);
-      setSvgData(svgDataResult);
       isExporting.current = false;
     } catch (err) {
       console.error(err);
       setExportError(true);
       isExporting.current = false;
     }
-  }, [bounds, exportScale, transparentBackground, backgroundColor]);
+  }, [bounds, requestedScale, transparentBackground, backgroundColor]);
 
   // Stable ref so effects can call the latest exportImage without adding it
   // to their dependency arrays (which would cause spurious re-fires)
@@ -729,7 +778,7 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
     backgroundColor,
     showLabels,
     cropToContent,
-    exportScale,
+    requestedScale,
     transparentBackground
   ]);
 
@@ -745,25 +794,46 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
     downloadFileUtil(data, generateGenericFilename('png'));
   }, [imageData, croppedImageData]);
 
-  const downloadSvgFile = useCallback(() => {
-    if (!svgData) return;
+  const [isBuildingSvg, setIsBuildingSvg] = useState(false);
+  const downloadSvgFile = useCallback(async () => {
+    if (!containerRef.current || isBuildingSvg) return;
 
     try {
+      // Built on first request from the same hidden instance the preview was
+      // captured from, then reused until an option change clears it.
+      let svg = svgData;
+      if (!svg) {
+        setIsBuildingSvg(true);
+        svg = await exportAsSVG(
+          containerRef.current,
+          { width: bounds.width, height: bounds.height },
+          transparentBackground ? 'transparent' : backgroundColor
+        );
+        setSvgData(svg);
+      }
       // Decode the base64 data URL to a Blob directly (atob) — mirrors the PNG
       // path. The old `fetch(svgData)` is blocked by the deployed connect-src
       // CSP (a data: URL is not an allowed connect source), and a local decode
       // avoids the network round-trip entirely. exportAsSVG always returns the
       // `data:image/svg+xml;base64,…` form.
       const blob = base64ToBlob(
-        svgData.replace('data:image/svg+xml;base64,', ''),
+        svg.replace('data:image/svg+xml;base64,', ''),
         'image/svg+xml;charset=utf-8'
       );
       downloadFileUtil(blob, generateGenericFilename('svg'));
     } catch (error) {
       console.error('SVG download failed:', error);
       setExportError(true);
+    } finally {
+      setIsBuildingSvg(false);
     }
-  }, [svgData]);
+  }, [
+    svgData,
+    isBuildingSvg,
+    bounds,
+    transparentBackground,
+    backgroundColor
+  ]);
 
   const displayImage = croppedImageData || imageData;
 
@@ -883,7 +953,7 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
             variant="outlined"
             data-testid="export-svg-button"
             onClick={downloadSvgFile}
-            disabled={!svgData || cropSelectionPending}
+            disabled={!imageData || isBuildingSvg || cropSelectionPending}
           >
             {t('downloadSvg')}
           </Button>
@@ -930,12 +1000,18 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
             >
               <DOMErrorBoundary>
                 <Axoview
-                  key="export-dialog-axoview"
+                  // Remounted per angle, so a changed angle re-runs the full
+                  // icon-ready capture path rather than racing a reload.
+                  key={`export-dialog-axoview-${exportAngle}`}
                   editorMode="NON_INTERACTIVE"
                   initialData={{
                     ...model,
                     fitToView: true,
-                    view: currentView
+                    view: currentView,
+                    // ADR 0051 §5: the hidden instance renders at the chosen
+                    // angle — it is a separate instance with its own uiState,
+                    // so it never touches the live canvas's angle.
+                    viewRotation: exportAngle
                   }}
                   renderer={{
                     showGrid,
@@ -951,7 +1027,11 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
                     // label draw. readableLabels keeps labels rendered + counter-
                     // scaled to a legible size (ADR 0025 §3 / ADR 0015). Tied to
                     // showLabels: nothing to keep readable when labels are off.
-                    readableLabels: showLabels
+                    readableLabels: showLabels,
+                    // ADR 0050 §6: render the GPU canvas AT the export scale, so
+                    // the grid, icons and chips are captured crisp instead of
+                    // upscaled from screen dpr.
+                    pixelRatio: renderTarget.effectiveScale
                   }}
                   onModelUpdated={handleHiddenAxoviewReady}
                 />
@@ -1021,6 +1101,48 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
                       />
                     }
                   />
+                  {/* Always shown in iso, so the choice can be found; at the
+                      page default the two options coincide, and the second
+                      says so instead of vanishing (UX review 2026-10-03). */}
+                  {isIso && (
+                    <FormControl sx={{ gridColumn: '1 / -1', mt: 0.5 }}>
+                      <FormLabel
+                        sx={{ fontSize: 12 }}
+                        id="export-angle-label"
+                      >
+                        {t('angle')}
+                      </FormLabel>
+                      <RadioGroup
+                        row
+                        aria-labelledby="export-angle-label"
+                        value={anglesDiffer ? angleSource : 'asViewed'}
+                        onChange={(event) =>
+                          setAngleSource(
+                            event.target.value as 'asViewed' | 'pageDefault'
+                          )
+                        }
+                      >
+                        <FormControlLabel
+                          value="asViewed"
+                          control={<Radio size="small" />}
+                          data-testid="export-angle-as-viewed"
+                          label={t('angleAsViewed').replace(
+                            '{angle}',
+                            formatViewAngle(liveRotation)
+                          )}
+                        />
+                        <FormControlLabel
+                          value="pageDefault"
+                          control={<Radio size="small" />}
+                          disabled={!anglesDiffer}
+                          data-testid="export-angle-page-default"
+                          label={t(
+                            anglesDiffer ? 'anglePageDefault' : 'anglePageDefaultSame'
+                          ).replace('{angle}', formatViewAngle(pageDefaultRotation))}
+                        />
+                      </RadioGroup>
+                    </FormControl>
+                  )}
                 </Box>
 
                 {/* Background */}
