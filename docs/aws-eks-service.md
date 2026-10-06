@@ -78,6 +78,34 @@ GET /api/config
 
 The container runs as the unprivileged Node user and does not contain the static frontend or nginx.
 
+The AWS production boundary is intentionally split:
+
+```text
+packages/axoview-app/build/
+  -> S3
+  -> CloudFront
+
+Dockerfile.backend
+  -> ECR
+  -> EKS
+```
+
+The repository's root `Dockerfile`, `nginx.conf`, `docker-entrypoint.sh`, and `compose.dev.yml` remain only for upstream/local compatibility. They are not production deployment artifacts for the AWS service.
+
+The default npm Docker commands now follow the AWS runtime:
+
+```bash
+npm run docker:build
+npm run docker:run
+```
+
+The old combined nginx + frontend + backend image remains available explicitly as:
+
+```bash
+npm run docker:legacy:build
+npm run docker:legacy:run
+```
+
 ## Current EKS safety boundary
 
 The upstream filesystem adapter is not safe as horizontally scaled multi-user storage. It uses a single filesystem namespace and process-local locks.
