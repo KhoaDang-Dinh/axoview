@@ -33,7 +33,6 @@ permissions:
 jobs:
   docker-smoke:
     name: Docker smoke
-    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
