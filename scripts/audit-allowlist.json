@@ -65,6 +65,18 @@
       "tripwire": "If braces (or micromatch / chokidar) enters the prod tree, or any code passes a user-supplied string to a glob matcher, this becomes a live DoS. Drop this entry once a patched braces ships.",
       "acceptedOn": "2026-10-03",
       "reviewBy": "2027-01-03"
+    },
+    {
+      "id": "GHSA-hp3w-g68c-fv3c",
+      "package": "sprintf-js",
+      "title": "sprintf-js denial of service through unbounded precision specifiers",
+      "shipped": false,
+      "scope": "root",
+      "why": "The only locked instance is sprintf-js@1.0.3 under @istanbuljs/load-nyc-config -> argparse, and the lock marks it dev-only. It is used by coverage/test tooling, is absent from packages/axoview-backend/package-lock.json, and is not shipped in the browser or backend production artifact. The advisory requires attacker control of the sprintf format string; Axoview exposes no runtime path to this dev-only dependency.",
+      "noForwardFix": "The GitHub advisory currently lists no patched sprintf-js release.",
+      "tripwire": "Remove this acceptance when a patched sprintf-js release becomes available. Re-review immediately if sprintf-js enters a production dependency tree or any runtime code begins accepting user-controlled sprintf format strings.",
+      "acceptedOn": "2026-10-07",
+      "reviewBy": "2027-01-07"
     }
   ]
 }
