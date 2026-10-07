@@ -2,9 +2,9 @@ name: Run Tests
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["dev", "main", "master"]
   pull_request:
-    branches: ["main", "master"]
+    branches: ["dev", "main", "master"]
   # On-demand run against any branch — `integration` deliberately gets no
   # automatic CI (it is a live-deploy target that is pushed to mid-thought,
   # not a shared trunk), so this is how you ask for unit/tsc/knip there:
@@ -85,6 +85,12 @@ jobs:
 
       - name: Verify build output
         run: |
+          # AWS/S3+CloudFront production entry points.
+          test -f packages/axoview-app/build/index.html || (echo "::error::index.html missing from build output" && exit 1)
+          test -f packages/axoview-app/build/app.html || (echo "::error::app.html missing from build output" && exit 1)
+
+          # Keep the upstream Cloudflare deployment artifacts checked as
+          # compatibility outputs; they are not used by the AWS deployment.
           test -f packages/axoview-app/build/_routes.json || (echo "::error::_routes.json missing from build output" && exit 1)
           test -f packages/axoview-app/build/_headers || (echo "::error::_headers missing from build output" && exit 1)
 
