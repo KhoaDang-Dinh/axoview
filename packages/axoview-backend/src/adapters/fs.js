@@ -4,15 +4,17 @@ import path from 'path';
 const KEY_PATTERN = /^[a-zA-Z0-9_-]+(\/[a-zA-Z0-9_-]+)*$/;
 
 /**
- * Maps adapter keys to filesystem paths.
+ * Maps object-storage keys to filesystem paths.
  *
- *   diagrams/<id>  → <STORAGE_PATH>/<id>.json    (flat — preserves pre-5A layout)
- *   public/<uuid>  → <STORAGE_PATH>/public/<uuid>.json
- *   folders        → <STORAGE_PATH>/folders.json
- *   tree-manifest  → <STORAGE_PATH>/tree-manifest.json
+ *   diagrams/<id>  -> <STORAGE_PATH>/<id>.json    (flat; preserves legacy layout)
+ *   public/<uuid>  -> <STORAGE_PATH>/public/<uuid>.json
+ *   folders        -> <STORAGE_PATH>/folders.json
+ *   tree-manifest  -> <STORAGE_PATH>/tree-manifest.json
  *
- * All keys must match KEY_PATTERN — defense in depth so even if route-layer
- * validation is bypassed, the adapter cannot resolve a key outside its root.
+ * All keys must match KEY_PATTERN. This is an implementation-level invariant,
+ * not part of the generic ObjectStorage contract; an S3 implementation can
+ * choose its own safe key policy while exposing the same get/put/delete/list
+ * semantics.
  */
 function keyToPath(storagePath, key) {
   if (typeof key !== 'string' || !KEY_PATTERN.test(key)) {
@@ -26,7 +28,13 @@ function keyToPath(storagePath, key) {
   return path.join(storagePath, ...segments) + '.json';
 }
 
-export function createFsAdapter(storagePath) {
+/**
+ * Filesystem implementation of the generic ObjectStorage contract.
+ *
+ * It intentionally knows nothing about Axoview metadata. This is the seam that
+ * a future createS3ObjectStorage() can replace without changing route handlers.
+ */
+export function createFsObjectStorage(storagePath) {
   return {
     async get(key) {
       try {
@@ -44,6 +52,7 @@ export function createFsAdapter(storagePath) {
       const dir = path.dirname(filePath);
       const name = path.basename(filePath);
       await fs.mkdir(dir, { recursive: true });
+
       // Atomicity contract (ADR 0010 Decision 3): tmp-file + rename so a crash
       // mid-write cannot leave a truncated target. Per-pid tmp name avoids
       // collisions between concurrent processes touching the same key.
@@ -80,7 +89,21 @@ export function createFsAdapter(storagePath) {
         if (e.code === 'ENOENT') return [];
         throw e;
       }
-    },
+    }
+  };
+}
+
+/**
+ * Filesystem implementation of the Axoview StorageAdapter.
+ *
+ * The generic object operations come from createFsObjectStorage(). Only the
+ * Axoview-specific listDiagramMeta query stays at this layer.
+ */
+export function createFsAdapter(storagePath) {
+  const objects = createFsObjectStorage(storagePath);
+
+  return {
+    ...objects,
 
     async listDiagramMeta() {
       try {
