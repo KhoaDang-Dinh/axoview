@@ -96,8 +96,8 @@ jobs:
           echo "$CONFIG" | jq -e '.serverStorage == false'
           echo "$CONFIG" | jq -e '.publicBaseUrl == "http://127.0.0.1:3001"'
 
-          UID="$(docker exec axoview-backend-ci id -u)"
-          test "$UID" != "0"
+          CONTAINER_UID="$(docker exec axoview-backend-ci id -u)"
+          test "$CONTAINER_UID" != "0"
 
           STATUS="$(curl --silent --output /tmp/storage.json --write-out '%{http_code}'             http://127.0.0.1:3001/api/diagrams)"
 
