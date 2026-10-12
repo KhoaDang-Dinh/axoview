@@ -55,7 +55,14 @@ jobs:
 
       - name: Start backend container
         run: |
-          docker run -d             --name axoview-backend-ci             -p 3001:3001             -e NODE_ENV=production             -e ENABLE_SERVER_STORAGE=false             -e PUBLIC_BASE_URL=http://127.0.0.1:3001             axoview-backend:ci
+          docker run -d \
+            --name axoview-backend-ci \
+            --read-only \
+            -p 3001:3001 \
+            -e NODE_ENV=production \
+            -e ENABLE_SERVER_STORAGE=false \
+            -e PUBLIC_BASE_URL=http://127.0.0.1:3001 \
+            axoview-backend:ci
 
       - name: Wait for health
         shell: bash
@@ -85,7 +92,12 @@ jobs:
           CONFIG="$(curl --fail --silent http://127.0.0.1:3001/api/config)"
 
           echo "$HEALTH" | jq -e '.ok == true'
+          echo "$HEALTH" | jq -e '.storage_writable == false'
           echo "$CONFIG" | jq -e '.serverStorage == false'
+          echo "$CONFIG" | jq -e '.publicBaseUrl == "http://127.0.0.1:3001"'
+
+          UID="$(docker exec axoview-backend-ci id -u)"
+          test "$UID" != "0"
 
           STATUS="$(curl --silent --output /tmp/storage.json --write-out '%{http_code}'             http://127.0.0.1:3001/api/diagrams)"
 
