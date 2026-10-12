@@ -1,0 +1,214 @@
+name: Deploy dev to AWS
+
+on:
+  workflow_run:
+    workflows: ["Run Tests"]
+    types: [completed]
+    branches: ["dev"]
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Optional exact Axoview dev SHA to deploy
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: axoview-aws-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        vars.ENABLE_AWS_DEV_CD == 'true' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          github.event.workflow_run.conclusion == 'success'
+        )
+      }}
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      INFRA_REPO: KhoaDang-Dinh/infra_website
+      INFRA_WORKFLOW: publish-axoview-artifacts.yml
+
+    steps:
+      - name: Check out Axoview dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Resolve immutable Axoview SHA
+        id: release
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.release_sha }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            APP_SHA="$WORKFLOW_RUN_SHA"
+          elif [ -n "$REQUESTED_SHA" ]; then
+            APP_SHA="$REQUESTED_SHA"
+          else
+            APP_SHA="$(git rev-parse origin/dev)"
+          fi
+
+          if ! [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release SHA must be a full 40-character lowercase Git SHA."
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor "$APP_SHA" origin/dev; then
+            echo "::error::Release SHA $APP_SHA is not reachable from axoview/dev."
+            exit 1
+          fi
+
+          echo "sha=$APP_SHA" >> "$GITHUB_OUTPUT"
+          echo "Deploy candidate: $APP_SHA"
+
+      - name: Require green application gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 30); do
+            CHECKS="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/$GITHUB_REPOSITORY/commits/$APP_SHA/check-runs?per_page=100")"
+
+            CI_GATE="$(jq -r '[.check_runs[] | select(.name == "CI Gate")][0].conclusion // ""' <<<"$CHECKS")"
+            DOCKER_GATE="$(jq -r '[.check_runs[] | select(.name == "Docker Gate")][0].conclusion // ""' <<<"$CHECKS")"
+
+            echo "CI Gate=$CI_GATE Docker Gate=$DOCKER_GATE"
+
+            if [ "$CI_GATE" = "success" ] && [ "$DOCKER_GATE" = "success" ]; then
+              exit 0
+            fi
+
+            case "$CI_GATE:$DOCKER_GATE" in
+              *failure*|*cancelled*|*timed_out*|*action_required*)
+                echo "::error::A required Axoview gate failed for $APP_SHA."
+                exit 1
+                ;;
+            esac
+
+            sleep 10
+          done
+
+          echo "::error::Timed out waiting for CI Gate and Docker Gate on $APP_SHA."
+          exit 1
+
+      - name: Require infra deployment token
+        shell: bash
+        env:
+          INFRA_DEPLOY_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$INFRA_DEPLOY_TOKEN" ]; then
+            echo "::error::Missing dev environment secret INFRA_DEPLOY_TOKEN."
+            echo "::error::Use a fine-grained token scoped to KhoaDang-Dinh/infra_website with Actions read/write and Contents read."
+            exit 1
+          fi
+
+      - name: Dispatch pinned publish and deploy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+          APP_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          jq -n \
+            --arg ref "dev" \
+            --arg app_ref "dev" \
+            --arg app_sha "$APP_SHA" \
+            '{
+              ref: $ref,
+              inputs: {
+                app_ref: $app_ref,
+                app_sha: $app_sha,
+                deploy_after_publish: "true"
+              }
+            }' > /tmp/dispatch.json
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/$INFRA_REPO/actions/workflows/$INFRA_WORKFLOW/dispatches" \
+            --input /tmp/dispatch.json
+
+      - name: Wait for infra deployment result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+          APP_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          RUN_ID=""
+
+          for attempt in $(seq 1 30); do
+            RUNS="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/$INFRA_REPO/actions/workflows/$INFRA_WORKFLOW/runs?branch=dev&event=workflow_dispatch&per_page=30")"
+
+            RUN_ID="$(jq -r --arg title "Publish Axoview $APP_SHA" \
+              '[.workflow_runs[] | select(.display_title == $title)][0].id // empty' \
+              <<<"$RUNS")"
+
+            if [ -n "$RUN_ID" ]; then
+              break
+            fi
+
+            sleep 5
+          done
+
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::Could not find the infra deployment run for $APP_SHA."
+            exit 1
+          fi
+
+          echo "Infra workflow run: $RUN_ID"
+
+          for attempt in $(seq 1 90); do
+            RUN="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/$INFRA_REPO/actions/runs/$RUN_ID")"
+
+            STATUS="$(jq -r '.status' <<<"$RUN")"
+            CONCLUSION="$(jq -r '.conclusion // ""' <<<"$RUN")"
+
+            echo "infra run $RUN_ID: status=$STATUS conclusion=$CONCLUSION"
+
+            if [ "$STATUS" = "completed" ]; then
+              if [ "$CONCLUSION" = "success" ]; then
+                {
+                  echo "## AWS dev deployment"
+                  echo
+                  echo "- Axoview SHA: `$APP_SHA`"
+                  echo "- Infra run: `$RUN_ID`"
+                  echo "- Result: success"
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+
+              echo "::error::Infra deployment finished with conclusion=$CONCLUSION."
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "::error::Timed out waiting for infra deployment run $RUN_ID."
+          exit 1
