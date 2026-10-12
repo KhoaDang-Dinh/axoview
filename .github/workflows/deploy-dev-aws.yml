@@ -1,0 +1,362 @@
+name: Deploy dev to AWS
+
+on:
+  push:
+    branches: ["dev"]
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Optional exact Axoview dev SHA to deploy
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: axoview-aws-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ vars.ENABLE_AWS_DEV_CD == 'true' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}
+
+    steps:
+      - name: Check out Axoview dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Resolve immutable Axoview SHA
+        id: release
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$REQUESTED_SHA" ]; then
+            APP_SHA="$REQUESTED_SHA"
+          else
+            APP_SHA="$GITHUB_SHA"
+          fi
+
+          if ! [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release SHA must be a full 40-character lowercase Git SHA."
+            exit 1
+          fi
+
+          git fetch origin dev
+          if ! git merge-base --is-ancestor "$APP_SHA" origin/dev; then
+            echo "::error::Release SHA $APP_SHA is not reachable from axoview/dev."
+            exit 1
+          fi
+
+          git checkout --detach "$APP_SHA"
+          echo "sha=$APP_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Require green application gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 60); do
+            CHECKS="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/$GITHUB_REPOSITORY/commits/$APP_SHA/check-runs?per_page=100")"
+
+            CI_GATE="$(jq -r '[.check_runs[] | select(.name == "CI Gate")][0].conclusion // ""' <<<"$CHECKS")"
+            DOCKER_GATE="$(jq -r '[.check_runs[] | select(.name == "Docker Gate")][0].conclusion // ""' <<<"$CHECKS")"
+
+            echo "CI Gate=$CI_GATE Docker Gate=$DOCKER_GATE"
+
+            if [ "$CI_GATE" = "success" ] && [ "$DOCKER_GATE" = "success" ]; then
+              exit 0
+            fi
+
+            case "$CI_GATE:$DOCKER_GATE" in
+              *failure*|*cancelled*|*timed_out*|*action_required*)
+                echo "::error::A required Axoview gate failed for $APP_SHA."
+                exit 1
+                ;;
+            esac
+
+            sleep 10
+          done
+
+          echo "::error::Timed out waiting for CI Gate and Docker Gate on $APP_SHA."
+          exit 1
+
+      - name: Validate OIDC bootstrap configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AWS_REGION" || { echo "::error::AWS_REGION is empty."; exit 1; }
+          test -n "$AWS_ROLE_ARN" || { echo "::error::AWS_DEV_DEPLOY_ROLE_ARN is empty."; exit 1; }
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Load Terraform deployment contract from SSM
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PREFIX="/axoview/dev/deployment"
+          PARAMETERS_JSON="$(aws ssm get-parameters-by-path \
+            --path "$PREFIX/" \
+            --recursive \
+            --output json)"
+
+          value_for() {
+            jq -r --arg name "$PREFIX/$1" \
+              '.Parameters[] | select(.Name == $name) | .Value' \
+              <<<"$PARAMETERS_JSON" | head -n1
+          }
+
+          declare -A MAP=(
+            [artifact_bucket]=ARTIFACT_BUCKET
+            [ecr_repository]=ECR_REPOSITORY
+            [eks_cluster_name]=EKS_CLUSTER_NAME
+            [frontend_bucket]=FRONTEND_BUCKET
+            [cloudfront_distribution_id]=CLOUDFRONT_DISTRIBUTION_ID
+            [public_base_url]=PUBLIC_BASE_URL
+            [api_origin_domain]=API_ORIGIN_DOMAIN
+            [data_bucket]=DATA_BUCKET
+            [dynamodb_table]=DYNAMODB_TABLE
+            [cognito_user_pool_id]=COGNITO_USER_POOL_ID
+            [cognito_client_id]=COGNITO_CLIENT_ID
+            [cognito_issuer]=COGNITO_ISSUER
+          )
+
+          missing=0
+          for key in "${!MAP[@]}"; do
+            value="$(value_for "$key")"
+            if [ -z "$value" ] || [ "$value" = "null" ]; then
+              echo "::error::Missing SSM parameter $PREFIX/$key."
+              missing=1
+              continue
+            fi
+            echo "${MAP[$key]}=$value" >> "$GITHUB_ENV"
+          done
+
+          test "$missing" -eq 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+          test -f packages/axoview-app/build/index.html
+          test -f packages/axoview-app/build/app.html
+
+      - name: Publish immutable frontend artifact
+        env:
+          APP_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          aws s3 sync \
+            packages/axoview-app/build/ \
+            "s3://$ARTIFACT_BUCKET/releases/$APP_SHA/frontend/" \
+            --only-show-errors
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and publish immutable backend image
+        id: backend
+        env:
+          APP_SHA: ${{ steps.release.outputs.sha }}
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$APP_SHA"
+
+          if ! aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$APP_SHA" >/dev/null 2>&1; then
+            docker build -f Dockerfile.backend -t "$IMAGE_URI" .
+            docker push "$IMAGE_URI"
+          fi
+
+          DIGEST="$(aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$APP_SHA" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+
+          test -n "$DIGEST"
+          test "$DIGEST" != "None"
+
+          echo "uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image=$REGISTRY/$ECR_REPOSITORY@$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Publish immutable release manifest
+        env:
+          APP_SHA: ${{ steps.release.outputs.sha }}
+          IMAGE_URI: ${{ steps.backend.outputs.uri }}
+          IMAGE_DIGEST: ${{ steps.backend.outputs.digest }}
+        shell: bash
+        run: |
+          jq -n \
+            --arg gitSha "$APP_SHA" \
+            --arg sourceRef "dev" \
+            --arg frontend "s3://$ARTIFACT_BUCKET/releases/$APP_SHA/frontend/" \
+            --arg image "$IMAGE_URI" \
+            --arg digest "$IMAGE_DIGEST" \
+            '{
+              gitSha: $gitSha,
+              sourceRef: $sourceRef,
+              frontend: { uri: $frontend },
+              backend: { image: $image, digest: $digest }
+            }' > release-manifest.json
+
+          aws s3 cp \
+            release-manifest.json \
+            "s3://$ARTIFACT_BUCKET/releases/$APP_SHA/release-manifest.json" \
+            --content-type application/json \
+            --cache-control no-store \
+            --only-show-errors
+
+      - name: Deploy frontend assets to S3
+        run: |
+          aws s3 sync \
+            packages/axoview-app/build/ \
+            "s3://$FRONTEND_BUCKET/" \
+            --delete \
+            --exclude "*.html" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --only-show-errors
+
+          while IFS= read -r -d '' file; do
+            key="${file#packages/axoview-app/build/}"
+            aws s3 cp \
+              "$file" \
+              "s3://$FRONTEND_BUCKET/$key" \
+              --content-type "text/html; charset=utf-8" \
+              --cache-control "no-cache, no-store, must-revalidate" \
+              --only-show-errors
+          done < <(find packages/axoview-app/build -type f -name '*.html' -print0)
+
+      - name: Invalidate CloudFront entry points
+        id: cloudfront
+        shell: bash
+        run: |
+          INVALIDATION_ID="$(aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/" "/index.html" "/app" "/app.html" \
+            --query 'Invalidation.Id' \
+            --output text)"
+
+          echo "id=$INVALIDATION_ID" >> "$GITHUB_OUTPUT"
+
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --id "$INVALIDATION_ID"
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Materialize runtime configuration
+        id: runtime
+        shell: bash
+        run: |
+          kubectl create namespace axoview --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl -n axoview create configmap axoview-runtime-config \
+            --from-literal=PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
+            --from-literal=AXOVIEW_DATA_BUCKET="$DATA_BUCKET" \
+            --from-literal=AXOVIEW_DYNAMODB_TABLE="$DYNAMODB_TABLE" \
+            --from-literal=COGNITO_USER_POOL_ID="$COGNITO_USER_POOL_ID" \
+            --from-literal=COGNITO_CLIENT_ID="$COGNITO_CLIENT_ID" \
+            --from-literal=COGNITO_ISSUER="$COGNITO_ISSUER" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          CONFIG_REVISION="$(printf '%s\0' \
+            "$PUBLIC_BASE_URL" \
+            "$DATA_BUCKET" \
+            "$DYNAMODB_TABLE" \
+            "$COGNITO_USER_POOL_ID" \
+            "$COGNITO_CLIENT_ID" \
+            "$COGNITO_ISSUER" | sha256sum | cut -d' ' -f1)"
+
+          echo "revision=$CONFIG_REVISION" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy backend to EKS
+        env:
+          BACKEND_IMAGE: ${{ steps.backend.outputs.image }}
+          CONFIG_REVISION: ${{ steps.runtime.outputs.revision }}
+        shell: bash
+        run: |
+          sed \
+            -e "s|__BACKEND_IMAGE__|$BACKEND_IMAGE|g" \
+            -e "s|__CONFIG_REVISION__|$CONFIG_REVISION|g" \
+            deploy/aws/axoview.yaml.tpl | kubectl apply -f -
+
+          kubectl -n axoview rollout status deployment/axoview-api --timeout=5m
+
+      - name: Smoke test deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl --fail --silent --show-error --location \
+            --retry 10 --retry-delay 5 \
+            "https://$API_ORIGIN_DOMAIN/healthz" | jq -e '.ok == true'
+
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 3 \
+            "$PUBLIC_BASE_URL/" >/dev/null
+
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 3 \
+            "$PUBLIC_BASE_URL/app" >/dev/null
+
+          curl --fail --silent --show-error --location \
+            --retry 10 --retry-delay 5 \
+            "$PUBLIC_BASE_URL/api/config" | jq -e '.serverStorage == false'
+
+      - name: Deployment summary
+        env:
+          APP_SHA: ${{ steps.release.outputs.sha }}
+          BACKEND_IMAGE: ${{ steps.backend.outputs.image }}
+          INVALIDATION_ID: ${{ steps.cloudfront.outputs.id }}
+        shell: bash
+        run: |
+          {
+            echo "## AWS dev deployment"
+            echo
+            echo "- Axoview SHA: `$APP_SHA`"
+            echo "- Authentication: GitHub OIDC"
+            echo "- Frontend bucket: `$FRONTEND_BUCKET`"
+            echo "- Backend image: `$BACKEND_IMAGE`"
+            echo "- EKS cluster: `$EKS_CLUSTER_NAME`"
+            echo "- CloudFront invalidation: `$INVALIDATION_ID`"
+            echo "- Public URL: `$PUBLIC_BASE_URL`"
+          } >> "$GITHUB_STEP_SUMMARY"

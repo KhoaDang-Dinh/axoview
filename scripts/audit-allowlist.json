@@ -77,6 +77,66 @@
       "tripwire": "Remove this acceptance when a patched sprintf-js release becomes available. Re-review immediately if sprintf-js enters a production dependency tree or any runtime code begins accepting user-controlled sprintf format strings.",
       "acceptedOn": "2026-10-07",
       "reviewBy": "2027-01-07"
+    },
+    {
+      "id": "GHSA-8r5x-fm3f-whwj",
+      "package": "handlebars",
+      "title": "Handlebars JavaScript injection via AST type confusion in compile",
+      "shipped": false,
+      "scope": "root",
+      "why": "The only locked handlebars@4.7.9 instance is reached through ts-jest and conventional-changelog-writer, both development/release tooling. It is absent from packages/axoview-backend/package-lock.json and is not part of the browser or EKS backend production artifacts. Axoview runtime code does not call Handlebars compile/precompile or accept untrusted Handlebars AST input.",
+      "forwardFix": "handlebars 4.7.10 is patched; replace this temporary acceptance with the dependency update after the deployment path is proven.",
+      "tripwire": "Re-review immediately if handlebars enters a production dependency tree, is imported by application/backend runtime code, or any user-controlled template/AST reaches compile/precompile.",
+      "acceptedOn": "2026-10-12",
+      "reviewBy": "2026-10-31"
+    },
+    {
+      "id": "GHSA-p8wg-vrv2-v86f",
+      "package": "handlebars",
+      "title": "Handlebars JavaScript injection via own-property check bypass",
+      "shipped": false,
+      "scope": "root",
+      "why": "The only locked handlebars@4.7.9 instance is reached through ts-jest and conventional-changelog-writer, both development/release tooling. It is absent from packages/axoview-backend/package-lock.json and from the S3/EKS production artifacts; no runtime request path invokes Handlebars.",
+      "forwardFix": "handlebars 4.7.10 is patched; replace this temporary acceptance with the dependency update after the deployment path is proven.",
+      "tripwire": "Re-review immediately if handlebars enters a production dependency tree or any application/runtime path begins compiling templates from untrusted input.",
+      "acceptedOn": "2026-10-12",
+      "reviewBy": "2026-10-31"
+    },
+    {
+      "id": "GHSA-xw65-4hp5-5hc7",
+      "package": "handlebars",
+      "title": "Handlebars JavaScript injection via unsafe inline embedding of precompiled templates",
+      "shipped": false,
+      "scope": "root",
+      "why": "handlebars@4.7.9 is present only through development/release tooling (ts-jest and conventional-changelog-writer). It is not shipped in the static frontend or backend image, and Axoview runtime code does not precompile attacker-controlled Handlebars templates.",
+      "forwardFix": "handlebars 4.7.10 is patched; replace this temporary acceptance with the dependency update after the deployment path is proven.",
+      "tripwire": "Re-review if handlebars becomes a runtime dependency, if precompiled templates become part of the app build from untrusted input, or if it appears in the backend audit tree.",
+      "acceptedOn": "2026-10-12",
+      "reviewBy": "2026-10-31"
+    },
+    {
+      "id": "GHSA-wq5f-xc86-pv6w",
+      "package": "sharp",
+      "title": "sharp vulnerability in bundled librsvg",
+      "shipped": false,
+      "scope": "root",
+      "why": "sharp@0.35.4 is pulled only by miniflare through wrangler, which is Cloudflare development/compatibility tooling. It is absent from packages/axoview-backend/package-lock.json, the backend Docker image, and the browser runtime. The AWS deployment does not execute Miniflare or sharp.",
+      "forwardFix": "wrangler 4.149.0 moves its Miniflare dependency to sharp 0.35.5; take that tooling update after the AWS deployment path is proven.",
+      "tripwire": "Remove this acceptance or re-review immediately if sharp is imported by Axoview runtime code, enters the backend production tree, or image/SVG processing is added to the deployed service.",
+      "acceptedOn": "2026-10-12",
+      "reviewBy": "2026-10-31"
+    },
+    {
+      "id": "GHSA-xvq9-wjp8-hwqf",
+      "package": "i18next-http-backend",
+      "title": "i18next-http-backend incomplete URL validation permits SSRF",
+      "shipped": true,
+      "scope": "root",
+      "why": "The browser dependency is shipped, but Axoview's actual configuration uses a loadPath rooted at `${basePath}i18n/{{ns}}/{{lng}}.json`; with the production default basePath of '/', the request path begins with '/i18n/' rather than an interpolated language/namespace. Namespace is fixed to 'app' and detection reads only localStorage. The advisory's origin/scheme breakout requires an unsafe template shape in which attacker-controlled interpolation can become the URL authority/scheme, which this configuration does not use.",
+      "forwardFix": "i18next-http-backend 4.0.2 is patched; upgrade after the deployment path is proven.",
+      "tripwire": "This acceptance is invalid if loadPath stops having a trusted leading path/origin, if namespace becomes user-controlled, or if language detection adds URL/query/header sources without re-review.",
+      "acceptedOn": "2026-10-12",
+      "reviewBy": "2026-10-31"
     }
   ]
 }
