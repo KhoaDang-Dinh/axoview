@@ -241,42 +241,6 @@ jobs:
             --cache-control no-store \
             --only-show-errors
 
-      - name: Deploy frontend assets to S3
-        run: |
-          aws s3 sync \
-            packages/axoview-app/build/ \
-            "s3://$FRONTEND_BUCKET/" \
-            --delete \
-            --exclude "*.html" \
-            --cache-control "public,max-age=31536000,immutable" \
-            --only-show-errors
-
-          while IFS= read -r -d '' file; do
-            key="${file#packages/axoview-app/build/}"
-            aws s3 cp \
-              "$file" \
-              "s3://$FRONTEND_BUCKET/$key" \
-              --content-type "text/html; charset=utf-8" \
-              --cache-control "no-cache, no-store, must-revalidate" \
-              --only-show-errors
-          done < <(find packages/axoview-app/build -type f -name '*.html' -print0)
-
-      - name: Invalidate CloudFront entry points
-        id: cloudfront
-        shell: bash
-        run: |
-          INVALIDATION_ID="$(aws cloudfront create-invalidation \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --paths "/" "/index.html" "/app" "/app.html" \
-            --query 'Invalidation.Id' \
-            --output text)"
-
-          echo "id=$INVALIDATION_ID" >> "$GITHUB_OUTPUT"
-
-          aws cloudfront wait invalidation-completed \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --id "$INVALIDATION_ID"
-
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
 
@@ -308,20 +272,30 @@ jobs:
 
           echo "revision=$CONFIG_REVISION" >> "$GITHUB_OUTPUT"
 
+      # The backend rolls out (and is smoke-tested) BEFORE the frontend is
+      # published, so a failed rollout never leaves a new UI live against the
+      # old API.
       - name: Deploy backend to EKS
         env:
           BACKEND_IMAGE: ${{ steps.backend.outputs.image }}
           CONFIG_REVISION: ${{ steps.runtime.outputs.revision }}
         shell: bash
         run: |
+          set -euo pipefail
+
           sed \
             -e "s|__BACKEND_IMAGE__|$BACKEND_IMAGE|g" \
             -e "s|__CONFIG_REVISION__|$CONFIG_REVISION|g" \
             deploy/aws/axoview.yaml.tpl | kubectl apply -f -
 
-          kubectl -n axoview rollout status deployment/axoview-api --timeout=5m
+          if ! kubectl -n axoview rollout status deployment/axoview-api --timeout=5m; then
+            echo "::error::Backend rollout failed; rolling back to the previous revision."
+            kubectl -n axoview rollout undo deployment/axoview-api || true
+            kubectl -n axoview rollout status deployment/axoview-api --timeout=5m || true
+            exit 1
+          fi
 
-      - name: Smoke test deployed workload
+      - name: Smoke test backend
         shell: bash
         run: |
           set -euo pipefail
@@ -346,6 +320,75 @@ jobs:
           curl --fail --silent http://127.0.0.1:18080/api/config \
             | jq -e '.serverStorage == false'
 
+      # Only static/ holds content-hashed filenames, so only static/ may be
+      # cached as immutable. Everything else (HTML, i18n/app/*.json, manifest,
+      # sitemap, robots, favicons, .well-known) keeps a stable name and must
+      # revalidate.
+      #
+      # No --delete: removing the previous release's hashed chunks would break
+      # editors that are already open and still lazy-load them (icon packs,
+      # dialogs). Prune old static/ objects with an S3 lifecycle rule in the
+      # infrastructure repository instead.
+      - name: Deploy frontend assets to S3
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BUILD_DIR=packages/axoview-app/build
+          test -d "$BUILD_DIR/static"
+
+          aws s3 sync \
+            "$BUILD_DIR/static/" \
+            "s3://$FRONTEND_BUCKET/static/" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --only-show-errors
+
+          aws s3 sync \
+            "$BUILD_DIR/" \
+            "s3://$FRONTEND_BUCKET/" \
+            --exclude "static/*" \
+            --exclude "*.html" \
+            --cache-control "public,max-age=0,must-revalidate" \
+            --only-show-errors
+
+          # HTML last, so entry points only reference assets already uploaded.
+          while IFS= read -r -d '' file; do
+            key="${file#"$BUILD_DIR"/}"
+            aws s3 cp \
+              "$file" \
+              "s3://$FRONTEND_BUCKET/$key" \
+              --content-type "text/html; charset=utf-8" \
+              --cache-control "no-cache, no-store, must-revalidate" \
+              --only-show-errors
+          done < <(find "$BUILD_DIR" -type f -name '*.html' -print0)
+
+      # "/*" is billed as a single invalidation path and covers every
+      # unhashed file (legal pages, 404, sitemap, manifest, locale JSON), not
+      # just the two entry points. Hashed static/ objects it also evicts are
+      # immutable and simply refetch from S3.
+      - name: Invalidate CloudFront
+        id: cloudfront
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INVALIDATION_ID="$(aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*" \
+            --query 'Invalidation.Id' \
+            --output text)"
+
+          echo "id=$INVALIDATION_ID" >> "$GITHUB_OUTPUT"
+
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --id "$INVALIDATION_ID"
+
+      - name: Smoke test frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+
           aws s3api head-object \
             --bucket "$FRONTEND_BUCKET" \
             --key index.html >/dev/null
@@ -360,20 +403,24 @@ jobs:
             --output text)" = "Deployed"
 
       - name: Deployment summary
+        if: ${{ always() && steps.release.outputs.sha != '' }}
         env:
           APP_SHA: ${{ steps.release.outputs.sha }}
           BACKEND_IMAGE: ${{ steps.backend.outputs.image }}
           INVALIDATION_ID: ${{ steps.cloudfront.outputs.id }}
+          JOB_STATUS: ${{ job.status }}
         shell: bash
         run: |
+          # printf with a single-quoted format: backticks inside a double-quoted
+          # echo are command substitution and would try to execute each value.
+          # shellcheck disable=SC2016
           {
-            echo "## AWS dev deployment"
-            echo
-            echo "- Axoview SHA: `$APP_SHA`"
-            echo "- Authentication: GitHub OIDC"
-            echo "- Frontend bucket: `$FRONTEND_BUCKET`"
-            echo "- Backend image: `$BACKEND_IMAGE`"
-            echo "- EKS cluster: `$EKS_CLUSTER_NAME`"
-            echo "- CloudFront invalidation: `$INVALIDATION_ID`"
-            echo "- Public URL: `$PUBLIC_BASE_URL`"
+            printf '## AWS dev deployment (%s)\n\n' "$JOB_STATUS"
+            printf -- '- Axoview SHA: `%s`\n' "$APP_SHA"
+            printf -- '- Authentication: GitHub OIDC\n'
+            printf -- '- Frontend bucket: `%s`\n' "${FRONTEND_BUCKET:-n/a}"
+            printf -- '- Backend image: `%s`\n' "${BACKEND_IMAGE:-n/a}"
+            printf -- '- EKS cluster: `%s`\n' "${EKS_CLUSTER_NAME:-n/a}"
+            printf -- '- CloudFront invalidation: `%s`\n' "${INVALIDATION_ID:-n/a}"
+            printf -- '- Public URL: `%s`\n' "${PUBLIC_BASE_URL:-n/a}"
           } >> "$GITHUB_STEP_SUMMARY"
