@@ -1,8 +1,5 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: axoview
----
+# Namespace `axoview` is created by the infrastructure repository; the deploy
+# role is scoped to it and cannot create namespaces.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

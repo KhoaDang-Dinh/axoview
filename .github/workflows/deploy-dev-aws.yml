@@ -251,7 +251,12 @@ jobs:
         id: runtime
         shell: bash
         run: |
-          kubectl create namespace axoview --dry-run=client -o yaml | kubectl apply -f -
+          # The namespace is owned by the infrastructure repository. The deploy
+          # role's EKS access is scoped to this namespace and cannot create it.
+          if ! kubectl -n axoview get serviceaccounts default >/dev/null 2>&1; then
+            echo "::error::Namespace axoview is missing or this role has no access to it. Apply the infrastructure stack first."
+            exit 1
+          fi
 
           kubectl -n axoview create configmap axoview-runtime-config \
             --from-literal=PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
