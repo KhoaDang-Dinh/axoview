@@ -1,0 +1,45 @@
+name: Deploy prod to AWS
+
+# Production deploys only commits already on master (dev -> master promotion
+# merges, or a manual redeploy/rollback of an earlier master SHA).
+#
+# The job runs in the GitHub `prod` environment. Configure that environment
+# with required reviewers and "Deployment branches: master" so every prod
+# deploy waits for a human approval before any AWS credentials are issued.
+# The prod IAM role only trusts tokens from that environment.
+
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact master SHA to deploy (empty = current master). Use an older SHA to roll back.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+# One prod deploy at a time; a newer push waits rather than cancelling a
+# deploy that is mid-rollout.
+concurrency:
+  group: axoview-aws-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Manual runs must also be started from master: the deploy steps come
+    # from the triggering ref, so a run from another branch could ship a
+    # modified pipeline.
+    if: ${{ vars.ENABLE_AWS_PROD_CD == 'true' && github.ref == 'refs/heads/master' }}
+    uses: ./.github/workflows/deploy-aws.yml
+    with:
+      environment: prod
+      source_branch: master
+      release_sha: ${{ inputs.release_sha }}
+      aws_region: ${{ vars.AWS_PROD_REGION || vars.AWS_REGION }}
+      role_arn: ${{ vars.AWS_PROD_DEPLOY_ROLE_ARN }}

@@ -106,6 +106,24 @@ npm run docker:legacy:build
 npm run docker:legacy:run
 ```
 
+## Continuous deployment
+
+Both environments run the same job, `.github/workflows/deploy-aws.yml`, through a thin caller:
+
+| | dev | prod |
+|---|---|---|
+| Caller | `deploy-dev-aws.yml` | `deploy-prod-aws.yml` |
+| Trigger | push to `dev`, or manual with a `dev` SHA | push to `master`, or manual (from `master`) with a `master` SHA |
+| GitHub environment | `dev` | `prod`: required reviewers, deployment branch `master` |
+| Enable switch | `ENABLE_AWS_DEV_CD=true` | `ENABLE_AWS_PROD_CD=true` |
+| Role variable | `AWS_DEV_DEPLOY_ROLE_ARN` | `AWS_PROD_DEPLOY_ROLE_ARN` |
+| Region variable | `AWS_DEV_REGION`, else `AWS_REGION` | `AWS_PROD_REGION`, else `AWS_REGION` |
+| SSM contract | `/axoview/dev/deployment/*` | `/axoview/prod/deployment/*` |
+
+Every run requires `CI Gate` and `Docker Gate` to be green on the exact SHA, then deploys and smoke-tests the backend before publishing the frontend. A prod rollback is a manual run with an earlier `master` SHA; the image is reused from ECR when that tag already exists.
+
+Each environment's IAM role trusts only `repo:KhoaDang-Dinh/axoview:environment:<env>`, and its EKS access is `AmazonEKSEditPolicy` scoped to the `axoview` namespace, which the infrastructure stack creates.
+
 ## Current EKS safety boundary
 
 The upstream filesystem adapter is not safe as horizontally scaled multi-user storage. It uses a single filesystem namespace and process-local locks.
