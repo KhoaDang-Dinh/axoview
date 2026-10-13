@@ -1,5 +1,18 @@
 # AWS service application contract
 
+> **AWS runner requirement:** the AWS dev deployment workflow runs on the trusted self-hosted EC2 GitHub runner. The runner's EC2 instance profile is used only to read the bootstrap SSM contract. The workflow then assumes the Axoview dev deployer through GitHub OIDC before changing S3, ECR, EKS, or CloudFront.
+
+The Axoview repository needs only the AWS region as local discovery configuration:
+
+```text
+AWS_REGION=ap-southeast-1
+```
+
+The deployer role ARN is discovered from `/axoview/bootstrap/deployer_dev_role_arn`; do not copy that ARN into a GitHub secret or variable.
+
+The root domain and dev viewer CIDRs are owned by the infrastructure repository. The viewer CIDRs represent the **human/browser public egress IPs**, not the EC2 runner IP.
+
+
 Infrastructure for the production service lives in a separate repository. This repository owns Axoview application code, build artifacts, and the runtime contract that the infrastructure repository consumes.
 
 ## Repository boundary
