@@ -71,6 +71,8 @@ The frontend bundle is identical across all three: a static marketing landing at
 
 For the from-scratch deploy walkthrough, see [docs/deployment.md](docs/deployment.md).
 
+For the AWS S3/CloudFront + ECR/EKS deployment, see [docs/aws-eks-service.md](docs/aws-eks-service.md). The AWS workflow is designed for the trusted self-hosted EC2 GitHub runner and switches from SSM discovery to GitHub OIDC before mutating AWS resources.
+
 ## Documentation
 
 - [docs/features.md](docs/features.md) — the full feature inventory (what this fork adds vs upstream, with ADR links).
