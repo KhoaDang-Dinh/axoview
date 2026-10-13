@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ vars.ENABLE_AWS_DEV_CD == 'true' }}
+    if: ${{ vars.ENABLE_AWS_DEV_CD == 'true' && github.repository == 'KhoaDang-Dinh/axoview' && github.actor == 'KhoaDang-Dinh' && github.ref == 'refs/heads/dev' }}
     runs-on: self-hosted
     environment: dev
     env:
