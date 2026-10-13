@@ -23,11 +23,10 @@ concurrency:
 jobs:
   deploy:
     if: ${{ vars.ENABLE_AWS_DEV_CD == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     environment: dev
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_ROLE_ARN: ${{ vars.AWS_DEV_DEPLOY_ROLE_ARN }}
 
     steps:
       - name: Check out Axoview dev
@@ -99,17 +98,43 @@ jobs:
           echo "::error::Timed out waiting for CI Gate and Docker Gate on $APP_SHA."
           exit 1
 
-      - name: Validate OIDC bootstrap configuration
+      - name: Discover deploy role from SSM
+        id: bootstrap
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$AWS_REGION" || { echo "::error::AWS_REGION is empty."; exit 1; }
-          test -n "$AWS_ROLE_ARN" || { echo "::error::AWS_DEV_DEPLOY_ROLE_ARN is empty."; exit 1; }
+
+          test -n "$AWS_REGION" || {
+            echo "::error::Set only AWS_REGION as a repository variable."
+            exit 1
+          }
+
+          PREFIX="/axoview/bootstrap"
+          PARAMETERS="$(aws ssm get-parameters-by-path             --region "$AWS_REGION"             --path "$PREFIX/"             --recursive             --output json)"
+
+          value_for() {
+            jq -r --arg name "$PREFIX/$1"               '.Parameters[] | select(.Name == $name) | .Value'               <<<"$PARAMETERS" | head -n1
+          }
+
+          CONTRACT_REGION="$(value_for aws_region)"
+          DEPLOY_ROLE="$(value_for deployer_dev_role_arn)"
+
+          test "$CONTRACT_REGION" = "$AWS_REGION" || {
+            echo "::error::Bootstrap region does not match AWS_REGION."
+            exit 1
+          }
+
+          test -n "$DEPLOY_ROLE" && test "$DEPLOY_ROLE" != "null" || {
+            echo "::error::Missing /axoview/bootstrap/deployer_dev_role_arn."
+            exit 1
+          }
+
+          echo "role=$DEPLOY_ROLE" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials with GitHub OIDC
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-to-assume: ${{ steps.bootstrap.outputs.role }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Load Terraform deployment contract from SSM
