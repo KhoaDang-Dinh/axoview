@@ -1,0 +1,152 @@
+name: Push images to ECR
+
+# Manual, human-triggered release to AWS. Run it from the branch to release
+# (Actions -> Push images to ECR -> Run workflow) on dev or master.
+#
+# This repository's only job is to put two immutable images in ECR, tagged
+# <branch>-<sha>:
+#   axoview-backend   Dockerfile.backend
+#   axoview-frontend  Dockerfile, target `frontend` (static files under /site)
+# Everything after that is GitOps in KhoaDang-Dinh/infra_website: Argo CD
+# Image Updater in the dev cluster notices the new tag, commits it to the dev
+# overlay and Argo CD deploys it; prod gets a master-<sha> release only through
+# infra_website's "Promote dev to prod" pull request.
+#
+# AWS access is GitHub OIDC (no stored keys). Repository variables:
+#   AWS_REGION                     e.g. ap-southeast-1
+#   AWS_IMAGE_PUBLISHER_ROLE_ARN   infra_website bootstrap output
+#                                  github_artifact_publisher_role_arn (ECR push only,
+#                                  trusts this repository's dev and master)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+  id-token: write
+
+concurrency:
+  group: push-images-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    if: ${{ github.repository == 'KhoaDang-Dinh/axoview' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      APP_SHA: ${{ github.sha }}
+      BACKEND_REPOSITORY: axoview-backend
+      FRONTEND_REPOSITORY: axoview-frontend
+
+    steps:
+      - name: Require a release branch and AWS settings
+        id: release
+        shell: bash
+        env:
+          ROLE_ARN: ${{ vars.AWS_IMAGE_PUBLISHER_ROLE_ARN }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            dev|master) echo "tag=$GITHUB_REF_NAME-$APP_SHA" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::Run this from dev or master (got '$GITHUB_REF_NAME'). Only those branches are released."
+              exit 1
+              ;;
+          esac
+          missing=""
+          [ -n "$AWS_REGION" ] || missing="$missing AWS_REGION"
+          [ -n "$ROLE_ARN" ] || missing="$missing AWS_IMAGE_PUBLISHER_ROLE_ARN"
+          if [ -n "$missing" ]; then
+            echo "::error::Set the repository variable(s):$missing (Settings > Secrets and variables > Actions > Variables)."
+            exit 1
+          fi
+
+      - name: Require green application gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          for _ in $(seq 1 90); do
+            CHECKS="$(gh api "repos/$GITHUB_REPOSITORY/commits/$APP_SHA/check-runs?per_page=100")"
+            CI_GATE="$(jq -r '[.check_runs[] | select(.name == "CI Gate")][0].conclusion // ""' <<<"$CHECKS")"
+            DOCKER_GATE="$(jq -r '[.check_runs[] | select(.name == "Docker Gate")][0].conclusion // ""' <<<"$CHECKS")"
+
+            echo "CI Gate=${CI_GATE:-pending} Docker Gate=${DOCKER_GATE:-pending}"
+            if [ "$CI_GATE" = "success" ] && [ "$DOCKER_GATE" = "success" ]; then
+              exit 0
+            fi
+            case "$CI_GATE:$DOCKER_GATE" in
+              *failure*|*cancelled*|*timed_out*|*action_required*)
+                echo "::error::A required gate failed for $APP_SHA; fix it before releasing."
+                exit 1
+                ;;
+            esac
+            sleep 20
+          done
+
+          echo "::error::Timed out waiting for CI Gate and Docker Gate on $APP_SHA."
+          exit 1
+
+      - uses: actions/checkout@v6
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_IMAGE_PUBLISHER_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Tags are immutable in ECR: a tag that already exists is this exact
+      # commit's image, so re-running only pushes what is missing.
+      - name: Build and push release images
+        id: push
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          exists() {
+            aws ecr describe-images --repository-name "$1" --image-ids "imageTag=$TAG" >/dev/null 2>&1
+          }
+
+          push() {   # push <repository> <docker build args...>
+            local repo="$1"; shift
+            local image="$REGISTRY/$repo:$TAG"
+            if exists "$repo"; then
+              echo "$image already exists; not rebuilding."
+            else
+              docker build --platform linux/amd64 -t "$image" "$@" .
+              docker push "$image"
+            fi
+            echo "$repo=$image" >> "$GITHUB_OUTPUT"
+          }
+
+          push "$BACKEND_REPOSITORY" -f Dockerfile.backend
+          push "$FRONTEND_REPOSITORY" -f Dockerfile --target frontend
+
+      - name: Summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BACKEND_IMAGE: ${{ steps.push.outputs.axoview-backend }}
+          FRONTEND_IMAGE: ${{ steps.push.outputs.axoview-frontend }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          # shellcheck disable=SC2016
+          {
+            printf '## Release images (%s)\n\n' "$JOB_STATUS"
+            printf -- '- Axoview: `%s` at `%s`\n' "$GITHUB_REF_NAME" "$APP_SHA"
+            printf -- '- Backend: `%s`\n' "${BACKEND_IMAGE:-n/a}"
+            printf -- '- Frontend: `%s`\n' "${FRONTEND_IMAGE:-n/a}"
+            printf '\nDev picks these up automatically (Argo CD Image Updater, within a few minutes).'
+            printf ' Prod: run "Promote dev to prod" in infra_website once dev runs a master release.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
