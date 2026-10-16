@@ -13,7 +13,9 @@ name: Push images to ECR
 # prod gets a master-<sha> release only through infra_website's
 # "Promote dev to prod" pull request.
 #
-# Runs on this repository's self-hosted runner (PowerUserAccess). It assumes
+# Two jobs: the release checks run on a GitHub-hosted runner (it has gh and
+# jq); only the push runs on this repository's self-hosted runner
+# (PowerUserAccess), which needs nothing but the AWS CLI and Docker. It assumes
 # the push-only role infra_website's Terraform creates and finds it, and the
 # repository names, in SSM (/axoview/bootstrap/*), so the only setting here is
 # the repository variable AWS_REGION. No keys or tokens are stored.
@@ -30,13 +32,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  push:
+  gates:
     if: ${{ github.repository == 'KhoaDang-Dinh/axoview' }}
-    runs-on: self-hosted
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
       APP_SHA: ${{ github.sha }}
 
     steps:
@@ -83,6 +86,33 @@ jobs:
 
           echo "::error::Timed out waiting for CI Gate and Docker Gate on $APP_SHA."
           exit 1
+
+  push:
+    needs: gates
+    runs-on: self-hosted
+    timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      APP_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Check runner tools
+        shell: bash
+        run: |
+          missing=""
+          command -v aws >/dev/null 2>&1 || missing="$missing aws-cli"
+          command -v docker >/dev/null 2>&1 || missing="$missing docker"
+          if [ -n "$missing" ]; then
+            echo "::error::Runner $RUNNER_NAME is missing:$missing. Install them on the runner host (AWS CLI v2, Docker Engine)."
+            exit 1
+          fi
+          if ! docker info >/dev/null 2>&1; then
+            echo "::error::Docker is installed on $RUNNER_NAME but not usable by the runner user. Start the daemon and add that user to the docker group (then restart the runner service)."
+            exit 1
+          fi
+          aws --version
+          docker version --format 'Docker {{.Server.Version}}'
 
       - uses: actions/checkout@v6
 
@@ -131,7 +161,7 @@ jobs:
           REGISTRY: ${{ steps.aws.outputs.registry }}
           BACKEND_REPOSITORY: ${{ steps.aws.outputs.backend }}
           FRONTEND_REPOSITORY: ${{ steps.aws.outputs.frontend }}
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ needs.gates.outputs.tag }}
         run: |
           set -euo pipefail
           aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
