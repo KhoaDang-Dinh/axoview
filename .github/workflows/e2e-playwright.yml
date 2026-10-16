@@ -49,7 +49,7 @@ env:
 jobs:
   playwright:
     name: Playwright (chromium) [shard ${{ matrix.shard }}/4]
-    if: github.event.pull_request.draft != true
+    if: ${{ github.event.pull_request.draft != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -116,7 +116,7 @@ jobs:
   # failed, so green runs stay at the wall-clock of the slowest shard.
   merge-reports:
     name: Merge Playwright reports
-    if: ${{ failure() && github.event.pull_request.draft != true }}
+    if: ${{ failure() && github.event.pull_request.draft != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [playwright]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -163,7 +163,7 @@ jobs:
     # Deliberately fail-closed on `skipped` too (draft PRs): "the suite did not
     # run" is not "the suite passed". Drafts can't be merged, and marking one
     # ready re-triggers the workflow via the `ready_for_review` type above.
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [playwright]
     runs-on: ubuntu-latest
     timeout-minutes: 2

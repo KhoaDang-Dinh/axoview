@@ -33,6 +33,7 @@ permissions:
 jobs:
   docker-smoke:
     name: Docker smoke
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -123,7 +124,7 @@ jobs:
 
   docker-gate:
     name: Docker Gate
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [docker-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 2

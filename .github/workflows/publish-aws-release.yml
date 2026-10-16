@@ -1,0 +1,153 @@
+name: Publish AWS release
+
+# Manual, human-triggered release to AWS. Run it from the branch to release
+# (Actions -> Publish AWS release -> Run workflow):
+#   dev    -> infra_website "Publish Axoview artifacts" on its dev branch
+#   master -> the same workflow on infra_website's main branch
+#
+# It publishes exactly this branch's head commit: once its CI Gate and Docker
+# Gate are green, it asks infra_website to build the frontend and backend image
+# once, store them under that SHA (S3 + ECR, immutable), and, if `deploy` is
+# set, deploy it. Deploys are GitOps: infra_website commits the image digest
+# to its Kubernetes overlay and Argo CD in the environment's cluster rolls it
+# out; this repository never touches the cluster itself.
+#
+# Needs the secret INFRA_DISPATCH_TOKEN: a fine-grained token limited to
+# KhoaDang-Dinh/infra_website with "Actions: read and write".
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Also deploy the release (dev from the dev branch; prod from master, after dev)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: publish-aws-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.repository == 'KhoaDang-Dinh/axoview' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      INFRA_REPO: KhoaDang-Dinh/infra_website
+      INFRA_WORKFLOW: publish-axoview-artifacts.yml
+      APP_SHA: ${{ github.sha }}
+      APP_REF: ${{ github.ref_name }}
+
+    steps:
+      - name: Map this branch to the infra_website branch
+        id: target
+        shell: bash
+        run: |
+          case "$APP_REF" in
+            dev) echo "infra_ref=dev" >> "$GITHUB_OUTPUT"; echo "environment=dev" >> "$GITHUB_OUTPUT" ;;
+            master) echo "infra_ref=main" >> "$GITHUB_OUTPUT"; echo "environment=prod" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::Run this from dev or master (got '$APP_REF'). Releases are only published from those branches."
+              exit 1
+              ;;
+          esac
+
+      - name: Require the dispatch token
+        shell: bash
+        env:
+          INFRA_DISPATCH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$INFRA_DISPATCH_TOKEN" ]; then
+            echo "::error::Secret INFRA_DISPATCH_TOKEN is not set: a fine-grained token for $INFRA_REPO with Actions read and write."
+            exit 1
+          fi
+
+      - name: Require green application gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          for _ in $(seq 1 90); do
+            CHECKS="$(gh api "repos/$GITHUB_REPOSITORY/commits/$APP_SHA/check-runs?per_page=100")"
+            CI_GATE="$(jq -r '[.check_runs[] | select(.name == "CI Gate")][0].conclusion // ""' <<<"$CHECKS")"
+            DOCKER_GATE="$(jq -r '[.check_runs[] | select(.name == "Docker Gate")][0].conclusion // ""' <<<"$CHECKS")"
+
+            echo "CI Gate=${CI_GATE:-pending} Docker Gate=${DOCKER_GATE:-pending}"
+            if [ "$CI_GATE" = "success" ] && [ "$DOCKER_GATE" = "success" ]; then
+              exit 0
+            fi
+            case "$CI_GATE:$DOCKER_GATE" in
+              *failure*|*cancelled*|*timed_out*|*action_required*)
+                echo "::error::A required gate failed for $APP_SHA; fix it before publishing."
+                exit 1
+                ;;
+            esac
+            sleep 20
+          done
+
+          echo "::error::Timed out waiting for CI Gate and Docker Gate on $APP_SHA."
+          exit 1
+
+      - name: Start Publish Axoview artifacts in infra_website
+        id: dispatch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+          INFRA_REF: ${{ steps.target.outputs.infra_ref }}
+          DEPLOY: ${{ inputs.deploy }}
+        run: |
+          set -euo pipefail
+
+          STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run "$INFRA_WORKFLOW" --repo "$INFRA_REPO" --ref "$INFRA_REF" \
+            -f app_ref="$APP_REF" \
+            -f app_sha="$APP_SHA" \
+            -f deploy_after_publish="$DEPLOY"
+
+          # The infra run is titled "Publish Axoview <sha>"; pick the one this
+          # dispatch started.
+          for _ in $(seq 1 24); do
+            RUN_ID="$(gh api "repos/$INFRA_REPO/actions/workflows/$INFRA_WORKFLOW/runs?event=workflow_dispatch&branch=$INFRA_REF&per_page=20" \
+              | jq -r --arg t "Publish Axoview $APP_SHA" --arg since "$STARTED_AT" \
+                  '[.workflow_runs[] | select(.display_title == $t and .created_at >= $since)] | sort_by(.created_at) | last | .id // empty')"
+            if [ -n "$RUN_ID" ]; then
+              echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+              echo "url=https://github.com/$INFRA_REPO/actions/runs/$RUN_ID" >> "$GITHUB_OUTPUT"
+              echo "Started https://github.com/$INFRA_REPO/actions/runs/$RUN_ID"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Dispatched $INFRA_WORKFLOW on $INFRA_REPO@$INFRA_REF but could not find its run; check https://github.com/$INFRA_REPO/actions."
+          exit 1
+
+      - name: Follow the infra_website run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN }}
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: gh run watch "$RUN_ID" --repo "$INFRA_REPO" --interval 30 --exit-status
+
+      - name: Summary
+        if: ${{ always() && steps.dispatch.outputs.url != '' }}
+        shell: bash
+        env:
+          RUN_URL: ${{ steps.dispatch.outputs.url }}
+          ENVIRONMENT: ${{ steps.target.outputs.environment }}
+          DEPLOY: ${{ inputs.deploy }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          # shellcheck disable=SC2016
+          {
+            printf '## AWS release (%s)\n\n' "$JOB_STATUS"
+            printf -- '- Axoview: `%s` at `%s`\n' "$APP_REF" "$APP_SHA"
+            printf -- '- Deploy to %s: `%s`\n' "$ENVIRONMENT" "$DEPLOY"
+            printf -- '- infra_website run: %s\n' "$RUN_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

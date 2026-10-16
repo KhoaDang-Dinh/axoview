@@ -1,5 +1,32 @@
 # AWS service application contract
 
+> **AWS runner requirement:** the AWS dev deployment workflow runs on the trusted self-hosted EC2 GitHub runner. The runner's EC2 instance profile is used only to read the bootstrap SSM contract. The workflow then assumes the Axoview dev deployer through GitHub OIDC before changing S3, ECR, EKS, or CloudFront.
+
+The Axoview repository needs only the AWS region as local discovery configuration:
+
+```text
+AWS_REGION=ap-southeast-1
+```
+
+The deployer role ARN is discovered from `/axoview/bootstrap/deployer_dev_role_arn`; do not copy that ARN into a GitHub secret or variable.
+
+The root domain and dev viewer CIDRs are owned by the infrastructure repository. The viewer CIDRs represent the **human/browser public egress IPs**, not the EC2 runner IP.
+
+## Public repository CI/CD security
+
+Axoview is public, so CI/CD must treat pull requests from forks as untrusted code.
+
+- Fork pull requests do not run Axoview CI jobs.
+- No pull-request workflow uses the self-hosted EC2 runner.
+- AWS deployment runs only from the canonical `KhoaDang-Dinh/axoview` repository, on `dev`, and only when the actor is `KhoaDang-Dinh`.
+- AWS mutation uses GitHub OIDC after SSM discovery; the EC2 instance profile is not the deployment identity.
+- Semantic release only chains from a successful trusted `push` workflow run in the canonical repository.
+- Dependabot remains an explicit bot exception for its own auto-merge workflow.
+
+This is intentional: public contributors may submit code for review, but they cannot trigger the private AWS deployment path or execute arbitrary fork code on the EC2 runner.
+
+
+
 Infrastructure for the production service lives in a separate repository. This repository owns Axoview application code, build artifacts, and the runtime contract that the infrastructure repository consumes.
 
 ## Repository boundary
