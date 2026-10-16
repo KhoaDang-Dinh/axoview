@@ -15,7 +15,7 @@ name: Push images to ECR
 #
 # Two jobs: the release checks run on a GitHub-hosted runner (it has gh and
 # jq); only the push runs on this repository's self-hosted runner
-# (PowerUserAccess), which needs nothing but the AWS CLI and Docker. It assumes
+# (Ubuntu, PowerUserAccess); it installs AWS CLI v2 and Docker if missing. It assumes
 # the push-only role infra_website's Terraform creates and finds it, and the
 # repository names, in SSM (/axoview/bootstrap/*), so the only setting here is
 # the repository variable AWS_REGION. No keys or tokens are stored.
@@ -97,22 +97,55 @@ jobs:
       APP_SHA: ${{ github.sha }}
 
     steps:
-      - name: Check runner tools
+      # The runner is Ubuntu. Anything missing is installed with apt (passwordless
+      # sudo), except AWS CLI v2: Ubuntu's awscli package is v1 (22.04) or gone
+      # (24.04), so it comes from AWS's official installer.
+      - name: Ensure runner tools (AWS CLI v2, Docker)
         shell: bash
         run: |
-          missing=""
-          command -v aws >/dev/null 2>&1 || missing="$missing aws-cli"
-          command -v docker >/dev/null 2>&1 || missing="$missing docker"
-          if [ -n "$missing" ]; then
-            echo "::error::Runner $RUNNER_NAME is missing:$missing. Install them on the runner host (AWS CLI v2, Docker Engine)."
+          set -euo pipefail
+          sudo -n true 2>/dev/null || {
+            echo "::error::Runner $RUNNER_NAME needs passwordless sudo to install missing tools (or install AWS CLI v2 and Docker yourself)."
+            exit 1
+          }
+          apt_install() {
+            sudo -n apt-get update -qq
+            sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+          }
+
+          if ! aws --version 2>&1 | grep -q '^aws-cli/2'; then
+            echo "Installing AWS CLI v2 (found: $(aws --version 2>&1 || echo none))."
+            if ! command -v curl >/dev/null || ! command -v unzip >/dev/null; then apt_install curl unzip; fi
+            tmp="$(mktemp -d)"
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "$tmp/awscliv2.zip"
+            unzip -q "$tmp/awscliv2.zip" -d "$tmp"
+            sudo -n "$tmp/aws/install" --update
+            rm -rf "$tmp"
+            hash -r
+          fi
+
+          if ! command -v docker >/dev/null; then
+            echo "Installing Docker (docker.io)."
+            apt_install docker.io
+            apt_install docker-buildx || echo "docker-buildx not available; using the classic builder."
+            sudo -n systemctl enable --now docker
+            sudo -n usermod -aG docker "$(id -un)"
+          fi
+
+          # A docker group added just now only applies after the runner service
+          # restarts; until then this job uses sudo for docker.
+          if docker info >/dev/null 2>&1; then
+            echo "DOCKER=docker" >> "$GITHUB_ENV"
+          elif sudo -n docker info >/dev/null 2>&1; then
+            echo "::warning::$(id -un) is not in the docker group yet; using sudo docker. Restart the runner service once (sudo ./svc.sh stop && sudo ./svc.sh start in the runner directory)."
+            echo "DOCKER=sudo -n docker" >> "$GITHUB_ENV"
+          else
+            echo "::error::Docker is installed on $RUNNER_NAME but its daemon is not running (sudo systemctl status docker)."
             exit 1
           fi
-          if ! docker info >/dev/null 2>&1; then
-            echo "::error::Docker is installed on $RUNNER_NAME but not usable by the runner user. Start the daemon and add that user to the docker group (then restart the runner service)."
-            exit 1
-          fi
+
           aws --version
-          docker version --format 'Docker {{.Server.Version}}'
+          ${DOCKER:-docker} version --format 'Docker {{.Server.Version}}' 2>/dev/null || sudo -n docker version --format 'Docker {{.Server.Version}}'
 
       - uses: actions/checkout@v6
 
@@ -164,7 +197,7 @@ jobs:
           TAG: ${{ needs.gates.outputs.tag }}
         run: |
           set -euo pipefail
-          aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+          aws ecr get-login-password | $DOCKER login --username AWS --password-stdin "$REGISTRY"
 
           push() {   # push <output-name> <repository> <docker build args...>
             local name="$1" repo="$2"; shift 2
@@ -172,8 +205,8 @@ jobs:
             if aws ecr describe-images --repository-name "$repo" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
               echo "$image already exists; not rebuilding."
             else
-              docker build --platform linux/amd64 -t "$image" "$@" .
-              docker push "$image"
+              $DOCKER build --platform linux/amd64 -t "$image" "$@" .
+              $DOCKER push "$image"
             fi
             echo "$name=$image" >> "$GITHUB_OUTPUT"
           }
@@ -188,7 +221,7 @@ jobs:
         env:
           REGISTRY: ${{ steps.aws.outputs.registry }}
         run: |
-          if [ -n "$REGISTRY" ]; then docker logout "$REGISTRY" >/dev/null 2>&1 || true; fi
+          if [ -n "$REGISTRY" ]; then ${DOCKER:-docker} logout "$REGISTRY" >/dev/null 2>&1 || true; fi
 
       - name: Summary
         if: ${{ always() }}
