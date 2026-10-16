@@ -9,14 +9,14 @@ name: Push images to ECR
 #   axoview-frontend  Dockerfile, target `frontend` (static files under /site)
 # Everything after that is GitOps in KhoaDang-Dinh/infra_website: Argo CD
 # Image Updater in the dev cluster notices the new tag, commits it to the dev
-# overlay and Argo CD deploys it; prod gets a master-<sha> release only through
-# infra_website's "Promote dev to prod" pull request.
+# overlay and Argo CD deploys it (API to EKS, frontend to S3 + CloudFront);
+# prod gets a master-<sha> release only through infra_website's
+# "Promote dev to prod" pull request.
 #
-# AWS access is GitHub OIDC (no stored keys). Repository variables:
-#   AWS_REGION                     e.g. ap-southeast-1
-#   AWS_IMAGE_PUBLISHER_ROLE_ARN   infra_website bootstrap output
-#                                  github_artifact_publisher_role_arn (ECR push only,
-#                                  trusts this repository's dev and master)
+# Runs on this repository's self-hosted runner (PowerUserAccess). It assumes
+# the push-only role infra_website's Terraform creates and finds it, and the
+# repository names, in SSM (/axoview/bootstrap/*), so the only setting here is
+# the repository variable AWS_REGION. No keys or tokens are stored.
 
 on:
   workflow_dispatch:
@@ -24,7 +24,6 @@ on:
 permissions:
   contents: read
   checks: read
-  id-token: write
 
 concurrency:
   group: push-images-${{ github.ref_name }}
@@ -33,20 +32,17 @@ concurrency:
 jobs:
   push:
     if: ${{ github.repository == 'KhoaDang-Dinh/axoview' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 90
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
       APP_SHA: ${{ github.sha }}
-      BACKEND_REPOSITORY: axoview-backend
-      FRONTEND_REPOSITORY: axoview-frontend
 
     steps:
-      - name: Require a release branch and AWS settings
+      - name: Require a release branch and AWS_REGION
         id: release
         shell: bash
-        env:
-          ROLE_ARN: ${{ vars.AWS_IMAGE_PUBLISHER_ROLE_ARN }}
         run: |
           case "$GITHUB_REF_NAME" in
             dev|master) echo "tag=$GITHUB_REF_NAME-$APP_SHA" >> "$GITHUB_OUTPUT" ;;
@@ -55,11 +51,8 @@ jobs:
               exit 1
               ;;
           esac
-          missing=""
-          [ -n "$AWS_REGION" ] || missing="$missing AWS_REGION"
-          [ -n "$ROLE_ARN" ] || missing="$missing AWS_IMAGE_PUBLISHER_ROLE_ARN"
-          if [ -n "$missing" ]; then
-            echo "::error::Set the repository variable(s):$missing (Settings > Secrets and variables > Actions > Variables)."
+          if [ -z "$AWS_REGION" ]; then
+            echo "::error::Set the repository variable AWS_REGION (Settings > Secrets and variables > Actions > Variables)."
             exit 1
           fi
 
@@ -93,15 +86,41 @@ jobs:
 
       - uses: actions/checkout@v6
 
-      - name: Configure AWS credentials with GitHub OIDC
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ vars.AWS_IMAGE_PUBLISHER_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+      # The runner's own credentials only read the contract and assume the role;
+      # everything after this step runs as the push-only role.
+      - name: Assume the image publisher role
+        id: aws
+        shell: bash
+        run: |
+          set -euo pipefail
+          param() {
+            aws ssm get-parameter --name "/axoview/bootstrap/$1" --query Parameter.Value --output text
+          }
+          ROLE_ARN="$(param image_publisher_role_arn)"
+          BACKEND_REPOSITORY="$(param ecr_repository)"
+          FRONTEND_REPOSITORY="$(param ecr_frontend_repository)"
 
-      - name: Log in to Amazon ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
+          read -r KEY SECRET TOKEN < <(aws sts assume-role \
+            --role-arn "$ROLE_ARN" \
+            --role-session-name "axoview-push-$GITHUB_RUN_ID" \
+            --duration-seconds 3600 \
+            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+          echo "::add-mask::$KEY"
+          echo "::add-mask::$SECRET"
+          echo "::add-mask::$TOKEN"
+          {
+            echo "AWS_ACCESS_KEY_ID=$KEY"
+            echo "AWS_SECRET_ACCESS_KEY=$SECRET"
+            echo "AWS_SESSION_TOKEN=$TOKEN"
+          } >> "$GITHUB_ENV"
+
+          ACCOUNT_ID="${ROLE_ARN#arn:aws:iam::}"; ACCOUNT_ID="${ACCOUNT_ID%%:*}"
+          {
+            echo "registry=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+            echo "backend=$BACKEND_REPOSITORY"
+            echo "frontend=$FRONTEND_REPOSITORY"
+          } >> "$GITHUB_OUTPUT"
+          echo "Pushing as $ROLE_ARN to $BACKEND_REPOSITORY and $FRONTEND_REPOSITORY."
 
       # Tags are immutable in ECR: a tag that already exists is this exact
       # commit's image, so re-running only pushes what is missing.
@@ -109,36 +128,44 @@ jobs:
         id: push
         shell: bash
         env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REGISTRY: ${{ steps.aws.outputs.registry }}
+          BACKEND_REPOSITORY: ${{ steps.aws.outputs.backend }}
+          FRONTEND_REPOSITORY: ${{ steps.aws.outputs.frontend }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
 
-          exists() {
-            aws ecr describe-images --repository-name "$1" --image-ids "imageTag=$TAG" >/dev/null 2>&1
-          }
-
-          push() {   # push <repository> <docker build args...>
-            local repo="$1"; shift
+          push() {   # push <output-name> <repository> <docker build args...>
+            local name="$1" repo="$2"; shift 2
             local image="$REGISTRY/$repo:$TAG"
-            if exists "$repo"; then
+            if aws ecr describe-images --repository-name "$repo" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
               echo "$image already exists; not rebuilding."
             else
               docker build --platform linux/amd64 -t "$image" "$@" .
               docker push "$image"
             fi
-            echo "$repo=$image" >> "$GITHUB_OUTPUT"
+            echo "$name=$image" >> "$GITHUB_OUTPUT"
           }
 
-          push "$BACKEND_REPOSITORY" -f Dockerfile.backend
-          push "$FRONTEND_REPOSITORY" -f Dockerfile --target frontend
+          push backend "$BACKEND_REPOSITORY" -f Dockerfile.backend
+          push frontend "$FRONTEND_REPOSITORY" -f Dockerfile --target frontend
+
+      # Shared runner: leave no registry login or session behind.
+      - name: Clean up credentials
+        if: ${{ always() }}
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.aws.outputs.registry }}
+        run: |
+          if [ -n "$REGISTRY" ]; then docker logout "$REGISTRY" >/dev/null 2>&1 || true; fi
 
       - name: Summary
         if: ${{ always() }}
         shell: bash
         env:
-          BACKEND_IMAGE: ${{ steps.push.outputs.axoview-backend }}
-          FRONTEND_IMAGE: ${{ steps.push.outputs.axoview-frontend }}
+          BACKEND_IMAGE: ${{ steps.push.outputs.backend }}
+          FRONTEND_IMAGE: ${{ steps.push.outputs.frontend }}
           JOB_STATUS: ${{ job.status }}
         run: |
           # shellcheck disable=SC2016
