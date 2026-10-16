@@ -36,6 +36,14 @@ ARG AXOVIEW_VERSION
 # Build the library first, then the app
 RUN npm run build:lib && npm run build:app
 
+# Static frontend only, for the AWS deployment: the build output under /site,
+# pushed to ECR as axoview-frontend and copied to S3 by an Argo CD sync Job in
+# infra_website. Not the default target (that is the last stage below):
+#   docker build --target frontend -t axoview-frontend .
+# busybox provides the `cp` the copy step runs.
+FROM busybox:1.37 AS frontend
+COPY --from=build /app/packages/axoview-app/build /site
+
 # Use Node with nginx for production
 FROM node:22-alpine
 

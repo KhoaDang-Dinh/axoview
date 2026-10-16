@@ -1,0 +1,179 @@
+name: Push images to ECR
+
+# Manual, human-triggered release to AWS. Run it from the branch to release
+# (Actions -> Push images to ECR -> Run workflow) on dev or master.
+#
+# This repository's only job is to put two immutable images in ECR, tagged
+# <branch>-<sha>:
+#   axoview-backend   Dockerfile.backend
+#   axoview-frontend  Dockerfile, target `frontend` (static files under /site)
+# Everything after that is GitOps in KhoaDang-Dinh/infra_website: Argo CD
+# Image Updater in the dev cluster notices the new tag, commits it to the dev
+# overlay and Argo CD deploys it (API to EKS, frontend to S3 + CloudFront);
+# prod gets a master-<sha> release only through infra_website's
+# "Promote dev to prod" pull request.
+#
+# Runs on this repository's self-hosted runner (PowerUserAccess). It assumes
+# the push-only role infra_website's Terraform creates and finds it, and the
+# repository names, in SSM (/axoview/bootstrap/*), so the only setting here is
+# the repository variable AWS_REGION. No keys or tokens are stored.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: push-images-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    if: ${{ github.repository == 'KhoaDang-Dinh/axoview' }}
+    runs-on: self-hosted
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      APP_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Require a release branch and AWS_REGION
+        id: release
+        shell: bash
+        run: |
+          case "$GITHUB_REF_NAME" in
+            dev|master) echo "tag=$GITHUB_REF_NAME-$APP_SHA" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::Run this from dev or master (got '$GITHUB_REF_NAME'). Only those branches are released."
+              exit 1
+              ;;
+          esac
+          if [ -z "$AWS_REGION" ]; then
+            echo "::error::Set the repository variable AWS_REGION (Settings > Secrets and variables > Actions > Variables)."
+            exit 1
+          fi
+
+      - name: Require green application gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          for _ in $(seq 1 90); do
+            CHECKS="$(gh api "repos/$GITHUB_REPOSITORY/commits/$APP_SHA/check-runs?per_page=100")"
+            CI_GATE="$(jq -r '[.check_runs[] | select(.name == "CI Gate")][0].conclusion // ""' <<<"$CHECKS")"
+            DOCKER_GATE="$(jq -r '[.check_runs[] | select(.name == "Docker Gate")][0].conclusion // ""' <<<"$CHECKS")"
+
+            echo "CI Gate=${CI_GATE:-pending} Docker Gate=${DOCKER_GATE:-pending}"
+            if [ "$CI_GATE" = "success" ] && [ "$DOCKER_GATE" = "success" ]; then
+              exit 0
+            fi
+            case "$CI_GATE:$DOCKER_GATE" in
+              *failure*|*cancelled*|*timed_out*|*action_required*)
+                echo "::error::A required gate failed for $APP_SHA; fix it before releasing."
+                exit 1
+                ;;
+            esac
+            sleep 20
+          done
+
+          echo "::error::Timed out waiting for CI Gate and Docker Gate on $APP_SHA."
+          exit 1
+
+      - uses: actions/checkout@v6
+
+      # The runner's own credentials only read the contract and assume the role;
+      # everything after this step runs as the push-only role.
+      - name: Assume the image publisher role
+        id: aws
+        shell: bash
+        run: |
+          set -euo pipefail
+          param() {
+            aws ssm get-parameter --name "/axoview/bootstrap/$1" --query Parameter.Value --output text
+          }
+          ROLE_ARN="$(param image_publisher_role_arn)"
+          BACKEND_REPOSITORY="$(param ecr_repository)"
+          FRONTEND_REPOSITORY="$(param ecr_frontend_repository)"
+
+          read -r KEY SECRET TOKEN < <(aws sts assume-role \
+            --role-arn "$ROLE_ARN" \
+            --role-session-name "axoview-push-$GITHUB_RUN_ID" \
+            --duration-seconds 3600 \
+            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+          echo "::add-mask::$KEY"
+          echo "::add-mask::$SECRET"
+          echo "::add-mask::$TOKEN"
+          {
+            echo "AWS_ACCESS_KEY_ID=$KEY"
+            echo "AWS_SECRET_ACCESS_KEY=$SECRET"
+            echo "AWS_SESSION_TOKEN=$TOKEN"
+          } >> "$GITHUB_ENV"
+
+          ACCOUNT_ID="${ROLE_ARN#arn:aws:iam::}"; ACCOUNT_ID="${ACCOUNT_ID%%:*}"
+          {
+            echo "registry=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+            echo "backend=$BACKEND_REPOSITORY"
+            echo "frontend=$FRONTEND_REPOSITORY"
+          } >> "$GITHUB_OUTPUT"
+          echo "Pushing as $ROLE_ARN to $BACKEND_REPOSITORY and $FRONTEND_REPOSITORY."
+
+      # Tags are immutable in ECR: a tag that already exists is this exact
+      # commit's image, so re-running only pushes what is missing.
+      - name: Build and push release images
+        id: push
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.aws.outputs.registry }}
+          BACKEND_REPOSITORY: ${{ steps.aws.outputs.backend }}
+          FRONTEND_REPOSITORY: ${{ steps.aws.outputs.frontend }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+
+          push() {   # push <output-name> <repository> <docker build args...>
+            local name="$1" repo="$2"; shift 2
+            local image="$REGISTRY/$repo:$TAG"
+            if aws ecr describe-images --repository-name "$repo" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
+              echo "$image already exists; not rebuilding."
+            else
+              docker build --platform linux/amd64 -t "$image" "$@" .
+              docker push "$image"
+            fi
+            echo "$name=$image" >> "$GITHUB_OUTPUT"
+          }
+
+          push backend "$BACKEND_REPOSITORY" -f Dockerfile.backend
+          push frontend "$FRONTEND_REPOSITORY" -f Dockerfile --target frontend
+
+      # Shared runner: leave no registry login or session behind.
+      - name: Clean up credentials
+        if: ${{ always() }}
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.aws.outputs.registry }}
+        run: |
+          if [ -n "$REGISTRY" ]; then docker logout "$REGISTRY" >/dev/null 2>&1 || true; fi
+
+      - name: Summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BACKEND_IMAGE: ${{ steps.push.outputs.backend }}
+          FRONTEND_IMAGE: ${{ steps.push.outputs.frontend }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          # shellcheck disable=SC2016
+          {
+            printf '## Release images (%s)\n\n' "$JOB_STATUS"
+            printf -- '- Axoview: `%s` at `%s`\n' "$GITHUB_REF_NAME" "$APP_SHA"
+            printf -- '- Backend: `%s`\n' "${BACKEND_IMAGE:-n/a}"
+            printf -- '- Frontend: `%s`\n' "${FRONTEND_IMAGE:-n/a}"
+            printf '\nDev picks these up automatically (Argo CD Image Updater, within a few minutes).'
+            printf ' Prod: run "Promote dev to prod" in infra_website once dev runs a master release.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
