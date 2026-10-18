@@ -156,18 +156,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Published by infra_website's bootstrap (Apply infrastructure from dev).
           param() {
-            aws ssm get-parameter --name "/axoview/bootstrap/$1" --query Parameter.Value --output text
+            local value
+            if ! value="$(aws ssm get-parameter --name "/axoview/bootstrap/$1" \
+                            --query Parameter.Value --output text 2>&1)"; then
+              echo "::error::Cannot read SSM /axoview/bootstrap/$1: $value" >&2
+              echo "::error::infra_website's bootstrap publishes it. If it is missing, run Apply infrastructure from infra_website dev with the image publisher change merged." >&2
+              return 1
+            fi
+            printf '%s' "$value"
           }
           ROLE_ARN="$(param image_publisher_role_arn)"
           BACKEND_REPOSITORY="$(param ecr_repository)"
           FRONTEND_REPOSITORY="$(param ecr_frontend_repository)"
 
-          read -r KEY SECRET TOKEN < <(aws sts assume-role \
-            --role-arn "$ROLE_ARN" \
-            --role-session-name "axoview-push-$GITHUB_RUN_ID" \
-            --duration-seconds 3600 \
-            --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+          if ! CREDS="$(aws sts assume-role \
+                --role-arn "$ROLE_ARN" \
+                --role-session-name "axoview-push-$GITHUB_RUN_ID" \
+                --duration-seconds 3600 \
+                --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text 2>&1)"; then
+            echo "::error::Cannot assume $ROLE_ARN with the runner's credentials ($(aws sts get-caller-identity --query Arn --output text 2>&1)): $CREDS"
+            exit 1
+          fi
+          read -r KEY SECRET TOKEN <<<"$CREDS"
+          if [ -z "$KEY" ] || [ -z "$SECRET" ] || [ -z "$TOKEN" ]; then
+            echo "::error::assume-role returned no credentials for $ROLE_ARN."
+            exit 1
+          fi
           echo "::add-mask::$KEY"
           echo "::add-mask::$SECRET"
           echo "::add-mask::$TOKEN"
