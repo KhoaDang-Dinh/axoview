@@ -36,7 +36,7 @@ This repository owns:
 - the Axoview frontend source and production static build under `packages/axoview-app/build`;
 - the Axoview API source;
 - `Dockerfile.backend`, which packages only the Node/Express API for a container platform;
-- application authentication, tenant context, storage adapters, and OpenTelemetry instrumentation as they are added;
+- application authentication, personal-workspace isolation, storage adapters, and OpenTelemetry instrumentation as they are added;
 - tests that verify the frontend and API contracts.
 
 The infrastructure repository owns:
@@ -133,46 +133,36 @@ npm run docker:legacy:build
 npm run docker:legacy:run
 ```
 
-## Current EKS safety boundary
+## Multi-user application contract
 
-The upstream filesystem adapter is not safe as horizontally scaled multi-user storage. It uses a single filesystem namespace and process-local locks.
+The API supports Cognito Authorization Code + PKCE sign-in, verifies Cognito access-token signatures and claims, and derives a private personal workspace from the verified `sub`. User IDs in request data are ignored. AWS mode stores diagram bodies in S3 and metadata in DynamoDB, with conditional version writes; stale editor saves return `409` and saves without a version return `428`.
 
-For a multi-replica deployment, keep:
+Each Cognito user currently gets a separate personal workspace. Cross-user team workspaces, invitations, and workspace roles are not part of this change. Public share links remain readable anonymously and can only be revoked by their owning workspace.
 
-```text
-ENABLE_SERVER_STORAGE=false
-```
-
-until the distributed tenant-aware adapter is implemented.
-
-This lets an infrastructure repository run multiple stateless API replicas safely while Axoview continues to support browser/session and Google Drive storage.
-
-## Planned multi-user application changes
-
-The multi-user service requires application changes in this repository, not only infrastructure variables:
-
-1. Cognito/OIDC login integration using Authorization Code + PKCE.
-2. Backend JWT verification.
-3. A trusted `UserContext` whose tenant id comes from the verified identity `sub`.
-4. A tenant-aware AWS storage adapter.
-5. S3-backed diagram bodies.
-6. DynamoDB-backed metadata, ownership, folders, sharing state, and optimistic concurrency/version checks.
-7. OpenTelemetry instrumentation for HTTP, AWS SDK calls, errors, and application spans.
-
-The application must never trust a tenant/user id supplied by a URL, query parameter, or request body.
-
-## Runtime configuration
-
-The infrastructure deployment should inject at least:
+For EKS, configure the API with:
 
 ```text
 NODE_ENV=production
-BACKEND_PORT=3001
+AUTH_MODE=cognito
+COGNITO_REGION=<AWS region>
+COGNITO_USER_POOL_ID=<pool id>
+COGNITO_CLIENT_ID=<SPA app client id>
+COGNITO_ISSUER=https://cognito-idp.<region>.amazonaws.com/<pool id>
+COGNITO_DOMAIN=https://<user-pool-domain>.auth.<region>.amazoncognito.com
 PUBLIC_BASE_URL=https://<public-domain>
-ENABLE_SERVER_STORAGE=false
+STORAGE_ADAPTER=aws
+ENABLE_SERVER_STORAGE=true
+AXOVIEW_DATA_BUCKET=<workspace data bucket>
+AXOVIEW_DYNAMODB_TABLE=<workspace metadata table>
 ```
 
-Authentication/storage variables will be added as those application features land.
+The EKS Pod Identity role needs access to the configured S3 bucket and DynamoDB table. The Cognito SPA client must enable authorization-code grant, PKCE, and the exact callback `https://<public-domain>/app/auth/callback`; set its sign-out URL to `https://<public-domain>/`. The frontend reads these public values from `/api/config`; do not bake tokens or secrets into the static build.
+
+The API defaults to the filesystem adapter for local/demo use. That adapter is namespaced by verified user identity when Cognito auth is enabled, but it is not shared across replicas. Use the AWS adapter for a multi-replica EKS deployment. Keep `ENABLE_SERVER_STORAGE=false` until the AWS bucket, table, IAM role, and runtime variables above are present.
+
+## Runtime configuration
+
+The infrastructure deployment should inject the values in the multi-user application contract above, plus `BACKEND_PORT=3001`.
 
 ## Observability contract
 

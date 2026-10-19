@@ -128,6 +128,23 @@ describe('LocalStorageProvider', () => {
     expect((capturedBody as any).title).toBe('Updated');
   });
 
+  test('saveDiagram() sends the version observed in the server diagram list', async () => {
+    const provider = await serverProvider();
+    let saveHeaders: Headers | undefined;
+    setFetch(async (input, init) => {
+      if (String(input).endsWith('/api/diagrams')) {
+        return mockResponse([{ id: 'diag-v1', name: 'Versioned', lastModified: 'now', version: 7 }]);
+      }
+      saveHeaders = new Headers((init as RequestInit).headers);
+      return mockResponse({ success: true });
+    });
+
+    await provider.listDiagrams();
+    await provider.saveDiagram('diag-v1', { title: 'Updated', items: [] });
+
+    expect(saveHeaders?.get('If-Match')).toBe('"7"');
+  });
+
   // ---- leanIfModel (ADR 0003 + requiredPacks) -------------------------------
 
   test('saveDiagram() strips pack icons but keeps imported icons (ADR 0003)', async () => {
