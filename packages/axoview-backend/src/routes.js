@@ -45,7 +45,7 @@ const RESERVED_DIAGRAM_IDS = new Set([
  * link with A's content. Same class as the engine block's finding that
  * reference integrity is checked and *identity* integrity is not (E4/CLIP-01).
  */
-const SERVER_OWNED_DIAGRAM_FIELDS = ['shareUuid', 'created'];
+const SERVER_OWNED_DIAGRAM_FIELDS = ['shareUuid', 'created', 'workspaceId'];
 
 function stripServerOwnedFields(body) {
   const out = { ...(body || {}) };
@@ -133,7 +133,19 @@ async function getJson(adapter, key) {
 }
 
 async function putJson(adapter, key, value) {
-  await adapter.put(key, new TextEncoder().encode(JSON.stringify(value, null, 2)));
+  const options = {};
+  // Internal mutations (rename, trash, share state) use the latest stored
+  // version. Full editor saves pass the version observed by the client below.
+  if (key.startsWith('diagrams/') && adapter.getDiagramVersion) {
+    options.expectedVersion = (await adapter.getDiagramVersion(key.slice('diagrams/'.length))) ?? 0;
+  }
+  await adapter.put(key, new TextEncoder().encode(JSON.stringify(value, null, 2)), options);
+}
+
+function diagramVersionHeaders(adapter, id) {
+  return adapter.getDiagramVersion
+    ? adapter.getDiagramVersion(id).then((version) => version == null ? {} : { ETag: `"${version}"` })
+    : Promise.resolve({});
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +165,14 @@ export function getConfig(_adapter, ctx) {
       googleProjectNumber: env.GOOGLE_PROJECT_NUMBER || null,
       driveScopes: ['https://www.googleapis.com/auth/drive.file'],
       authMode: env.AUTH_MODE || 'none',
+      cognito: env.AUTH_MODE === 'cognito' && env.COGNITO_DOMAIN && env.COGNITO_CLIENT_ID && env.PUBLIC_BASE_URL
+        ? {
+            domain: env.COGNITO_DOMAIN,
+            clientId: env.COGNITO_CLIENT_ID,
+            redirectUri: `${env.PUBLIC_BASE_URL || ''}/app/auth/callback`,
+            logoutUri: `${env.PUBLIC_BASE_URL || ''}/`
+          }
+        : null,
       serverStorage: env.STORAGE_ENABLED !== false,
       // A5/CHR-08 (owner ruling 2026-07-30): the operator's canonical public
       // base, so every share link the CLIENT mints resolves against it instead
@@ -179,7 +199,7 @@ export async function getDiagram(adapter, ctx) {
   const id = assertId(ctx.params.id);
   const data = await getJson(adapter, `diagrams/${id}`);
   if (!data) throw new HttpError(404, 'Diagram not found');
-  return { status: 200, body: data };
+  return { status: 200, body: data, headers: await diagramVersionHeaders(adapter, id) };
 }
 
 export async function createDiagram(adapter, ctx) {
@@ -213,7 +233,7 @@ export async function createDiagram(adapter, ctx) {
     lastModified: new Date().toISOString()
   };
   await putJson(adapter, `diagrams/${id}`, data);
-  return { status: 201, body: { success: true, id } };
+  return { status: 201, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id) };
 }
 
 export async function saveDiagram(adapter, ctx) {
@@ -243,8 +263,9 @@ export async function saveDiagram(adapter, ctx) {
       id,
       lastModified: new Date().toISOString()
     };
-    await putJson(adapter, `diagrams/${id}`, data);
-    return { status: 200, body: { success: true, id } };
+    const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
+    await adapter.put(`diagrams/${id}`, bytes, { expectedVersion: ctx.ifMatch });
+    return { status: 200, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id) };
   });
 }
 
@@ -307,8 +328,13 @@ export async function deleteDiagram(adapter, ctx) {
     try {
       existing = JSON.parse(new TextDecoder().decode(existingBuf));
     } catch {}
+    const currentVersion = adapter.getDiagramVersion
+      ? await adapter.getDiagramVersion(id)
+      : undefined;
+    await adapter.delete(`diagrams/${id}`, {
+      expectedVersion: ctx.ifMatch ?? currentVersion ?? undefined
+    });
     await deleteOwnedSnapshot(adapter, id, existing?.shareUuid);
-    await adapter.delete(`diagrams/${id}`);
     return { status: 200, body: { success: true } };
   });
 }
@@ -553,10 +579,11 @@ const SNAPSHOT_EXCLUDED_FIELDS = new Set([
   'folderId',
   'deletedAt',
   'created',
-  'lastModified'
+  'lastModified',
+  'sourceWorkspaceId'
 ]);
 
-function buildSnapshot(diagram, id, sharedAt) {
+function buildSnapshot(diagram, id, sharedAt, workspaceId) {
   const snapshot = {};
   for (const [key, value] of Object.entries(diagram)) {
     if (SNAPSHOT_EXCLUDED_FIELDS.has(key)) continue;
@@ -572,6 +599,9 @@ function buildSnapshot(diagram, id, sharedAt) {
   snapshot.fitToScreen = diagram.fitToScreen !== false;
   snapshot.sharedAt = sharedAt;
   snapshot.sourceId = id;
+  // Keep an internal pointer so anonymous share reads can check soft-delete
+  // state without looking in another workspace's diagram namespace.
+  if (workspaceId) snapshot.sourceWorkspaceId = workspaceId;
   return snapshot;
 }
 
@@ -601,7 +631,11 @@ export async function shareDiagram(adapter, ctx) {
         : generateShareUuid();
 
     const sharedAt = new Date().toISOString();
-    await putJson(adapter, `public/${uuid}`, buildSnapshot(diagram, id, sharedAt));
+    await putJson(
+      adapter,
+      `public/${uuid}`,
+      buildSnapshot(diagram, id, sharedAt, adapter.workspaceId || ctx.user?.sub)
+    );
 
     if (diagram.shareUuid !== uuid) {
       diagram.shareUuid = uuid;
@@ -645,10 +679,15 @@ export async function getPublicSnapshot(adapter, ctx) {
   // the link, which is the behaviour a trash implies. Snapshots written before
   // `sourceId` existed carry no back-reference and are served as before.
   if (data.sourceId && ID_PATTERN.test(data.sourceId)) {
-    const source = await getJson(adapter, `diagrams/${data.sourceId}`);
+    const sourceAdapter =
+      data.sourceWorkspaceId && adapter.forWorkspace
+        ? adapter.forWorkspace(data.sourceWorkspaceId)
+        : adapter;
+    const source = await getJson(sourceAdapter, `diagrams/${data.sourceId}`);
     if (source?.deletedAt) {
       throw new HttpError(410, 'This diagram has been deleted');
     }
   }
+  delete data.sourceWorkspaceId;
   return { status: 200, body: data };
 }

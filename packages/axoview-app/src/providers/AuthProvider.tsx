@@ -15,9 +15,11 @@ interface RevocableOAuth2 {
 
 function AuthBridge({
   scriptReady,
+  allowReconnect,
   children
 }: {
   scriptReady: boolean;
+  allowReconnect: boolean;
   children: React.ReactNode;
 }) {
   const setBridge = useAuthStore((s) => s._setBridge);
@@ -76,7 +78,7 @@ function AuthBridge({
   // no-popup fix (worker auth-code flow + HttpOnly refresh-token cookie) is
   // catalogued as a pre-master slice.
   useEffect(() => {
-    if (!scriptReady || reconnectAttemptedRef.current) return;
+    if (!scriptReady || !allowReconnect || reconnectAttemptedRef.current) return;
     reconnectAttemptedRef.current = true;
     void useAuthStore
       .getState()
@@ -107,7 +109,7 @@ function AuthBridge({
       gestureCleanupRef.current?.();
       gestureCleanupRef.current = null;
     };
-  }, [scriptReady]);
+  }, [allowReconnect, scriptReady]);
 
   return <>{children}</>;
 }
@@ -137,7 +139,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clientId={clientId}
       onScriptLoadSuccess={() => setScriptReady(true)}
     >
-      <AuthBridge scriptReady={scriptReady}>{children}</AuthBridge>
+      <AuthBridge
+        scriptReady={scriptReady}
+        allowReconnect={runtimeConfig?.authMode !== 'cognito'}
+      >
+        {children}
+      </AuthBridge>
     </GoogleOAuthProvider>
   );
 }

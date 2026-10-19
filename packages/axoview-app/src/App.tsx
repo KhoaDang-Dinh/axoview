@@ -18,6 +18,7 @@ import {
 import { scanIconUsage } from './services/iconUsage';
 import { AppStorageProvider, useAppStorage } from './providers/AppStorageContext';
 import { AuthProvider } from './providers/AuthProvider';
+import { CognitoSessionProvider } from './providers/CognitoSessionProvider';
 import {
   DiagramLifecycleProvider,
   useDiagramLifecycle
@@ -63,6 +64,7 @@ function App() {
     <BrowserRouter basename={basename}>
       <Routes>
         <Route path="/" element={<EditorPage />} />
+        <Route path="/auth/callback" element={<EditorPage />} />
         <Route path="/display/p/:shareUuid" element={<EditorPage />} />
         {/* ADR 0042 §2 — live Drive-file preview. The static `drive` segment
             ranks above :readonlyDiagramId, so the routes cannot collide. */}
@@ -81,9 +83,11 @@ function EditorPage() {
   return (
     <AppStorageProvider>
       <AuthProvider>
-        <DiagramLifecycleProvider>
-          <EditorShell />
-        </DiagramLifecycleProvider>
+        <CognitoSessionProvider>
+          <DiagramLifecycleProvider>
+            <EditorShell />
+          </DiagramLifecycleProvider>
+        </CognitoSessionProvider>
       </AuthProvider>
     </AppStorageProvider>
   );
