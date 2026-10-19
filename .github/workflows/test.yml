@@ -44,6 +44,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The Docker images install the backend on its own, from
+      # packages/axoview-backend/package-lock.json (Dockerfile.backend and the
+      # Dockerfile's runtime stage). The root `npm ci` above never reads that
+      # file, so a dependency added to the backend with only the root lock
+      # updated passes here and breaks every image build. --dry-run checks the
+      # lock against package.json without installing (~1s).
+      - name: Backend lockfile in sync (Docker installs it standalone)
+        working-directory: packages/axoview-backend
+        run: |
+          npm ci --omit=dev --workspaces=false --ignore-scripts --dry-run >/dev/null || {
+            echo "::error file=packages/axoview-backend/package-lock.json::Out of sync with packages/axoview-backend/package.json. Run: cd packages/axoview-backend && npm install --package-lock-only --workspaces=false"
+            exit 1
+          }
+
       - name: Lint
         run: npx eslint .
 
