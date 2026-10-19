@@ -8,6 +8,15 @@ import dotenv from 'dotenv';
 
 import * as routes from './src/routes.js';
 import { createFsAdapter } from './src/adapters/fs.js';
+import { createAwsPublicAdapter, createAwsWorkspaceAdapter } from './src/adapters/aws.js';
+import { addWorkspaceScope } from './src/adapters/workspace.js';
+import { verifyCognitoAccessToken } from './src/cognitoAuth.js';
+import {
+  cognitoRefreshCookieName,
+  exchangeCognitoCode,
+  refreshCognitoSession,
+  revokeCognitoSession
+} from './src/cognitoSession.js';
 
 dotenv.config();
 
@@ -19,6 +28,12 @@ const PORT = process.env.BACKEND_PORT || 3001;
 
 const STORAGE_ENABLED = process.env.ENABLE_SERVER_STORAGE === 'true';
 const STORAGE_PATH = process.env.STORAGE_PATH || '/data/diagrams';
+const STORAGE_ADAPTER = process.env.STORAGE_ADAPTER || 'fs';
+const COGNITO_ISSUER = process.env.COGNITO_ISSUER || '';
+const ISSUER_REGION = /^https:\/\/cognito-idp\.([a-z]{2}(?:-gov)?-[a-z]+-\d)\.amazonaws\.com\//.exec(COGNITO_ISSUER)?.[1] || '';
+const AWS_REGION = process.env.AWS_REGION || process.env.COGNITO_REGION || ISSUER_REGION;
+const DATA_BUCKET = process.env.DATA_BUCKET || process.env.AXOVIEW_DATA_BUCKET || '';
+const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE || process.env.AXOVIEW_DYNAMODB_TABLE || '';
 const ENABLE_GIT_BACKUP = process.env.ENABLE_GIT_BACKUP === 'true';
 
 // Express env exposed to route handlers (matches Worker `ctx.env`).
@@ -27,6 +42,11 @@ const routeEnv = {
   ENABLE_GIT_BACKUP,
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || null,
   AUTH_MODE: process.env.AUTH_MODE || 'none',
+  COGNITO_REGION: process.env.COGNITO_REGION || process.env.AWS_REGION || ISSUER_REGION || null,
+  COGNITO_USER_POOL_ID: process.env.COGNITO_USER_POOL_ID || null,
+  COGNITO_CLIENT_ID: process.env.COGNITO_CLIENT_ID || null,
+  COGNITO_DOMAIN: process.env.COGNITO_DOMAIN || null,
+  COGNITO_ISSUER: COGNITO_ISSUER || null,
   // A5/CHR-08: surfaced to the client via /api/config so the app's own link
   // builders resolve against the operator's canonical base (see routes.js).
   PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || null
@@ -69,6 +89,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
   .filter(Boolean);
 app.use(
   cors({
+    credentials: true,
     origin(origin, cb) {
       if (!origin) return cb(null, true); // same-origin / curl / server-to-server
       return cb(null, ALLOWED_ORIGINS.includes(origin));
@@ -133,7 +154,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 
 // ---------------------------------------------------------------------------
-// Auth (shared-token only — cf-access is Cloudflare-specific)
+// Auth (Cognito access tokens, shared-token, or no auth)
 // ---------------------------------------------------------------------------
 const AUTH_MODE = process.env.AUTH_MODE || 'none';
 const AUTH_SHARED_SECRET = process.env.AUTH_SHARED_SECRET || '';
@@ -155,7 +176,21 @@ function isPublicRoute(req) {
   // both endpoints are GET-only to match the Worker (packages/axoview-worker/src/auth.ts).
   if (req.method === 'GET' && req.path === '/api/config') return true;
   if (req.method === 'GET' && PUBLIC_SNAPSHOT_RE.test(req.path)) return true;
+  if (
+    req.method === 'POST' &&
+    ['/api/auth/callback', '/api/auth/refresh', '/api/auth/logout'].includes(req.path)
+  ) return true;
   return false;
+}
+
+function getCookie(req, name) {
+  const header = req.headers.cookie || '';
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index < 0 || part.slice(0, index).trim() !== name) continue;
+    try { return decodeURIComponent(part.slice(index + 1).trim()); } catch { return null; }
+  }
+  return null;
 }
 
 app.use((req, res, next) => {
@@ -170,6 +205,22 @@ app.use((req, res, next) => {
     }
     return next();
   }
+  if (AUTH_MODE === 'cognito') {
+    const header = req.headers['authorization'] || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    verifyCognitoAccessToken(token, {
+      region: process.env.COGNITO_REGION || process.env.AWS_REGION,
+      userPoolId: process.env.COGNITO_USER_POOL_ID,
+      clientId: process.env.COGNITO_CLIENT_ID,
+      issuer: COGNITO_ISSUER || undefined
+    })
+      .then((user) => {
+        req.user = user;
+        next();
+      })
+      .catch(() => res.status(401).json({ error: 'Unauthorized' }));
+    return;
+  }
   // cf-access only meaningful behind Cloudflare Access — reject if misconfigured here
   return res.status(500).json({ error: `AUTH_MODE "${AUTH_MODE}" not supported on this runtime` });
 });
@@ -177,9 +228,11 @@ app.use((req, res, next) => {
 // ---------------------------------------------------------------------------
 // Adapter
 // ---------------------------------------------------------------------------
-const adapter = createFsAdapter(STORAGE_PATH);
+const adapter = STORAGE_ADAPTER === 'aws'
+  ? createAwsPublicAdapter({ bucketName: DATA_BUCKET, tableName: DYNAMODB_TABLE, region: AWS_REGION })
+  : addWorkspaceScope(createFsAdapter(STORAGE_PATH));
 
-if (STORAGE_ENABLED) {
+if (STORAGE_ENABLED && STORAGE_ADAPTER === 'fs') {
   (async () => {
     try {
       await fs.access(STORAGE_PATH);
@@ -217,6 +270,11 @@ function makeCtx(req) {
     body: req.body,
     query: req.query,
     env: routeEnv,
+    user: req.user || null,
+    ifMatch: /^\"([1-9][0-9]*)\"$/.test(req.headers['if-match'] || '')
+      ? Number(req.headers['if-match'].slice(1, -1))
+      : undefined,
+    refreshToken: getCookie(req, cognitoRefreshCookieName),
     publicBaseUrl: getPublicBaseUrl(req)
   };
 }
@@ -227,7 +285,20 @@ function adapt(handler, { requireStorage = true } = {}) {
       return res.status(503).json({ error: 'Server storage is disabled' });
     }
     try {
-      const result = await handler(adapter, makeCtx(req));
+      const requestAdapter = req.user?.sub
+        ? STORAGE_ADAPTER === 'aws'
+          ? createAwsWorkspaceAdapter({
+              workspaceId: req.user.sub,
+              bucketName: DATA_BUCKET,
+              tableName: DYNAMODB_TABLE,
+              region: AWS_REGION
+            })
+          : adapter.forWorkspace(req.user.sub)
+        : adapter;
+      const result = await handler(requestAdapter, makeCtx(req));
+      for (const [name, value] of Object.entries(result.headers || {})) {
+        res.setHeader(name, value);
+      }
       res.status(result.status).json(result.body);
     } catch (err) {
       if (err && typeof err.status === 'number') {
@@ -252,6 +323,14 @@ let healthCache = { ts: 0, ok: false, reason: 'not-yet-probed' };
 
 async function probeStorage() {
   if (!STORAGE_ENABLED) return { ok: true };
+  if (STORAGE_ADAPTER === 'aws') {
+    try {
+      await adapter.healthcheck();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: e.name || 'aws-storage-unreachable' };
+    }
+  }
   const probePath = path.join(STORAGE_PATH, `.healthz.${process.pid}.tmp`);
   try {
     await fs.mkdir(STORAGE_PATH, { recursive: true });
@@ -272,7 +351,7 @@ app.get('/healthz', async (_req, res) => {
   if (healthCache.ok) {
     return res.status(200).json({
       ok: true,
-      adapter: 'fs',
+      adapter: STORAGE_ADAPTER,
       storage_writable: STORAGE_ENABLED
     });
   }
@@ -285,6 +364,9 @@ app.get('/healthz', async (_req, res) => {
 
 // Config — never gated by STORAGE_ENABLED; sole boot probe per ADR 0009 D2
 app.get('/api/config', adapt(routes.getConfig, { requireStorage: false }));
+app.post('/api/auth/callback', adapt(exchangeCognitoCode, { requireStorage: false }));
+app.post('/api/auth/refresh', adapt(refreshCognitoSession, { requireStorage: false }));
+app.post('/api/auth/logout', adapt(revokeCognitoSession, { requireStorage: false }));
 
 // Diagrams
 app.get('/api/diagrams', adapt(routes.listDiagrams));
@@ -353,7 +435,8 @@ app.listen(PORT, () => {
   console.log(`Axoview Backend Server running on port ${PORT}`);
   console.log(`Server storage: ${STORAGE_ENABLED ? 'ENABLED' : 'DISABLED'}`);
   if (STORAGE_ENABLED) {
-    console.log(`Storage path: ${STORAGE_PATH}`);
+    console.log(`Storage adapter: ${STORAGE_ADAPTER}`);
+    if (STORAGE_ADAPTER === 'fs') console.log(`Storage path: ${STORAGE_PATH}`);
     console.log(`Git backup: ${ENABLE_GIT_BACKUP ? 'ENABLED' : 'DISABLED'}`);
   }
   console.log(`CORS allowed origins: ${ALLOWED_ORIGINS.join(', ') || '(none — same-origin only)'}`);
@@ -368,5 +451,11 @@ app.listen(PORT, () => {
         'publicly share every diagram. Do NOT expose it beyond loopback/a trusted ' +
         'LAN. Set AUTH_MODE=shared-token + AUTH_SHARED_SECRET (see docs/deployment.md).'
     );
+  }
+  if (
+    AUTH_MODE === 'cognito' &&
+    (!routeEnv.COGNITO_ISSUER || !routeEnv.COGNITO_USER_POOL_ID || !routeEnv.COGNITO_CLIENT_ID)
+  ) {
+    console.error('[SECURITY] AUTH_MODE=cognito but Cognito configuration is incomplete.');
   }
 });

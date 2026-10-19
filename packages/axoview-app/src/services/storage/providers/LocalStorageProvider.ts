@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { leanIfModel } from '../leanModel';
 import { apiBaseUrl } from '../../../utils/apiBaseUrl';
+import { apiFetch } from '../../apiFetch';
 
 /**
  * A share request that the backend refused, carrying enough for the caller to
@@ -95,6 +96,7 @@ export class LocalStorageProvider implements StorageProvider {
   usingServer = false;
 
   private readonly baseUrl: string;
+  private readonly diagramVersions = new Map<string, number>();
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl ?? apiBaseUrl();
@@ -111,11 +113,14 @@ export class LocalStorageProvider implements StorageProvider {
 
   private async serverListDiagrams(folderId?: string | null): Promise<DiagramMeta[]> {
     const params = folderId != null ? `?folderId=${encodeURIComponent(folderId)}` : '';
-    const response = await fetch(`${this.baseUrl}/api/diagrams${params}`, {
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams${params}`, {
       signal: timeoutSignal(10000)
     });
     if (!response.ok) throw new Error(`Failed to list diagrams: ${response.status}`);
     const list = (await response.json()) as Array<Record<string, unknown>>;
+    for (const item of list) {
+      if (typeof item.version === 'number') this.diagramVersions.set(String(item.id), item.version);
+    }
     return list.map((d) => ({
       id: String(d.id),
       name: String(d.name),
@@ -128,21 +133,29 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   private async serverLoadDiagram(id: string): Promise<unknown> {
-    const response = await fetch(`${this.baseUrl}/api/diagrams/${id}`, {
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
       signal: timeoutSignal(10000)
     });
     if (!response.ok) throw new Error(`Failed to load diagram: ${response.status}`);
+    const version = response.headers?.get('ETag');
+    const match = version?.match(/^"([1-9][0-9]*)"$/);
+    if (match) this.diagramVersions.set(id, Number(match[1]));
     return response.json();
   }
 
   private async serverSaveDiagram(id: string, data: unknown): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/diagrams/${id}`, {
+    const version = this.diagramVersions.get(id);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (version !== undefined) headers['If-Match'] = `"${version}"`;
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(leanIfModel(data)),
       signal: timeoutSignal(15000)
     });
     if (!response.ok) throw new Error(`Failed to save diagram: ${response.status}`);
+    const nextVersion = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
+    if (nextVersion) this.diagramVersions.set(id, Number(nextVersion[1]));
   }
 
   private async serverCreateDiagram(
@@ -156,7 +169,7 @@ export class LocalStorageProvider implements StorageProvider {
     // then wrote the lean shape, which is how the drift stayed invisible.
     const lean = leanIfModel(data);
     const body = folderId != null ? { ...(lean as object), folderId } : lean;
-    const response = await fetch(`${this.baseUrl}/api/diagrams`, {
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -164,12 +177,14 @@ export class LocalStorageProvider implements StorageProvider {
     });
     if (!response.ok) throw new Error(`Failed to create diagram: ${response.status}`);
     const result = await response.json();
+    const version = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
+    if (version) this.diagramVersions.set(result.id, Number(version[1]));
     return result.id;
   }
 
   private async serverDeleteDiagram(id: string, soft = false): Promise<void> {
     if (soft) {
-      const response = await fetch(`${this.baseUrl}/api/diagrams/${id}`, {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deletedAt: new Date().toISOString() }),
@@ -177,7 +192,7 @@ export class LocalStorageProvider implements StorageProvider {
       });
       if (!response.ok) throw new Error(`Failed to soft-delete diagram: ${response.status}`);
     } else {
-      const response = await fetch(`${this.baseUrl}/api/diagrams/${id}`, {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
         method: 'DELETE',
         signal: timeoutSignal(10000)
       });
@@ -370,7 +385,7 @@ export class LocalStorageProvider implements StorageProvider {
 
   async restoreDiagram(id: string): Promise<void> {
     if (this.usingServer) {
-      const response = await fetch(`${this.baseUrl}/api/diagrams/${id}`, {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deletedAt: null }),
@@ -389,7 +404,7 @@ export class LocalStorageProvider implements StorageProvider {
 
   async renameDiagram(id: string, name: string): Promise<void> {
     if (this.usingServer) {
-      const response = await fetch(`${this.baseUrl}/api/diagrams/${id}`, {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, title: name }),
@@ -431,7 +446,7 @@ export class LocalStorageProvider implements StorageProvider {
 
   private async serverListFolders(parentId?: string | null): Promise<FolderMeta[]> {
     const params = parentId != null ? `?parentId=${encodeURIComponent(parentId)}` : '';
-    const response = await fetch(`${this.baseUrl}/api/folders${params}`, {
+    const response = await apiFetch(`${this.baseUrl}/api/folders${params}`, {
       signal: timeoutSignal(10000)
     });
     if (!response.ok) throw new Error(`Failed to list folders: ${response.status}`);
@@ -442,7 +457,7 @@ export class LocalStorageProvider implements StorageProvider {
     name: string,
     parentId?: string | null
   ): Promise<string> {
-    const response = await fetch(`${this.baseUrl}/api/folders`, {
+    const response = await apiFetch(`${this.baseUrl}/api/folders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, parentId: parentId ?? null }),
@@ -454,7 +469,7 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   private async serverDeleteFolder(id: string, recursive: boolean): Promise<void> {
-    const response = await fetch(
+    const response = await apiFetch(
       `${this.baseUrl}/api/folders/${id}?recursive=${recursive}`,
       { method: 'DELETE', signal: timeoutSignal(10000) }
     );
@@ -462,7 +477,7 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   private async serverRenameFolder(id: string, name: string): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/api/folders/${id}`, {
+    const response = await apiFetch(`${this.baseUrl}/api/folders/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -480,7 +495,7 @@ export class LocalStorageProvider implements StorageProvider {
       type === 'diagram'
         ? `${this.baseUrl}/api/diagrams/${id}/move`
         : `${this.baseUrl}/api/folders/${id}/move`;
-    const response = await fetch(endpoint, {
+    const response = await apiFetch(endpoint, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetFolderId }),
@@ -661,7 +676,7 @@ export class LocalStorageProvider implements StorageProvider {
   async getTreeManifest(): Promise<TreeManifest> {
     if (this.usingServer) {
       try {
-        const response = await fetch(`${this.baseUrl}/api/tree-manifest`, {
+        const response = await apiFetch(`${this.baseUrl}/api/tree-manifest`, {
           signal: timeoutSignal(10000)
         });
         if (!response.ok) throw new Error('Failed to get tree manifest');
@@ -688,7 +703,7 @@ export class LocalStorageProvider implements StorageProvider {
     if (!this.usingServer) {
       throw new Error('Sharing requires server storage');
     }
-    const response = await fetch(`${this.baseUrl}/api/diagrams/${id}/share`, {
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/share`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: timeoutSignal(10000)
@@ -699,7 +714,7 @@ export class LocalStorageProvider implements StorageProvider {
 
   async unshareDiagram(id: string): Promise<void> {
     if (!this.usingServer) return;
-    const response = await fetch(`${this.baseUrl}/api/diagrams/${id}/share`, {
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/share`, {
       method: 'DELETE',
       signal: timeoutSignal(10000)
     });
@@ -709,7 +724,7 @@ export class LocalStorageProvider implements StorageProvider {
   async saveTreeManifest(manifest: TreeManifest): Promise<void> {
     if (this.usingServer) {
       try {
-        const response = await fetch(`${this.baseUrl}/api/tree-manifest`, {
+        const response = await apiFetch(`${this.baseUrl}/api/tree-manifest`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(manifest),

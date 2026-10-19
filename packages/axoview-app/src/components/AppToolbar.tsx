@@ -34,6 +34,7 @@ import { useDiagramLifecycle } from '../providers/DiagramLifecycleProvider';
 import { StatusCluster } from './StatusCluster';
 import { ExportPopover } from './ExportPopover';
 import { AuthControl } from './AuthControl';
+import { CognitoAccountControl } from './CognitoAccountControl';
 import { shareUrlFromUuid } from '../utils/shareUrl';
 import {
   drivePreviewUrl,
@@ -576,6 +577,7 @@ export function AppToolbar() {
                 (places model 2026-07-06; the storage picker was removed).
                 Self-hides when no Google client id is configured. */}
             <AuthControl />
+            <CognitoAccountControl />
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 

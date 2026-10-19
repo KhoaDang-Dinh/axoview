@@ -11,6 +11,7 @@ describe('getConfig', () => {
       googleProjectNumber: null,
       driveScopes: ['https://www.googleapis.com/auth/drive.file'],
       authMode: 'none',
+      cognito: null,
       serverStorage: true,
       publicBaseUrl: null
     });

@@ -1,5 +1,6 @@
 import { apiBaseUrl } from '../utils/apiBaseUrl';
 import { setConfiguredPublicBase } from '../appBase';
+import type { CognitoAuthConfig } from '../stores/cognitoSessionStore';
 
 export interface RuntimeConfig {
   googleClientId: string | null;
@@ -17,7 +18,8 @@ export interface RuntimeConfig {
   drivePublicPreview: boolean;
   googleProjectNumber: string | null;
   driveScopes: string[];
-  authMode: 'none' | 'shared-token' | 'cf-access';
+  authMode: 'none' | 'shared-token' | 'cf-access' | 'cognito';
+  cognito: CognitoAuthConfig | null;
   serverStorage: boolean;
   /**
    * A5/CHR-08 (owner ruling 2026-07-30). The canonical, externally reachable
@@ -57,6 +59,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   googleProjectNumber: BUILD_TIME_PROJECT_NUMBER,
   driveScopes: ['https://www.googleapis.com/auth/drive.file'],
   authMode: 'none',
+  cognito: null,
   serverStorage: false,
   publicBaseUrl: null
 };
