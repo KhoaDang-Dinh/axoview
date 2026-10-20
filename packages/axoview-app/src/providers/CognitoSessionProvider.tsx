@@ -66,8 +66,21 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
               : 'Your diagrams are saved to your account and stay private to you.'}
           </Typography>
           {error && <Typography color="error" role="alert" sx={{ mb: 2 }}>{error}</Typography>}
+          {(config?.providers || []).map((provider) => (
+            <Button
+              key={provider}
+              variant="outlined"
+              fullWidth
+              sx={{ mb: 1.5 }}
+              onClick={() => void beginCognitoSignIn(config, provider)}
+              data-axoview-id={`cognito-sign-in-${provider.toLowerCase()}`}
+            >
+              Continue with {provider}
+            </Button>
+          ))}
           <Button
             variant="contained"
+            fullWidth={(config?.providers || []).length > 0}
             onClick={() => void beginCognitoSignIn(config)}
             data-axoview-id="cognito-sign-in"
           >

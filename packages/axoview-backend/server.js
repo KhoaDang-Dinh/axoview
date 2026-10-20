@@ -46,6 +46,7 @@ const routeEnv = {
   COGNITO_USER_POOL_ID: process.env.COGNITO_USER_POOL_ID || null,
   COGNITO_CLIENT_ID: process.env.COGNITO_CLIENT_ID || null,
   COGNITO_DOMAIN: process.env.COGNITO_DOMAIN || null,
+  COGNITO_IDENTITY_PROVIDERS: process.env.COGNITO_IDENTITY_PROVIDERS || null,
   COGNITO_ISSUER: COGNITO_ISSUER || null,
   // A5/CHR-08: surfaced to the client via /api/config so the app's own link
   // builders resolve against the operator's canonical base (see routes.js).

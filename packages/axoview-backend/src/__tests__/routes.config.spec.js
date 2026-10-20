@@ -1,4 +1,4 @@
-import { getConfig } from '../routes.js';
+import { externalIdentityProviders, getConfig } from '../routes.js';
 import { makeCtx } from './helpers/memoryAdapter.js';
 
 describe('getConfig', () => {
@@ -55,6 +55,30 @@ describe('getConfig', () => {
     expect(getConfig(null, makeCtx({ env: { STORAGE_ENABLED: false } })).body.serverStorage).toBe(false);
     expect(getConfig(null, makeCtx({ env: { STORAGE_ENABLED: true } })).body.serverStorage).toBe(true);
     expect(getConfig(null, makeCtx({ env: {} })).body.serverStorage).toBe(true);
+  });
+
+  test('cognito config lists external sign-in providers, never COGNITO itself', () => {
+    const cognitoEnv = {
+      AUTH_MODE: 'cognito',
+      COGNITO_DOMAIN: 'https://axoview-dev-1.auth.ap-southeast-1.amazoncognito.com',
+      COGNITO_CLIENT_ID: 'client',
+      PUBLIC_BASE_URL: 'https://dev.example.com'
+    };
+    const withGoogle = getConfig(null, makeCtx({ env: { ...cognitoEnv, COGNITO_IDENTITY_PROVIDERS: 'COGNITO,Google' } }));
+    expect(withGoogle.body.cognito).toEqual({
+      domain: 'https://axoview-dev-1.auth.ap-southeast-1.amazoncognito.com',
+      clientId: 'client',
+      redirectUri: 'https://dev.example.com/app/auth/callback',
+      logoutUri: 'https://dev.example.com/',
+      providers: ['Google']
+    });
+    expect(getConfig(null, makeCtx({ env: cognitoEnv })).body.cognito.providers).toEqual([]);
+  });
+
+  test('externalIdentityProviders keeps only plain provider names', () => {
+    expect(externalIdentityProviders('COGNITO, Google ,Google,Facebook')).toEqual(['Google', 'Facebook']);
+    expect(externalIdentityProviders('Google&evil=1,<script>,,cognito')).toEqual([]);
+    expect(externalIdentityProviders(undefined)).toEqual([]);
   });
 
   test('survives null ctx', () => {

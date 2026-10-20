@@ -39,21 +39,24 @@
         <span data-legal-back-label>Back</span>
       </a>
       <h1>Privacy Policy</h1>
-      <p class="meta">Last updated: 7 July 2026 · Effective: 7 July 2026</p>
+      <p class="meta">Last updated: 20 October 2026 · Effective: 20 October 2026</p>
 
       <p>
         Axoview is an open-source isometric diagramming tool. This policy explains what
-        information the application accesses when you connect a Google account, how that
-        information is used, and the choices you have. It applies to the Axoview web
-        application and, in particular, to its optional Google Drive integration.
+        information the application accesses when you create an Axoview account or connect a
+        Google account, how that information is used, and the choices you have. It applies to
+        the Axoview web application, its optional accounts and its optional Google Drive
+        integration.
       </p>
 
       <div class="tldr">
         <h2>The short version</h2>
         <ul>
           <li>
-            Axoview has <strong>no server that stores your diagrams</strong>. In Google Drive
-            mode, your diagrams live in <strong>your own Google Drive</strong>.
+            With an <strong>Axoview account</strong> (email or Google sign-in), your diagrams are
+            stored on Axoview's servers in <strong>Amazon Web Services</strong>, private to your
+            account. In Google Drive mode, your diagrams live in
+            <strong>your own Google Drive</strong>.
           </li>
           <li>
             Axoview requests the <strong>narrowest Drive permission that exists</strong>
@@ -65,8 +68,9 @@
             when you sign out or close the tab. It is never written to disk.
           </li>
           <li>
-            <strong>No analytics, no advertising, no tracking, no selling or sharing</strong>
-            of your data with third parties.
+            Our servers keep standard <strong>access logs</strong> (including IP addresses) for up
+            to 90 days, for security and to count visits. <strong>No advertising, no
+            third-party trackers, no selling or sharing</strong> of your data.
           </li>
         </ul>
       </div>
@@ -102,6 +106,26 @@
         The contents of Drive diagram files are the diagram data you create in the app.
       </p>
 
+      <h3>Axoview account</h3>
+      <p>
+        If you create an Axoview account, sign-in is handled by <strong>Amazon Cognito</strong>
+        (part of Amazon Web Services). We store your email address and an account ID. With email
+        sign-in, Amazon Cognito checks your password; Axoview never sees or stores it. With
+        <strong>Continue with Google</strong>, Google confirms your identity and shares your
+        name and email address; if an account with the same verified email address already
+        exists, both sign-in methods open that same account.
+      </p>
+
+      <h3>Server access logs</h3>
+      <p>
+        Like most websites, our servers (Amazon CloudFront) log each request: the time, the page
+        or file requested, your IP address and the country it belongs to, your browser's user
+        agent, and the page that linked to us. Cookies and URL query strings are
+        <strong>not</strong> logged. We use these logs for security, troubleshooting and
+        aggregate statistics such as daily visits and which sites send visitors, and delete them
+        after <strong>90 days</strong>.
+      </p>
+
       <h2>3. How Axoview uses this information</h2>
       <ul>
         <li>
@@ -135,8 +159,9 @@
           its optional backend, diagrams are stored on that server, which you control.
         </li>
         <li>
-          <strong>The Axoview project operates no server that receives or stores your diagram
-          content.</strong>
+          <strong>Account mode:</strong> when you are signed in to an Axoview account on the
+          hosted service, diagrams are stored in Amazon Web Services (Amazon S3 and Amazon
+          DynamoDB), private to your account, and are not shared unless you create a share link.
         </li>
       </ul>
 
@@ -146,6 +171,12 @@
         memory only</strong> for the duration of your session. It is
         <strong>never persisted</strong> to local storage, cookies, or any server. When you
         sign out or close the tab, the token is discarded and you are disconnected.
+      </p>
+      <p>
+        For an <strong>Axoview account</strong>, the short-lived access token is likewise held in
+        memory only. To keep you signed in, a refresh token is stored in a secure,
+        <code>HttpOnly</code> cookie (<code>axoview_refresh</code>, which page scripts cannot read)
+        for up to 30 days. Signing out revokes it and deletes the cookie.
       </p>
 
       <h2>6. Staying signed in</h2>
@@ -163,7 +194,7 @@
       <h2>7. What Axoview does not do</h2>
       <ul>
         <li>No advertising and no ad networks.</li>
-        <li>No analytics or behavioral tracking.</li>
+        <li>No third-party analytics, tracking pixels or advertising trackers.</li>
         <li>No selling, renting, or sharing of your personal data or Google user data.</li>
         <li>No transfer of your Google user data to third parties, except as needed to provide
           the app's features to you (e.g. Google's own APIs), for security, or to comply with
@@ -201,14 +232,19 @@
         <li>
           <strong>Disconnect</strong> by signing out, which discards the in-memory token.
         </li>
+        <li>
+          <strong>Delete your Axoview account</strong> and the diagrams stored with it by emailing
+          the maintainer at the address under Contact below.
+        </li>
       </ul>
 
       <h2>10. Data security</h2>
       <p>
         Axoview communicates with Google over encrypted HTTPS connections and requests the
-        minimum access it needs to function. Because your diagram data lives in your own Google
-        Drive (or your own browser or server), its security is also governed by those platforms'
-        protections and your own account security. No method of transmission or storage is
+        minimum access it needs to function. Account diagrams are stored encrypted at rest in
+        Amazon Web Services and reachable only through your signed-in account (or a share link you
+        create). Diagram data in your own Google Drive, browser or server is also governed by
+        those platforms' protections and your own account security. No method of transmission or storage is
         perfectly secure, and we cannot guarantee absolute security.
       </p>
 

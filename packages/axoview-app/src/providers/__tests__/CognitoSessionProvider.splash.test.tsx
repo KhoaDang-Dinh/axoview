@@ -7,9 +7,12 @@ import { CognitoSessionProvider } from '../CognitoSessionProvider';
 // cleared only by the editor shell, so it stayed on top of the sign-in screen
 // and the page looked like an endless loading spinner.
 
+// Stable like the real hooks: the provider's effect depends on both.
+const mockLocation = { pathname: '/', key: 'default' };
+const mockNavigate = jest.fn();
 jest.mock('react-router-dom', () => ({
-  useLocation: () => ({ pathname: '/', key: 'default' }),
-  useNavigate: () => jest.fn()
+  useLocation: () => mockLocation,
+  useNavigate: () => mockNavigate
 }));
 
 const cognito = {
