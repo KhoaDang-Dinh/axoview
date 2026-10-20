@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Box, Button, CircularProgress, Typography } from '@mui/material';
 import { useAppStorage } from './AppStorageContext';
+import { dismissBootScreens } from '../utils/bootScreen';
 import {
   beginCognitoSignIn,
   bootstrapCognitoSession,
@@ -36,12 +37,23 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
     return () => { cancelled = true; };
   }, [config, isInitialized, location.key, navigate]);
 
+  const isPublicShare = location.pathname.startsWith('/display/p/');
+  const showSignIn =
+    isInitialized && ready && runtimeConfig?.authMode === 'cognito' && !user && !isPublicShare;
+
+  // The boot splash (#ax-splash in app-shell.html, fixed and above everything)
+  // is normally cleared by the editor shell. The sign-in screen replaces the
+  // editor, so without this the splash stays on top of it forever and a
+  // signed-out visitor only ever sees the loading spinner.
+  useEffect(() => {
+    if (showSignIn) dismissBootScreens();
+  }, [showSignIn]);
+
   if (!isInitialized || !ready) {
     return <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><CircularProgress size={28} /></Box>;
   }
 
-  const isPublicShare = location.pathname.startsWith('/display/p/');
-  if (runtimeConfig?.authMode === 'cognito' && !user && !isPublicShare) {
+  if (showSignIn) {
     return (
       <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', p: 3 }}>
         <Box sx={{ width: '100%', maxWidth: 380, textAlign: 'center' }}>
@@ -54,8 +66,21 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
               : 'Your diagrams are saved to your account and stay private to you.'}
           </Typography>
           {error && <Typography color="error" role="alert" sx={{ mb: 2 }}>{error}</Typography>}
+          {(config?.providers || []).map((provider) => (
+            <Button
+              key={provider}
+              variant="outlined"
+              fullWidth
+              sx={{ mb: 1.5 }}
+              onClick={() => void beginCognitoSignIn(config, provider)}
+              data-axoview-id={`cognito-sign-in-${provider.toLowerCase()}`}
+            >
+              Continue with {provider}
+            </Button>
+          ))}
           <Button
             variant="contained"
+            fullWidth={(config?.providers || []).length > 0}
             onClick={() => void beginCognitoSignIn(config)}
             data-axoview-id="cognito-sign-in"
           >

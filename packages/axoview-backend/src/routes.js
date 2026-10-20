@@ -152,6 +152,16 @@ function diagramVersionHeaders(adapter, id) {
 // Config (ADR 0009 D2: single boot probe — /api/storage/status removed)
 // ---------------------------------------------------------------------------
 
+// External sign-in providers on the Cognito app client (COGNITO_IDENTITY_PROVIDERS,
+// e.g. "COGNITO,Google"), so the app can show one "Continue with ..." button per
+// provider. COGNITO (email + password) is always available and not listed. Only
+// plain provider names pass: they end up in the authorize URL.
+export function externalIdentityProviders(value) {
+  if (typeof value !== 'string') return [];
+  const names = value.split(',').map((name) => name.trim());
+  return [...new Set(names.filter((name) => /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(name) && name.toUpperCase() !== 'COGNITO'))];
+}
+
 export function getConfig(_adapter, ctx) {
   const env = ctx?.env || {};
   return {
@@ -170,7 +180,8 @@ export function getConfig(_adapter, ctx) {
             domain: env.COGNITO_DOMAIN,
             clientId: env.COGNITO_CLIENT_ID,
             redirectUri: `${env.PUBLIC_BASE_URL || ''}/app/auth/callback`,
-            logoutUri: `${env.PUBLIC_BASE_URL || ''}/`
+            logoutUri: `${env.PUBLIC_BASE_URL || ''}/`,
+            providers: externalIdentityProviders(env.COGNITO_IDENTITY_PROVIDERS)
           }
         : null,
       serverStorage: env.STORAGE_ENABLED !== false,
