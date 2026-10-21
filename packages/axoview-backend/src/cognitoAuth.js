@@ -46,8 +46,11 @@ async function loadJwks(issuer, { force = false, fetchImpl = fetch } = {}) {
 
 /**
  * Verify a Cognito access token and return only identity fields derived from
- * its signed claims. The caller supplies the pool and app client from trusted
- * deployment configuration; neither issuer nor key URL comes from the token.
+ * its signed claims. The caller supplies the pool and app client(s) from
+ * trusted deployment configuration; neither issuer nor key URL comes from the
+ * token. `clientId` is one app client id or a list of them (the web client and
+ * the mobile client share one user pool, so a person's workspace is the same
+ * on both).
  */
 export async function verifyCognitoAccessToken(token, {
   region,
@@ -57,7 +60,12 @@ export async function verifyCognitoAccessToken(token, {
   now = () => Math.floor(Date.now() / 1000),
   fetchImpl = fetch
 }) {
-  if ((!region && !configuredIssuerUrl) || !userPoolId || !clientId) throw new Error('Cognito auth is misconfigured');
+  const clientIds = (Array.isArray(clientId) ? clientId : [clientId]).filter(
+    (id) => typeof id === 'string' && id.length > 0
+  );
+  if ((!region && !configuredIssuerUrl) || !userPoolId || clientIds.length === 0) {
+    throw new Error('Cognito auth is misconfigured');
+  }
   if (typeof token !== 'string' || token.length > 16_384) throw new Error('Invalid JWT');
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('Malformed JWT');
@@ -75,7 +83,7 @@ export async function verifyCognitoAccessToken(token, {
   if (claims.iss !== issuer || claims.token_use !== 'access') {
     throw new Error('JWT issuer or token type is invalid');
   }
-  if (claims.client_id !== clientId) throw new Error('JWT client is invalid');
+  if (!clientIds.includes(claims.client_id)) throw new Error('JWT client is invalid');
   const currentTime = now();
   if (!Number.isFinite(claims.exp) || claims.exp <= currentTime) throw new Error('JWT is expired');
   if (claims.nbf !== undefined && (!Number.isFinite(claims.nbf) || claims.nbf > currentTime)) {

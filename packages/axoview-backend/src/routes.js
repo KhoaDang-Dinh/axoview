@@ -162,6 +162,21 @@ export function externalIdentityProviders(value) {
   return [...new Set(names.filter((name) => /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(name) && name.toUpperCase() !== 'COGNITO'))];
 }
 
+/**
+ * The mobile app's sign-in settings: its own public Cognito client and a
+ * custom-scheme redirect (docs/mobile-api.md). Null unless both are set and
+ * the redirect is `<scheme>://auth/callback`; logout returns to
+ * `<scheme>://auth/logout`, which the Cognito client also allows.
+ */
+function mobileSignIn(env) {
+  const clientId = env.COGNITO_MOBILE_CLIENT_ID;
+  const redirectUri = env.COGNITO_MOBILE_REDIRECT_URI;
+  if (!clientId || typeof redirectUri !== 'string') return null;
+  const match = /^([a-z][a-z0-9+.-]{1,31}):\/\/auth\/callback$/.exec(redirectUri);
+  if (!match || ['http', 'https', 'javascript', 'data', 'file'].includes(match[1])) return null;
+  return { clientId, redirectUri, logoutUri: `${match[1]}://auth/logout` };
+}
+
 export function getConfig(_adapter, ctx) {
   const env = ctx?.env || {};
   return {
@@ -181,7 +196,8 @@ export function getConfig(_adapter, ctx) {
             clientId: env.COGNITO_CLIENT_ID,
             redirectUri: `${env.PUBLIC_BASE_URL || ''}/app/auth/callback`,
             logoutUri: `${env.PUBLIC_BASE_URL || ''}/`,
-            providers: externalIdentityProviders(env.COGNITO_IDENTITY_PROVIDERS)
+            providers: externalIdentityProviders(env.COGNITO_IDENTITY_PROVIDERS),
+            mobile: mobileSignIn(env)
           }
         : null,
       serverStorage: env.STORAGE_ENABLED !== false,

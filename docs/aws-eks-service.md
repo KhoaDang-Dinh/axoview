@@ -164,6 +164,12 @@ The API defaults to the filesystem adapter for local/demo use. That adapter is n
 
 The infrastructure deployment should inject the values in the multi-user application contract above, plus `BACKEND_PORT=3001`.
 
+For the mobile app (docs/mobile-api.md), also `COGNITO_MOBILE_CLIENT_ID` (the
+mobile Cognito app client, whose access tokens the API accepts as well) and
+`COGNITO_MOBILE_REDIRECT_URI` (`<scheme>://auth/callback`, published in
+`/api/config` as `cognito.mobile`). Both optional; without them there is no
+mobile sign-in.
+
 ## Observability contract
 
 Infrastructure can collect container stdout/stderr, Kubernetes CPU/memory/restarts, node metrics, and load-balancer metrics without modifying Axoview.

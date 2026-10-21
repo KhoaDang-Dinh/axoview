@@ -66,6 +66,22 @@ describe('verifyCognitoAccessToken', () => {
     ).rejects.toThrow();
   });
 
+  test('accepts any of several configured app clients (web and mobile), and only those', async () => {
+    const both = { ...options(fetchJwks()), clientId: ['web-client', CLIENT] };
+    await expect(verifyCognitoAccessToken(token(), both)).resolves.toEqual({ sub: 'user-sub-123' });
+    await expect(
+      verifyCognitoAccessToken(token({ client_id: 'third-client' }), both)
+    ).rejects.toThrow('JWT client is invalid');
+  });
+
+  test('refuses to run with no app client configured', async () => {
+    for (const clientId of [[], [''], null, undefined]) {
+      await expect(
+        verifyCognitoAccessToken(token(), { ...options(fetchJwks()), clientId })
+      ).rejects.toThrow('Cognito auth is misconfigured');
+    }
+  });
+
   test('rejects a signature made by a different key', async () => {
     const other = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
     await expect(
