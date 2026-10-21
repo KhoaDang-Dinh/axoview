@@ -53,6 +53,10 @@ const routeEnv = {
   COGNITO_REGION: process.env.COGNITO_REGION || process.env.AWS_REGION || ISSUER_REGION || null,
   COGNITO_USER_POOL_ID: process.env.COGNITO_USER_POOL_ID || null,
   COGNITO_CLIENT_ID: process.env.COGNITO_CLIENT_ID || null,
+  // Mobile app (docs/mobile-api.md): its own public Cognito app client and
+  // custom-scheme redirect, e.g. axoview://auth/callback.
+  COGNITO_MOBILE_CLIENT_ID: process.env.COGNITO_MOBILE_CLIENT_ID || null,
+  COGNITO_MOBILE_REDIRECT_URI: process.env.COGNITO_MOBILE_REDIRECT_URI || null,
   COGNITO_DOMAIN: process.env.COGNITO_DOMAIN || null,
   COGNITO_IDENTITY_PROVIDERS: process.env.COGNITO_IDENTITY_PROVIDERS || null,
   COGNITO_ISSUER: COGNITO_ISSUER || null,
@@ -220,7 +224,8 @@ app.use((req, res, next) => {
     verifyCognitoAccessToken(token, {
       region: process.env.COGNITO_REGION || process.env.AWS_REGION,
       userPoolId: process.env.COGNITO_USER_POOL_ID,
-      clientId: process.env.COGNITO_CLIENT_ID,
+      // Web and mobile app clients of the same pool.
+      clientId: [process.env.COGNITO_CLIENT_ID, process.env.COGNITO_MOBILE_CLIENT_ID].filter(Boolean),
       issuer: COGNITO_ISSUER || undefined
     })
       .then((user) => {
