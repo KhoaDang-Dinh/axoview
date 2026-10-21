@@ -97,6 +97,9 @@ export class LocalStorageProvider implements StorageProvider {
 
   private readonly baseUrl: string;
   private readonly diagramVersions = new Map<string, number>();
+  // The version of the content this tab actually holds: set on load and save,
+  // never by a listing (which only tells which version exists on the server).
+  private readonly contentVersions = new Map<string, number>();
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl ?? apiBaseUrl();
@@ -139,23 +142,63 @@ export class LocalStorageProvider implements StorageProvider {
     if (!response.ok) throw new Error(`Failed to load diagram: ${response.status}`);
     const version = response.headers?.get('ETag');
     const match = version?.match(/^"([1-9][0-9]*)"$/);
-    if (match) this.diagramVersions.set(id, Number(match[1]));
+    if (match) {
+      this.diagramVersions.set(id, Number(match[1]));
+      this.contentVersions.set(id, Number(match[1]));
+    }
     return response.json();
   }
 
-  private async serverSaveDiagram(id: string, data: unknown): Promise<void> {
+  /**
+   * The version of the content this tab holds for `id` (last loaded or saved
+   * here), if the backend versions diagrams. The realtime sync hook compares
+   * it with the version another device saved.
+   */
+  knownVersion(id: string): number | undefined {
+    return this.contentVersions.get(id);
+  }
+
+  private async putDiagram(id: string, body: string): Promise<Response> {
     const version = this.diagramVersions.get(id);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (version !== undefined) headers['If-Match'] = `"${version}"`;
-    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
+    return apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
       method: 'PUT',
       headers,
-      body: JSON.stringify(leanIfModel(data)),
+      body,
       signal: timeoutSignal(15000)
     });
+  }
+
+  private async serverSaveDiagram(id: string, data: unknown): Promise<void> {
+    const body = JSON.stringify(leanIfModel(data));
+    let response = await this.putDiagram(id, body);
+    // Latest save wins (multi-device sync): another device saved this diagram
+    // since this tab loaded it (409), or this tab never learned its version
+    // (428). Learn the current version and save again, once, so this edit
+    // replaces it. Without this, every later autosave retried the same stale
+    // version and failed until a reload threw the edits away.
+    if (response.status === 409 || response.status === 428) {
+      await this.refreshVersion(id);
+      response = await this.putDiagram(id, body);
+    }
     if (!response.ok) throw new Error(`Failed to save diagram: ${response.status}`);
     const nextVersion = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (nextVersion) this.diagramVersions.set(id, Number(nextVersion[1]));
+    if (nextVersion) {
+      this.diagramVersions.set(id, Number(nextVersion[1]));
+      this.contentVersions.set(id, Number(nextVersion[1]));
+    }
+  }
+
+  /** Re-read the diagram's current version from the server (its ETag). */
+  private async refreshVersion(id: string): Promise<void> {
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
+      signal: timeoutSignal(10000)
+    });
+    if (!response.ok) return;
+    const match = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
+    if (match) this.diagramVersions.set(id, Number(match[1]));
+    else this.diagramVersions.delete(id);
   }
 
   private async serverCreateDiagram(
@@ -178,7 +221,10 @@ export class LocalStorageProvider implements StorageProvider {
     if (!response.ok) throw new Error(`Failed to create diagram: ${response.status}`);
     const result = await response.json();
     const version = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (version) this.diagramVersions.set(result.id, Number(version[1]));
+    if (version) {
+      this.diagramVersions.set(result.id, Number(version[1]));
+      this.contentVersions.set(result.id, Number(version[1]));
+    }
     return result.id;
   }
 
