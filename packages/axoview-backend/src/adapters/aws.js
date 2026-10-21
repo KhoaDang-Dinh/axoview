@@ -61,8 +61,10 @@ function createClients({ s3Client, ddbClient, region }) {
  * Production ObjectStorage backed by S3 object bodies and a DynamoDB metadata
  * index. `workspaceId` must be selected by trusted application code after
  * verifying the user's identity/membership. Diagram writes use immutable S3
- * object keys and a conditional DynamoDB pointer update, so concurrent saves
- * cannot overwrite each other even when API pods do not share memory.
+ * object keys and a conditional DynamoDB pointer update, so a save based on an
+ * outdated version is refused (409) even when API pods do not share memory.
+ * The app resolves that as "latest save wins" (multi-device sync): it learns
+ * the current version and saves again, deliberately replacing it.
  */
 export function createAwsWorkspaceAdapter({
   workspaceId,
