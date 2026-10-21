@@ -11,7 +11,7 @@
     "test": "npx --no-install jest"
   },
   "dependencies": {
-    "hono": "^4.7.0"
+    "hono": "^4.13.13"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260426.1",
