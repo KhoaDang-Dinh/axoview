@@ -10,6 +10,14 @@ import * as routes from './src/routes.js';
 import { createFsAdapter } from './src/adapters/fs.js';
 import { createAwsPublicAdapter, createAwsWorkspaceAdapter } from './src/adapters/aws.js';
 import { addWorkspaceScope } from './src/adapters/workspace.js';
+import {
+  SHARED_WORKSPACE,
+  createDynamoSyncCursor,
+  createMemorySyncCursor,
+  describeChange,
+  nextSyncEvent,
+  sseFrame
+} from './src/syncCursor.js';
 import { verifyCognitoAccessToken } from './src/cognitoAuth.js';
 import {
   cognitoRefreshCookieName,
@@ -233,6 +241,29 @@ const adapter = STORAGE_ADAPTER === 'aws'
   ? createAwsPublicAdapter({ bucketName: DATA_BUCKET, tableName: DYNAMODB_TABLE, region: AWS_REGION })
   : addWorkspaceScope(createFsAdapter(STORAGE_PATH));
 
+// Realtime multi-device sync (src/syncCursor.js): every write bumps the
+// workspace's change cursor; /api/sync/events streams it to the other devices.
+// AWS: a DynamoDB item every API pod reads. fs (one process): in memory.
+const syncCursor = STORAGE_ADAPTER === 'aws'
+  ? createDynamoSyncCursor({ tableName: DYNAMODB_TABLE, region: AWS_REGION })
+  : createMemorySyncCursor();
+const SYNC_POLL_MS = Number(process.env.SYNC_POLL_MS) || 1000;
+const SYNC_HEARTBEAT_MS = Number(process.env.SYNC_HEARTBEAT_MS) || 15_000;
+// Streams end after this long and the client reconnects (Last-Event-ID), so
+// a stream never outlives the access token it was opened with by much, and
+// connections rebalance across API pods.
+const SYNC_MAX_STREAM_MS = Number(process.env.SYNC_MAX_STREAM_MS) || 5 * 60_000;
+// The device (browser tab) that made a change, so it can ignore its own echo.
+const DEVICE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+// Open sync streams, ended at shutdown so their tabs reconnect to another pod.
+const openSyncStreams = new Set();
+let shuttingDown = false;
+
+function syncWorkspaceId(req) {
+  return req.user?.sub || SHARED_WORKSPACE;
+}
+
 if (STORAGE_ENABLED && STORAGE_ADAPTER === 'fs') {
   (async () => {
     try {
@@ -280,7 +311,31 @@ function makeCtx(req) {
   };
 }
 
-function adapt(handler, { requireStorage = true } = {}) {
+/**
+ * Tell the user's other devices about a successful write. Never fails the
+ * write: a missed bump only delays the other devices until their next
+ * reconnect or focus check.
+ */
+async function publishChange(req, route, result) {
+  const change = describeChange({
+    method: req.method,
+    route,
+    params: req.params,
+    body: req.body,
+    result
+  });
+  if (!change) return;
+  const device = req.headers['x-axoview-device'];
+  if (typeof device === 'string' && DEVICE_ID_RE.test(device)) change.origin = device;
+  change.at = new Date().toISOString();
+  try {
+    await syncCursor.bump(syncWorkspaceId(req), change);
+  } catch (err) {
+    console.warn('[sync] could not publish %s %s', req.method, route, err?.name || err);
+  }
+}
+
+function adapt(handler, { requireStorage = true, sync = null } = {}) {
   return async (req, res) => {
     if (requireStorage && !STORAGE_ENABLED) {
       return res.status(503).json({ error: 'Server storage is disabled' });
@@ -297,6 +352,9 @@ function adapt(handler, { requireStorage = true } = {}) {
           : adapter.forWorkspace(req.user.sub)
         : adapter;
       const result = await handler(requestAdapter, makeCtx(req));
+      if (sync && result.status >= 200 && result.status < 300) {
+        await publishChange(req, sync, result);
+      }
       for (const [name, value] of Object.entries(result.headers || {})) {
         res.setHeader(name, value);
       }
@@ -369,25 +427,95 @@ app.post('/api/auth/callback', adapt(exchangeCognitoCode, { requireStorage: fals
 app.post('/api/auth/refresh', adapt(refreshCognitoSession, { requireStorage: false }));
 app.post('/api/auth/logout', adapt(revokeCognitoSession, { requireStorage: false }));
 
-// Diagrams
+// Diagrams (`sync`: the route, for the change other devices are told about)
 app.get('/api/diagrams', adapt(routes.listDiagrams));
 app.get('/api/diagrams/:id', adapt(routes.getDiagram));
-app.post('/api/diagrams', adapt(routes.createDiagram));
-app.put('/api/diagrams/:id', adapt(routes.saveDiagram));
-app.patch('/api/diagrams/:id', adapt(routes.patchDiagram));
-app.patch('/api/diagrams/:id/move', adapt(routes.moveDiagram));
-app.delete('/api/diagrams/:id', adapt(routes.deleteDiagram));
+app.post('/api/diagrams', adapt(routes.createDiagram, { sync: '/api/diagrams' }));
+app.put('/api/diagrams/:id', adapt(routes.saveDiagram, { sync: '/api/diagrams/:id' }));
+app.patch('/api/diagrams/:id', adapt(routes.patchDiagram, { sync: '/api/diagrams/:id' }));
+app.patch('/api/diagrams/:id/move', adapt(routes.moveDiagram, { sync: '/api/diagrams/:id/move' }));
+app.delete('/api/diagrams/:id', adapt(routes.deleteDiagram, { sync: '/api/diagrams/:id' }));
 
 // Folders
 app.get('/api/folders', adapt(routes.listFolders));
-app.post('/api/folders', adapt(routes.createFolder));
-app.put('/api/folders/:id', adapt(routes.renameFolder));
-app.patch('/api/folders/:id/move', adapt(routes.moveFolder));
-app.delete('/api/folders/:id', adapt(routes.deleteFolder));
+app.post('/api/folders', adapt(routes.createFolder, { sync: '/api/folders' }));
+app.put('/api/folders/:id', adapt(routes.renameFolder, { sync: '/api/folders/:id' }));
+app.patch('/api/folders/:id/move', adapt(routes.moveFolder, { sync: '/api/folders/:id/move' }));
+app.delete('/api/folders/:id', adapt(routes.deleteFolder, { sync: '/api/folders/:id' }));
 
 // Tree manifest
 app.get('/api/tree-manifest', adapt(routes.getTreeManifest));
-app.put('/api/tree-manifest', adapt(routes.saveTreeManifest));
+app.put('/api/tree-manifest', adapt(routes.saveTreeManifest, { sync: '/api/tree-manifest' }));
+
+// Realtime sync: one Server-Sent Events stream per open tab. Each change to
+// the workspace (any device, any API pod) arrives as
+//   event: change   data: { seq, kind, action, id, version, name, deleted, origin, at }
+// with kind `resync` when changes were missed. `ready` opens the stream with
+// the current sequence; `: ping` comments every SYNC_HEARTBEAT_MS keep the ALB
+// and CloudFront connections open. Express only: the Worker runtime does not
+// serve it, and clients fall back to checking on focus (404).
+app.get('/api/sync/events', async (req, res) => {
+  if (!STORAGE_ENABLED) {
+    return res.status(503).json({ error: 'Server storage is disabled' });
+  }
+  // Shutting down: refuse new streams; the client retries (another pod, once
+  // the load balancer has dropped this one).
+  if (shuttingDown) {
+    return res.status(503).set('Retry-After', '1').json({ error: 'Shutting down' });
+  }
+  const workspaceId = syncWorkspaceId(req);
+  let closed = false;
+  openSyncStreams.add(res);
+  req.on('close', () => {
+    closed = true;
+    openSyncStreams.delete(res);
+  });
+  const write = (chunk) => { if (!closed) res.write(chunk); };
+
+  res.status(200).set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    // no-transform: no proxy may compress (and so buffer) the stream.
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  res.flushHeaders();
+
+  const header = req.headers['last-event-id'];
+  let lastSeq = typeof header === 'string' && /^[0-9]{1,15}$/.test(header) ? Number(header) : null;
+  try {
+    const current = await syncCursor.read(workspaceId);
+    write('retry: 3000\n\n');
+    const missed = nextSyncEvent(lastSeq, current);
+    if (missed) {
+      write(sseFrame(missed.event, missed.seq, missed.data));
+    } else {
+      write(sseFrame('ready', current.seq, { seq: current.seq }));
+    }
+    lastSeq = current.seq;
+
+    const started = Date.now();
+    let lastWrite = Date.now();
+    while (!closed && !shuttingDown && Date.now() - started < SYNC_MAX_STREAM_MS) {
+      await syncCursor.wait(workspaceId, SYNC_POLL_MS);
+      if (closed) break;
+      const next = await syncCursor.read(workspaceId);
+      const event = nextSyncEvent(lastSeq, next);
+      if (event) {
+        write(sseFrame(event.event, event.seq, event.data));
+        lastSeq = next.seq;
+        lastWrite = Date.now();
+      } else if (Date.now() - lastWrite >= SYNC_HEARTBEAT_MS) {
+        write(': ping\n\n');
+        lastWrite = Date.now();
+      }
+    }
+  } catch (err) {
+    console.error('[sync] stream for %s failed', req.path, err?.name || err);
+  }
+  openSyncStreams.delete(res);
+  if (!closed && !res.writableEnded) res.end();
+});
 
 // Share
 app.post('/api/diagrams/:id/share', adapt(routes.shareDiagram));
@@ -432,7 +560,7 @@ app.use((err, req, res, next) => {
 // ---------------------------------------------------------------------------
 // Start server
 // ---------------------------------------------------------------------------
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Axoview Backend Server running on port ${PORT}`);
   console.log(`Server storage: ${STORAGE_ENABLED ? 'ENABLED' : 'DISABLED'}`);
   if (STORAGE_ENABLED) {
@@ -460,3 +588,40 @@ app.listen(PORT, () => {
     console.error('[SECURITY] AUTH_MODE=cognito but Cognito configuration is incomplete.');
   }
 });
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown (Kubernetes rollouts, docker stop)
+// ---------------------------------------------------------------------------
+// The container runs `node server.js` as PID 1, and PID 1 ignores SIGTERM
+// unless it handles it: without this, every pod waited out the full grace
+// period (30s) for SIGKILL on every rollout, and open sync streams were cut
+// mid-write. On SIGTERM:
+//   1. end every sync stream at once (its tab reconnects to another pod in
+//      about a second) and refuse new ones (503);
+//   2. keep answering ordinary requests for SHUTDOWN_DRAIN_MS while the load
+//      balancer stops sending new ones here;
+//   3. stop accepting connections, let requests in flight finish, exit; force
+//      the exit after SHUTDOWN_FORCE_MS so a stuck request cannot hold it.
+const SHUTDOWN_DRAIN_MS = Number(process.env.SHUTDOWN_DRAIN_MS ?? 5_000);
+const SHUTDOWN_FORCE_MS = Number(process.env.SHUTDOWN_FORCE_MS ?? 10_000);
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal}: ending ${openSyncStreams.size} sync stream(s), draining for ${SHUTDOWN_DRAIN_MS} ms`);
+  for (const res of openSyncStreams) {
+    if (!res.writableEnded) res.end();
+  }
+  openSyncStreams.clear();
+  setTimeout(() => {
+    server.close(() => process.exit(0));
+    server.closeIdleConnections?.();
+    setTimeout(() => {
+      server.closeAllConnections?.();
+      process.exit(0);
+    }, SHUTDOWN_FORCE_MS).unref();
+  }, SHUTDOWN_DRAIN_MS).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

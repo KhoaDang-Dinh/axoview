@@ -28,6 +28,7 @@ import { useAuthStore } from '../stores/authStore';
 import { fetchRuntimeConfig } from '../hooks/useRuntimeConfig';
 import { readDriveDisplayFile } from '../services/drive/drivePublicRead';
 import { useAutoSave, SaveStatus } from '../hooks/useAutoSave';
+import { useRealtimeSync } from '../hooks/useRealtimeSync';
 import { DiagramManager } from '../components/DiagramManager';
 import { SaveDialog } from '../components/SaveDialog';
 import { LoadDialog } from '../components/LoadDialog';
@@ -1165,7 +1166,15 @@ export function DiagramLifecycleProvider({
   // Server-mode: load diagram into canvas
   // ---------------------------------------------------------------------------
   const handleDiagramManagerLoad = useCallback(
-    async (id: string, rawData: unknown, listingName: string) => {
+    async (
+      id: string,
+      rawData: unknown,
+      listingName: string,
+      // remote: the open diagram reloaded because another device saved it
+      // (realtime sync) — keep the viewport, and never write back from here,
+      // or two devices would answer each other's saves forever.
+      { remote = false }: { remote?: boolean } = {}
+    ) => {
       const data: PersistedDiagramBlob = isPersistedDiagramBlob(rawData) ? rawData : {};
 
       const loadedIcons: Icon[] = data.icons || [];
@@ -1214,8 +1223,11 @@ export function DiagramLifecycleProvider({
         // mounts with the correct diagram instead of the stale frozen data.
         frozenInitialDataRef.current = mergedData;
       }
-      axoviewRef.current?.load(mergedData as InitialData);
-      if (!hasDefaultIcons && storageRef.current) {
+      axoviewRef.current?.load(
+        mergedData as InitialData,
+        remote ? { preserveViewport: true } : undefined
+      );
+      if (!remote && !hasDefaultIcons && storageRef.current) {
         storageRef.current.saveDiagram(id, mergedData).catch(() => {});
       }
     },
@@ -1517,6 +1529,49 @@ export function DiagramLifecycleProvider({
     applyDiagramName(trimmed);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- applyDiagramName is stable
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Realtime multi-device sync (server storage): see hooks/useRealtimeSync.ts
+  // ---------------------------------------------------------------------------
+  const knownVersionOf = (id: string): number | undefined =>
+    (storageRef.current as { knownVersion?: (id: string) => number | undefined } | null)
+      ?.knownVersion?.(id);
+
+  // Another device saved the open diagram: load its content in place. Skipped
+  // when this tab has unsaved work (its next save wins), when another diagram
+  // was opened meanwhile, or when the loaded version is the one already shown.
+  const reloadOpenDiagramFromRemote = useCallback(async () => {
+    const open = currentDiagramRef.current;
+    const s = storageRef.current;
+    if (!open || !s || hasUnsavedWorkRef.current()) return;
+    const before = knownVersionOf(open.id);
+    const raw = await s.loadDiagram(open.id);
+    if (currentDiagramRef.current?.id !== open.id || hasUnsavedWorkRef.current()) return;
+    const after = knownVersionOf(open.id);
+    if (before !== undefined && after !== undefined && after === before) return;
+    await handleDiagramManagerLoad(open.id, raw, diagramNameRef.current || open.name, {
+      remote: true
+    });
+  }, [handleDiagramManagerLoad]);
+
+  useRealtimeSync({
+    enabled: serverStorageAvailable && storage?.id === 'local' && !isReadonlyUrl,
+    baseUrl: apiBaseUrl(),
+    getState: () => {
+      const openId = currentDiagramRef.current?.id ?? null;
+      return {
+        openDiagramId: openId,
+        hasUnsavedWork: hasUnsavedWorkRef.current(),
+        knownVersion: openId ? knownVersionOf(openId) : undefined
+      };
+    },
+    reloadOpenDiagram: reloadOpenDiagramFromRemote,
+    refreshTree: () => setFileTreeRefreshToken((n) => n + 1),
+    onOpenDeleted: notifyDiagramDeletedFromTree,
+    onOpenRenamed: notifyDiagramRenamedFromTree,
+    notify: (severity, message) => notificationStore.push({ severity, message }),
+    t: (key, fallback) => t(key, fallback)
+  });
 
   // ---------------------------------------------------------------------------
   // Toolbar save actions
