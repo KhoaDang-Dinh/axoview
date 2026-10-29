@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -20,7 +22,7 @@ import { AppStorageProvider, useAppStorage } from './providers/AppStorageContext
 import { AuthProvider } from './providers/AuthProvider';
 import { CognitoSessionProvider } from './providers/CognitoSessionProvider';
 import { AssistantProvider } from './providers/AssistantProvider';
-import { AssistantConnectionPage } from './components/ai/AssistantConnectionPage';
+
 import {
   DiagramLifecycleProvider,
   useDiagramLifecycle
@@ -55,6 +57,14 @@ import './App.css';
 
 // R1 (ADR 0040): the editor SPA mounts under /app (the marketing landing owns
 // the site root). APP_BASENAME = `${PUBLIC_URL}/app`.
+// This is an infrequently visited setup route, not editor boot-critical code.
+// Keep the MCP setup mock out of the initial /app JavaScript payload.
+const AssistantConnectionPage = lazy(() =>
+  import('./components/ai/AssistantConnectionPage').then(({ AssistantConnectionPage }) => ({
+    default: AssistantConnectionPage
+  }))
+);
+
 const basename = APP_BASENAME;
 
 const EXPORTER_TAG = `axoview-app@${process.env.REACT_APP_VERSION ?? 'dev'}`;
@@ -67,7 +77,14 @@ function App() {
       <Routes>
         <Route path="/" element={<EditorPage />} />
         <Route path="/auth/callback" element={<EditorPage />} />
-        <Route path="/ai/connect/:clientId" element={<AssistantConnectionPage />} />
+        <Route
+          path="/ai/connect/:clientId"
+          element={
+            <Suspense fallback={null}>
+              <AssistantConnectionPage />
+            </Suspense>
+          }
+        />
         <Route path="/display/p/:shareUuid" element={<EditorPage />} />
         {/* ADR 0042 §2 — live Drive-file preview. The static `drive` segment
             ranks above :readonlyDiagramId, so the routes cannot collide. */}
