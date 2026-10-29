@@ -47,8 +47,8 @@ import { LocalModeShareErrorDialog } from './components/LocalModeShareErrorDialo
 import { ReadonlyLoadErrorDialog } from './components/ReadonlyLoadErrorDialog';
 import { PublicShareLoadErrorDialog } from './components/PublicShareLoadErrorDialog';
 import { SaveErrorDialog } from './components/SaveErrorDialog';
-// Optional ZIP dialogs are split out of the editor's boot-critical JS.
-// These are fetched only when the corresponding dialog is opened.
+// Lazy: fetched only when the dialog opens (see lazyZipDialogs.ts).
+import { ExportProjectZipDialog, ImportDialog } from './components/fileExplorer/lazyZipDialogs';
 import { sanitizeImportedBlob } from './services/storage/importedBlob';
 import { notificationStore } from './stores/notificationStore';
 import { diagnosticsStore } from './stores/diagnosticsStore';
@@ -57,19 +57,9 @@ import './App.css';
 
 // R1 (ADR 0040): the editor SPA mounts under /app (the marketing landing owns
 // the site root). APP_BASENAME = `${PUBLIC_URL}/app`.
-// This is an infrequently visited setup route, not editor boot-critical code.
-// Keep the MCP setup mock out of the initial /app JavaScript payload.
-const ImportDialog = lazy(() =>
-  import('./components/fileExplorer/ImportDialog').then(({ ImportDialog }) => ({
-    default: ImportDialog
-  }))
-);
-const ExportProjectZipDialog = lazy(() =>
-  import('./components/fileExplorer/ExportProjectZipDialog').then(({ ExportProjectZipDialog }) => ({
-    default: ExportProjectZipDialog
-  }))
-);
 
+// An infrequently visited setup route, not editor boot-critical code: keep the
+// MCP setup mock out of the initial /app JavaScript payload.
 const AssistantConnectionPage = lazy(() =>
   import('./components/ai/AssistantConnectionPage').then(({ AssistantConnectionPage }) => ({
     default: AssistantConnectionPage
