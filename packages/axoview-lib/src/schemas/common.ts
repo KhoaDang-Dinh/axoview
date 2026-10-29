@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 
 // Reject NaN / ±Infinity. Every legitimate position (integer tile base, or the
 // ADR 0023 sub-tile px offset) is finite; a non-finite coord in an imported or

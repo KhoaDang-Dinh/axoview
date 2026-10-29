@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { id, constrainedStrings } from './common';
 
 export const layerSchema = z.object({

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { id, constrainedStrings, coords, ARRAY_MAX } from './common';
 import { rectangleSchema } from './rectangle';
 import { connectorSchema } from './connector';

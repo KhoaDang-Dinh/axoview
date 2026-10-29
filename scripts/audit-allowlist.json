@@ -48,95 +48,23 @@
       "package": "quill",
       "title": "Quill XSS via HTML export feature",
       "shipped": true,
-      "why": "Axoview DOES call the affected getSemanticHTML(), but every call site pipes the result through sanitizeHtml() before it is stored (TextBoxInlineEditor.tsx:115,134), the model is re-sanitized on load (useInitialDataManager.ts:85), and the sole dangerouslySetInnerHTML sink re-sanitizes at render (TextBox.tsx:254,336). ADR 0029's defence-in-depth absorbs the payload.",
+      "why": "Axoview DOES call the affected getSemanticHTML(), but every call site pipes the result through sanitizeHtml() before it is stored (TextBoxInlineEditor.tsx:132,151), the model is re-sanitized on load (useInitialDataManager.ts:90), and the sole dangerouslySetInnerHTML sink re-sanitizes at render (TextBox.tsx:343). ADR 0029's defence-in-depth absorbs the payload. Re-reviewed 2026-10-29: all three sanitize points still in place, still no forward fix.",
       "noForwardFix": "npm's only remedy is a BREAKING downgrade to react-quill-new@3.7.0.",
       "tripwire": "If the ADR 0029 sanitize is removed from ANY of those three points, this becomes live stored-XSS. renderedGeometry-style contract coverage on sanitizeHtml call sites would make that unmissable.",
       "acceptedOn": "2026-07-29",
-      "reviewBy": "2026-10-29"
+      "reviewBy": "2027-01-29"
     },
     {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+      "id": "GHSA-gcqx-w48m-w2h4",
+      "package": "deepmerge",
+      "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
       "shipped": false,
       "scope": "root",
-      "why": "braces@3.0.3 is dev-only: package-lock marks it `dev`, `npm ls braces --omit=dev` is empty, and its only dependents are chokidar and micromatch, both dev (file watching in nodemon / the dev server, glob matching in jest, rsbuild, eslint, knip, semantic-release). It is in neither browser bundle and not in the Docker image (the backend audit tree is clean). Every pattern it expands is authored in this repo's own config, so no attacker can supply the deeply nested pattern the DoS needs.",
-      "noForwardFix": "The range is `*`: no braces release fixes it, and npm's only remedy is a breaking downgrade of tsc-alias to 1.0.11.",
-      "tripwire": "If braces (or micromatch / chokidar) enters the prod tree, or any code passes a user-supplied string to a glob matcher, this becomes a live DoS. Drop this entry once a patched braces ships.",
-      "acceptedOn": "2026-10-03",
-      "reviewBy": "2027-01-03"
-    },
-    {
-      "id": "GHSA-hp3w-g68c-fv3c",
-      "package": "sprintf-js",
-      "title": "sprintf-js denial of service through unbounded precision specifiers",
-      "shipped": false,
-      "scope": "root",
-      "why": "The only locked instance is sprintf-js@1.0.3 under @istanbuljs/load-nyc-config -> argparse, and the lock marks it dev-only. It is used by coverage/test tooling, is absent from packages/axoview-backend/package-lock.json, and is not shipped in the browser or backend production artifact. The advisory requires attacker control of the sprintf format string; Axoview exposes no runtime path to this dev-only dependency.",
-      "noForwardFix": "The GitHub advisory currently lists no patched sprintf-js release.",
-      "tripwire": "Remove this acceptance when a patched sprintf-js release becomes available. Re-review immediately if sprintf-js enters a production dependency tree or any runtime code begins accepting user-controlled sprintf format strings.",
-      "acceptedOn": "2026-10-07",
-      "reviewBy": "2027-01-07"
-    },
-    {
-      "id": "GHSA-8r5x-fm3f-whwj",
-      "package": "handlebars",
-      "title": "Handlebars JavaScript injection via AST type confusion in compile",
-      "shipped": false,
-      "scope": "root",
-      "why": "The only locked handlebars@4.7.9 instance is reached through ts-jest and conventional-changelog-writer, both development/release tooling. It is absent from packages/axoview-backend/package-lock.json and is not part of the browser or EKS backend production artifacts. Axoview runtime code does not call Handlebars compile/precompile or accept untrusted Handlebars AST input.",
-      "forwardFix": "handlebars 4.7.10 is patched; replace this temporary acceptance with the dependency update after the deployment path is proven.",
-      "tripwire": "Re-review immediately if handlebars enters a production dependency tree, is imported by application/backend runtime code, or any user-controlled template/AST reaches compile/precompile.",
-      "acceptedOn": "2026-10-12",
-      "reviewBy": "2026-10-31"
-    },
-    {
-      "id": "GHSA-p8wg-vrv2-v86f",
-      "package": "handlebars",
-      "title": "Handlebars JavaScript injection via own-property check bypass",
-      "shipped": false,
-      "scope": "root",
-      "why": "The only locked handlebars@4.7.9 instance is reached through ts-jest and conventional-changelog-writer, both development/release tooling. It is absent from packages/axoview-backend/package-lock.json and from the S3/EKS production artifacts; no runtime request path invokes Handlebars.",
-      "forwardFix": "handlebars 4.7.10 is patched; replace this temporary acceptance with the dependency update after the deployment path is proven.",
-      "tripwire": "Re-review immediately if handlebars enters a production dependency tree or any application/runtime path begins compiling templates from untrusted input.",
-      "acceptedOn": "2026-10-12",
-      "reviewBy": "2026-10-31"
-    },
-    {
-      "id": "GHSA-xw65-4hp5-5hc7",
-      "package": "handlebars",
-      "title": "Handlebars JavaScript injection via unsafe inline embedding of precompiled templates",
-      "shipped": false,
-      "scope": "root",
-      "why": "handlebars@4.7.9 is present only through development/release tooling (ts-jest and conventional-changelog-writer). It is not shipped in the static frontend or backend image, and Axoview runtime code does not precompile attacker-controlled Handlebars templates.",
-      "forwardFix": "handlebars 4.7.10 is patched; replace this temporary acceptance with the dependency update after the deployment path is proven.",
-      "tripwire": "Re-review if handlebars becomes a runtime dependency, if precompiled templates become part of the app build from untrusted input, or if it appears in the backend audit tree.",
-      "acceptedOn": "2026-10-12",
-      "reviewBy": "2026-10-31"
-    },
-    {
-      "id": "GHSA-wq5f-xc86-pv6w",
-      "package": "sharp",
-      "title": "sharp vulnerability in bundled librsvg",
-      "shipped": false,
-      "scope": "root",
-      "why": "sharp@0.35.4 is pulled only by miniflare through wrangler, which is Cloudflare development/compatibility tooling. It is absent from packages/axoview-backend/package-lock.json, the backend Docker image, and the browser runtime. The AWS deployment does not execute Miniflare or sharp.",
-      "forwardFix": "wrangler 4.149.0 moves its Miniflare dependency to sharp 0.35.5; take that tooling update after the AWS deployment path is proven.",
-      "tripwire": "Remove this acceptance or re-review immediately if sharp is imported by Axoview runtime code, enters the backend production tree, or image/SVG processing is added to the deployed service.",
-      "acceptedOn": "2026-10-12",
-      "reviewBy": "2026-10-31"
-    },
-    {
-      "id": "GHSA-xvq9-wjp8-hwqf",
-      "package": "i18next-http-backend",
-      "title": "i18next-http-backend incomplete URL validation permits SSRF",
-      "shipped": true,
-      "scope": "root",
-      "why": "The browser dependency is shipped, but Axoview's actual configuration uses a loadPath rooted at `${basePath}i18n/{{ns}}/{{lng}}.json`; with the production default basePath of '/', the request path begins with '/i18n/' rather than an interpolated language/namespace. Namespace is fixed to 'app' and detection reads only localStorage. The advisory's origin/scheme breakout requires an unsafe template shape in which attacker-controlled interpolation can become the URL authority/scheme, which this configuration does not use.",
-      "forwardFix": "i18next-http-backend 4.0.2 is patched; upgrade after the deployment path is proven.",
-      "tripwire": "This acceptance is invalid if loadPath stops having a trusted leading path/origin, if namespace becomes user-controlled, or if language detection adds URL/query/header sources without re-review.",
-      "acceptedOn": "2026-10-12",
-      "reviewBy": "2026-10-31"
+      "why": "The only locked instance is deepmerge@4.3.1 under jest -> @jest/core -> jest-config, marked dev in the lock; `npm ls deepmerge --omit=dev` is empty and it is absent from packages/axoview-backend/package-lock.json. jest-config uses it to merge this repo's own jest config files, so every merged object is authored here and no attacker-controlled input reaches mergeObject(). It is in neither browser bundle nor the Docker image.",
+      "noForwardFix": "The range is >=4.2.0: no deepmerge release fixes it, and npm's only remedy is a breaking downgrade of jest to 25.1.0.",
+      "tripwire": "Re-review immediately if deepmerge enters a production tree or any runtime code merges user-supplied objects with it. Drop this entry once a patched deepmerge ships or jest stops depending on it.",
+      "acceptedOn": "2026-10-29",
+      "reviewBy": "2027-01-29"
     }
   ]
 }

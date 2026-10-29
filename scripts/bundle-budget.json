@@ -31,13 +31,21 @@
     "Measured locally: 324.js 1409 · app.js 293 · lib-react 44 · lib-polyfill 41",
     "· lib-router 13 = 1800 kB gzip (master was 1807). Numbers left unchanged.",
     "",
+    "2026-10-29 (ESM, lowered): the app resolved axoview-lib through `main`, its",
+    "CommonJS build, which require()s @mui/icons-material, @mui/material and zod",
+    "whole, so none of them could be tree-shaken (the zod 4.6.7 security upgrade",
+    "alone added 33 kB). The lib now declares `module` (dist/esm/index.mjs) and the",
+    "app tree-shakes it. Measured locally: 819.js 397 · app.js 298 · lib-react 44",
+    "· lib-polyfill 41 · lib-router 13 = 793 kB gzip (was 1810). Ceilings lowered",
+    "to ~3% above that.",
+    "",
     "When the split lands, LOWER these. Never raise them to absorb a fat DEPENDENCY",
     "or a feature — that converts the gate back into the decoration it replaced;",
     "put that behind import() instead. A raise is only for correctness code that is",
     "boot-critical by nature, and it must come with the measurement and the reason,",
     "as this one does."
   ],
-  "maxTotalBlockingGzipBytes": 1851000,
-  "maxChunkGzipBytes": 1480000,
+  "maxTotalBlockingGzipBytes": 840000,
+  "maxChunkGzipBytes": 430000,
   "ratchetSlackBytes": 102400
 }
