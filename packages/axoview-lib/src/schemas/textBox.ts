@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { ProjectionOrientationEnum } from 'src/types/common';
 import { id, coords, constrainedStrings, NOTES_MAX_LENGTH } from './common';
 
