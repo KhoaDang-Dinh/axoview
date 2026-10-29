@@ -47,8 +47,8 @@ import { LocalModeShareErrorDialog } from './components/LocalModeShareErrorDialo
 import { ReadonlyLoadErrorDialog } from './components/ReadonlyLoadErrorDialog';
 import { PublicShareLoadErrorDialog } from './components/PublicShareLoadErrorDialog';
 import { SaveErrorDialog } from './components/SaveErrorDialog';
-import { ExportProjectZipDialog } from './components/fileExplorer/ExportProjectZipDialog';
-import { ImportDialog } from './components/fileExplorer/ImportDialog';
+// Optional ZIP dialogs are split out of the editor's boot-critical JS.
+// These are fetched only when the corresponding dialog is opened.
 import { sanitizeImportedBlob } from './services/storage/importedBlob';
 import { notificationStore } from './stores/notificationStore';
 import { diagnosticsStore } from './stores/diagnosticsStore';
@@ -59,6 +59,17 @@ import './App.css';
 // the site root). APP_BASENAME = `${PUBLIC_URL}/app`.
 // This is an infrequently visited setup route, not editor boot-critical code.
 // Keep the MCP setup mock out of the initial /app JavaScript payload.
+const ImportDialog = lazy(() =>
+  import('./components/fileExplorer/ImportDialog').then(({ ImportDialog }) => ({
+    default: ImportDialog
+  }))
+);
+const ExportProjectZipDialog = lazy(() =>
+  import('./components/fileExplorer/ExportProjectZipDialog').then(({ ExportProjectZipDialog }) => ({
+    default: ExportProjectZipDialog
+  }))
+);
+
 const AssistantConnectionPage = lazy(() =>
   import('./components/ai/AssistantConnectionPage').then(({ AssistantConnectionPage }) => ({
     default: AssistantConnectionPage
@@ -455,6 +466,7 @@ function EditorShell() {
 
       {/* The one import flow (A3/ZIP-09) */}
       {showImportDialog && storage && (
+        <Suspense fallback={null}>
         <ImportDialog
           open
           onClose={() => setShowImportDialog(false)}
@@ -488,9 +500,11 @@ function EditorShell() {
             await openDiagramById(newId, suggestedName);
           }}
         />
+        </Suspense>
       )}
 
-      {storage && (
+      {storage && isProjectExportOpen && (
+        <Suspense fallback={null}>
         <ExportProjectZipDialog
           open={isProjectExportOpen}
           onClose={closeProjectExport}
@@ -504,6 +518,7 @@ function EditorShell() {
             if (!remoteStorageActive) markProjectExported?.();
           }}
         />
+        </Suspense>
       )}
 
       <LocalModeShareErrorDialog
