@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import { Suspense, useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tree, TreeApi, NodeApi } from 'react-arborist';
 import { exportAsJSON, mergeBundledFixtures, type Model } from 'axoview';
@@ -28,8 +28,8 @@ import { useFileTree, FileNode, PlaceId } from '../../hooks/useFileTree';
 import { FileTreeNode } from './FileTreeNode';
 import { FileTreeToolbar } from './FileTreeToolbar';
 import { ContextMenuItems } from './ContextMenuItems';
-import { ExportProjectZipDialog } from './ExportProjectZipDialog';
-import { ImportDialog } from './ImportDialog';
+// Lazy: a static import here would pull the zip code back into the boot bundle.
+import { ExportProjectZipDialog, ImportDialog } from './lazyZipDialogs';
 import { ShareErrorDialog } from '../ShareErrorDialog';
 import { notificationStore } from '../../stores/notificationStore';
 import {
@@ -40,7 +40,7 @@ import {
   typeOfId
 } from '../../utils/fileOperations';
 import { shareUrlFromUuid } from '../../utils/shareUrl';
-import { ExportScope } from '../../services/project/projectZip';
+import type { ExportScope } from '../../services/project/projectZip';
 
 // Section-root ids of the places model (2026-07-06): one tree, two places.
 const PLACE_DRIVE = 'place:google-drive';
@@ -1367,6 +1367,7 @@ export function FileExplorer() {
 
       {/* Export dialog (project / folder zip only) */}
       {exportTarget && (
+        <Suspense fallback={null}>
         <ExportProjectZipDialog
           open
           onClose={() => setExportTarget(null)}
@@ -1386,10 +1387,12 @@ export function FileExplorer() {
             if (exportedPlace === 'local') markProjectExported?.();
           }}
         />
+        </Suspense>
       )}
 
       {/* Import dialog — imports land in the create-target place */}
       {showImport && (
+        <Suspense fallback={null}>
         <ImportDialog
           open
           onClose={() => setShowImport(false)}
@@ -1412,6 +1415,7 @@ export function FileExplorer() {
             await openDiagramById(newId, suggestedName, createTargetPlace);
           }}
         />
+        </Suspense>
       )}
 
       {/* Name collision dialog */}
