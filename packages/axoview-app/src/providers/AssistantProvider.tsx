@@ -1,8 +1,14 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useAppStorage } from './AppStorageContext';
 import { useCognitoSessionStore } from '../stores/cognitoSessionStore';
 import { useAssistantStore } from '../stores/assistantStore';
-import { AssistantWidget } from '../components/ai/AssistantWidget';
+// The optional AI surface must not grow the core editor's startup bundle.
+// This chunk is fetched only after /api/config explicitly enables AI.
+const AssistantWidget = lazy(() =>
+  import('../components/ai/AssistantWidget').then(({ AssistantWidget }) => ({
+    default: AssistantWidget
+  }))
+);
 
 /**
  * Sibling of the Cognito gate, not its child. Guests can see the assistant
@@ -15,6 +21,13 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const status = useCognitoSessionStore((state) => state.status);
   const activateIdentity = useAssistantStore((state) => state.activateIdentity);
   const cognito = runtimeConfig?.authMode === 'cognito';
+  const identity = useAssistantStore((state) => state.identity);
+  const expectedIdentity = user ? `user:${user.sub}` : 'guest';
+  const canShowAssistant = isInitialized &&
+    runtimeConfig?.ai?.chatEnabled === true &&
+    (!cognito || status !== 'booting') &&
+    (user !== null || runtimeConfig?.ai?.guestEnabled === true) &&
+    identity === expectedIdentity;
 
   useEffect(() => {
     if (!isInitialized || (cognito && status === 'booting')) return;
@@ -25,7 +38,11 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   return (
     <>
       {children}
-      <AssistantWidget />
+      {canShowAssistant && (
+        <Suspense fallback={null}>
+          <AssistantWidget />
+        </Suspense>
+      )}
     </>
   );
 }
