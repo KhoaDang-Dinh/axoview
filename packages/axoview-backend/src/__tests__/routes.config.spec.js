@@ -70,9 +70,31 @@ describe('getConfig', () => {
       clientId: 'client',
       redirectUri: 'https://dev.example.com/app/auth/callback',
       logoutUri: 'https://dev.example.com/',
-      providers: ['Google']
+      providers: ['Google'],
+      mobile: null
     });
     expect(getConfig(null, makeCtx({ env: cognitoEnv })).body.cognito.providers).toEqual([]);
+  });
+
+  test('cognito config carries the mobile app client and its custom-scheme redirect', () => {
+    const env = {
+      AUTH_MODE: 'cognito',
+      COGNITO_DOMAIN: 'https://axoview-prod-1.auth.ap-southeast-1.amazoncognito.com',
+      COGNITO_CLIENT_ID: 'web-client',
+      PUBLIC_BASE_URL: 'https://example.com',
+      COGNITO_MOBILE_CLIENT_ID: 'mobile-client',
+      COGNITO_MOBILE_REDIRECT_URI: 'axoview://auth/callback'
+    };
+    expect(getConfig(null, makeCtx({ env })).body.cognito.mobile).toEqual({
+      clientId: 'mobile-client',
+      redirectUri: 'axoview://auth/callback',
+      logoutUri: 'axoview://auth/logout'
+    });
+    // Only a custom scheme with the fixed path is published.
+    for (const bad of ['https://example.com/auth/callback', 'javascript://auth/callback', 'axoview://evil/callback', 'axoview://auth/callback?x=1']) {
+      expect(getConfig(null, makeCtx({ env: { ...env, COGNITO_MOBILE_REDIRECT_URI: bad } })).body.cognito.mobile).toBeNull();
+    }
+    expect(getConfig(null, makeCtx({ env: { ...env, COGNITO_MOBILE_CLIENT_ID: '' } })).body.cognito.mobile).toBeNull();
   });
 
   test('externalIdentityProviders keeps only plain provider names', () => {
