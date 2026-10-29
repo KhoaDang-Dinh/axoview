@@ -36,6 +36,14 @@ export interface RuntimeConfig {
    * only lets an operator override it deliberately.
    */
   publicBaseUrl: string | null;
+  ai: {
+    chatEnabled: boolean;
+    guestEnabled: boolean;
+    diagramContextEnabled: boolean;
+    mcpEnabled: boolean;
+    ragEnabled: boolean;
+    agentWriteEnabled: boolean;
+  };
 }
 
 // ADR 0035 §4: a pure-local `npm run dev` boot has no backend serving
@@ -61,7 +69,15 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   authMode: 'none',
   cognito: null,
   serverStorage: false,
-  publicBaseUrl: null
+  publicBaseUrl: null,
+  ai: {
+    chatEnabled: false,
+    guestEnabled: false,
+    diagramContextEnabled: false,
+    mcpEnabled: false,
+    ragEnabled: false,
+    agentWriteEnabled: false
+  }
 };
 
 let cached: RuntimeConfig | null = null;
@@ -107,7 +123,19 @@ export async function fetchRuntimeConfig(): Promise<RuntimeConfig> {
     }
     try {
       const data = (await response.json()) as Partial<RuntimeConfig>;
-      cached = { ...DEFAULT_CONFIG, ...data };
+      cached = {
+        ...DEFAULT_CONFIG,
+        ...data,
+        // Missing/malformed capability values fail closed.
+        ai: {
+          chatEnabled: data.ai?.chatEnabled === true,
+          guestEnabled: data.ai?.guestEnabled === true,
+          diagramContextEnabled: data.ai?.diagramContextEnabled === true,
+          mcpEnabled: data.ai?.mcpEnabled === true,
+          ragEnabled: data.ai?.ragEnabled === true,
+          agentWriteEnabled: data.ai?.agentWriteEnabled === true
+        }
+      };
     } catch (err) {
       console.warn('[useRuntimeConfig] /api/config returned unparseable JSON', err);
       cached = { ...DEFAULT_CONFIG };
