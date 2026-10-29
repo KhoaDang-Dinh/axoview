@@ -13,13 +13,32 @@ describe('getConfig', () => {
       authMode: 'none',
       cognito: null,
       serverStorage: true,
-      publicBaseUrl: null
+      publicBaseUrl: null,
+      ai: {
+        chatEnabled: false,
+        guestEnabled: false,
+        diagramContextEnabled: false,
+        mcpEnabled: false,
+        ragEnabled: false,
+        agentWriteEnabled: false
+      }
     });
   });
 
   // A5/CHR-08 (owner ruling 2026-07-30): the client's own link builders resolve
   // against this when the operator configures one, so a preview/staging/LAN
   // origin cannot leak into a durable share link. Null keeps the page origin.
+  test('AI flags require the exact true string and default to false', () => {
+    const flags = getConfig(null, makeCtx({ env: {
+      AI_CHAT_ENABLED: 'true', AI_GUEST_ENABLED: 'TRUE',
+      AI_MCP_ENABLED: 'true', AI_RAG_ENABLED: true
+    }})).body.ai;
+    expect(flags).toEqual({
+      chatEnabled: true, guestEnabled: false, diagramContextEnabled: false,
+      mcpEnabled: true, ragEnabled: false, agentWriteEnabled: false
+    });
+  });
+
   test('surfaces PUBLIC_BASE_URL so the app can mint canonical links', () => {
     const result = getConfig(
       null,

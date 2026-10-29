@@ -208,6 +208,14 @@ export function getConfig(_adapter, ctx) {
       // from `shareDiagram`; this exposes the same value to the app, which
       // builds the links the user actually copies. Null → page origin, which is
       // the existing behaviour.
+      ai: {
+        chatEnabled: env.AI_CHAT_ENABLED === 'true',
+        guestEnabled: env.AI_GUEST_ENABLED === 'true',
+        diagramContextEnabled: env.AI_DIAGRAM_CONTEXT_ENABLED === 'true',
+        mcpEnabled: env.AI_MCP_ENABLED === 'true',
+        ragEnabled: env.AI_RAG_ENABLED === 'true',
+        agentWriteEnabled: env.AI_AGENT_WRITE_ENABLED === 'true'
+      },
       publicBaseUrl: env.PUBLIC_BASE_URL || null
     }
   };

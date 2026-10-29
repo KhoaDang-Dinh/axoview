@@ -62,6 +62,12 @@ const routeEnv = {
   COGNITO_ISSUER: COGNITO_ISSUER || null,
   // A5/CHR-08: surfaced to the client via /api/config so the app's own link
   // builders resolve against the operator's canonical base (see routes.js).
+  AI_CHAT_ENABLED: process.env.AI_CHAT_ENABLED,
+  AI_GUEST_ENABLED: process.env.AI_GUEST_ENABLED,
+  AI_DIAGRAM_CONTEXT_ENABLED: process.env.AI_DIAGRAM_CONTEXT_ENABLED,
+  AI_MCP_ENABLED: process.env.AI_MCP_ENABLED,
+  AI_RAG_ENABLED: process.env.AI_RAG_ENABLED,
+  AI_AGENT_WRITE_ENABLED: process.env.AI_AGENT_WRITE_ENABLED,
   PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || null
 };
 

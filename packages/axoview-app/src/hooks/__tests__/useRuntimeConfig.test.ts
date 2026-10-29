@@ -20,11 +20,27 @@ describe('fetchRuntimeConfig', () => {
     const { fetchRuntimeConfig } = require('../useRuntimeConfig');
     const cfg = await fetchRuntimeConfig();
     expect(cfg.authMode).toBe('none');
+    expect(cfg.ai).toEqual({
+      chatEnabled: false, guestEnabled: false, diagramContextEnabled: false,
+      mcpEnabled: false, ragEnabled: false, agentWriteEnabled: false
+    });
     expect(cfg.serverStorage).toBe(false);
     expect(cfg.googleClientId).toBeNull();
     expect(cfg.googleApiKey).toBeNull();
     expect(cfg.drivePublicPreview).toBe(false);
     expect(cfg.googleProjectNumber).toBeNull();
+  });
+
+  test('missing and malformed AI flags remain disabled', async () => {
+    (global as any).fetch = async () => ({
+      ok: true, status: 200,
+      json: async () => ({ ai: { chatEnabled: true, guestEnabled: 'true' } })
+    }) as Response;
+    const { fetchRuntimeConfig } = require('../useRuntimeConfig');
+    const cfg = await fetchRuntimeConfig();
+    expect(cfg.ai.chatEnabled).toBe(true);
+    expect(cfg.ai.guestEnabled).toBe(false);
+    expect(cfg.ai.mcpEnabled).toBe(false);
   });
 
   test('reflects backend-supplied drivePublicPreview + googleProjectNumber; the raw key is never sent (ADR 0043 #3)', async () => {
