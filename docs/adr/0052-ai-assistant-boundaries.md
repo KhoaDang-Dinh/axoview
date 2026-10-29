@@ -1,6 +1,6 @@
 # ADR 0052 — Additive AI assistant and MCP access
 
-Status: Accepted design baseline (2026-10-29); implementation is gated.
+**Status:** Accepted design baseline (2026-10-29); implementation is gated.
 
 Axoview retains existing toolbar, canvas, explorer, sharing and Cognito. Add only a draggable AI bubble, expandable chat, down-arrow minimize, and a small **+ inside chat header**. Mount outside Cognito sign-in gate and canvas clipping. Guest, signed-in and view-only contexts have independent, server-enforced permissions. A logged-in viewer is still read-only.
 
