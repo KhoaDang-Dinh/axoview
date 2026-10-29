@@ -28,3 +28,9 @@ Add a draggable AI bubble on /app, with chat overlay, down-arrow minimize, and a
 `GET /api/config` publishes `ai` with chatEnabled, guestEnabled, diagramContextEnabled, mcpEnabled, ragEnabled, agentWriteEnabled; all default **false** and require exact server-side string `true` to enable. These advertise UI capabilities only: every future AI route must separately enforce flags and permissions.
 
 Owners: `axoview` = UI, Express AI API, diagram tools, MCP, tests; `infra_website` = Bedrock IAM, OAuth edge routing, vector/worker resources, alerts, GitOps promotion. No AI service is active at Phase 0.
+
+## Stage 1 mock UI implementation (2026-10-29)
+
+React `AssistantProvider` is mounted outside the Cognito sign-in gate. `AssistantWidget` renders a portal into document.body, outside the canvas clipping stack. A draggable 56px bubble opens a mock chat; minimize returns to the bubble. Its + menu groups the three providers and six clients. `/app/ai/connect/:clientId` is an informational setup page, not an OAuth permission grant. Chat messages stay in-memory and reset on identity change. No requests reach models.
+
+Dev demo: configure `AI_CHAT_ENABLED=true` and `AI_GUEST_ENABLED=true` locally on the **backend serving /api/config**, then restart it and refresh /app. These flags are **disabled by default in production**; they expose the mock shell only. The setup page remains informative. Do not enable without verifying the guest/login/share UI.
