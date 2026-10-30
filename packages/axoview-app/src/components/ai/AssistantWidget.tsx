@@ -4,6 +4,7 @@ import { Box, Button, IconButton, Paper, TextField, Typography } from '@mui/mate
 import { AutoAwesome, Add, KeyboardArrowDown, ArrowBack, OpenInNew, Send, SmartToy } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppStorage } from '../../providers/AppStorageContext';
+import { apiFetch } from '../../services/apiFetch';
 import { useCognitoSessionStore } from '../../stores/cognitoSessionStore';
 import {
   AI_CONNECTORS, BUBBLE_SIZE, clampBubblePosition,
@@ -32,6 +33,11 @@ export function AssistantWidget() {
   const messages = useAssistantStore((state) => state.messages);
   const sendMockMessage = useAssistantStore((state) => state.sendMockMessage);
   const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [liveMessages, setLiveMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const liveEnabled = runtimeConfig?.ai?.chatEnabled === true && signedIn;
   const pointer = useRef<{ id: number; x: number; y: number; initialX: number; initialY: number; dragged: boolean } | null>(null);
   const listEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -46,7 +52,12 @@ export function AssistantWidget() {
   useEffect(() => { listEndRef.current?.scrollIntoView({ block: 'nearest' }); }, [messages.length]);
 
   // Never let a feature flag or shared route leak a former user's mock draft.
-  useEffect(() => { setDraft(''); }, [signedIn, location.pathname]);
+  useEffect(() => {
+    setDraft('');
+    setSendError(null);
+    setLiveMessages([]);
+    setConversationId(null);
+  }, [signedIn, location.pathname]);
 
   if (!enabled || (isGuest && !guestAllowed)) return null;
 
@@ -76,11 +87,33 @@ export function AssistantWidget() {
     if (moved) persistBubblePosition(useAssistantStore.getState().position);
     else openChat();
   };
-  const submit = (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!draft.trim()) return;
-    sendMockMessage(draft);
-    setDraft('');
+    const message = draft.trim();
+    if (!message || sending) return;
+    if (!liveEnabled) {
+      sendMockMessage(message);
+      setDraft('');
+      return;
+    }
+    setSending(true);
+    setSendError(null);
+    try {
+      const response = await apiFetch('/api/ai/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, ...(conversationId ? { conversationId } : {}) })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'AI chat is unavailable');
+      setConversationId(body.conversationId);
+      setLiveMessages((messages) => [...messages, { role: 'user', text: message }, { role: 'assistant', text: body.reply }].slice(-12));
+      setDraft('');
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : 'AI chat is unavailable');
+    } finally {
+      setSending(false);
+    }
   };
   const chat = (
     <Box data-axoview-id="ai-assistant-root" sx={{ position: 'fixed', zIndex: 1400, pointerEvents: 'none', inset: 0 }}>
@@ -122,9 +155,9 @@ export function AssistantWidget() {
           {view === 'chat' ? (
             <>
               <Box sx={{ p: 2, overflowY: 'auto', overflowX: 'hidden', flex: 1 }} aria-live="polite">
-                <Typography variant="caption" color="text.secondary">Phase 1 preview — mock responses only. No model or diagram data is sent.</Typography>
+                <Typography variant="caption" color="text.secondary">{liveEnabled ? 'Nova chat · No diagram access · History retained for 30 days' : 'Guest preview only — no model or diagram data is sent.'}</Typography>
                 {isShared && <Typography sx={{ mt: 1 }} variant="caption" display="block" color="text.secondary">View-only diagram: no editing access.</Typography>}
-                {messages.map((message) => (
+                {(liveEnabled ? liveMessages.map((message, id) => ({ ...message, id })) : messages).map((message) => (
                   <Box key={message.id} sx={{ display: 'flex', justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start', my: 1 }}>
                     <Box sx={{ p: 1.25, borderRadius: 2, maxWidth: '90%',
                       bgcolor: message.role === 'user' ? 'primary.main' : 'action.hover',
@@ -133,12 +166,14 @@ export function AssistantWidget() {
                     </Box>
                   </Box>
                 ))}
+                {sendError && <Typography role="alert" variant="body2" color="error">{sendError}</Typography>}
+                {sending && <Typography variant="caption" color="text.secondary">Nova is responding…</Typography>}
                 <div ref={listEndRef} />
               </Box>
               <Box component="form" onSubmit={submit} sx={{ p: 1.5, borderTop: 1, borderColor: 'divider', display: 'flex', gap: 1 }}>
                 <TextField fullWidth size="small" label="Message" value={draft} onChange={(e) => setDraft(e.target.value)}
                   inputProps={{ maxLength: 2000 }} />
-                <IconButton type="submit" color="primary" aria-label="Send mock message" disabled={!draft.trim()}><Send /></IconButton>
+                <IconButton type="submit" color="primary" aria-label="Send message" disabled={!draft.trim() || sending}><Send /></IconButton>
               </Box>
             </>
           ) : (
