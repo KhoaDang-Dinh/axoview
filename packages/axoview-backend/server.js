@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 import * as routes from './src/routes.js';
+import { createAiChatRouter } from './src/ai/chat.js';
 import { createFsAdapter } from './src/adapters/fs.js';
 import { createAwsPublicAdapter, createAwsWorkspaceAdapter } from './src/adapters/aws.js';
 import { addWorkspaceScope } from './src/adapters/workspace.js';
@@ -437,6 +438,9 @@ app.get('/api/config', adapt(routes.getConfig, { requireStorage: false }));
 app.post('/api/auth/callback', adapt(exchangeCognitoCode, { requireStorage: false }));
 app.post('/api/auth/refresh', adapt(refreshCognitoSession, { requireStorage: false }));
 app.post('/api/auth/logout', adapt(revokeCognitoSession, { requireStorage: false }));
+
+// Phase 2: server-enforced, authenticated Bedrock chat. No guest access.
+app.use('/api/ai', createAiChatRouter());
 
 // Diagrams (`sync`: the route, for the change other devices are told about)
 app.get('/api/diagrams', adapt(routes.listDiagrams));
