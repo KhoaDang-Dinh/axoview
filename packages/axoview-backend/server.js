@@ -46,6 +46,10 @@ const DYNAMODB_TABLE = process.env.DYNAMODB_TABLE || process.env.AXOVIEW_DYNAMOD
 const ENABLE_GIT_BACKUP = process.env.ENABLE_GIT_BACKUP === 'true';
 
 // Express env exposed to route handlers (matches Worker `ctx.env`).
+// Phase 2 AI chat (src/ai/chat.js). Built once at startup; an invalid AI
+// setting only disables /api/ai. Its readiness is published in /api/config.
+const aiChatRouter = createAiChatRouter();
+
 const routeEnv = {
   STORAGE_ENABLED,
   ENABLE_GIT_BACKUP,
@@ -69,6 +73,7 @@ const routeEnv = {
   AI_MCP_ENABLED: process.env.AI_MCP_ENABLED,
   AI_RAG_ENABLED: process.env.AI_RAG_ENABLED,
   AI_AGENT_WRITE_ENABLED: process.env.AI_AGENT_WRITE_ENABLED,
+  AI_LIVE_CHAT: aiChatRouter.ready,
   PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || null
 };
 
@@ -440,7 +445,7 @@ app.post('/api/auth/refresh', adapt(refreshCognitoSession, { requireStorage: fal
 app.post('/api/auth/logout', adapt(revokeCognitoSession, { requireStorage: false }));
 
 // Phase 2: server-enforced, authenticated Bedrock chat. No guest access.
-app.use('/api/ai', createAiChatRouter());
+app.use('/api/ai', aiChatRouter);
 
 // Diagrams (`sync`: the route, for the change other devices are told about)
 app.get('/api/diagrams', adapt(routes.listDiagrams));

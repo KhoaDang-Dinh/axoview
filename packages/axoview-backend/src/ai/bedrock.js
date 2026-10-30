@@ -20,19 +20,31 @@ export class Sha256 {
 }
 
 const REGION_RE = /^[a-z]{2}(?:-gov)?-[a-z]+-\d$/;
-const MODEL_RE = /^amazon\.nova-(micro|lite|pro)-v1:0$/;
+// A Nova text model, called directly or through a cross-region inference
+// profile (geo prefix). Many regions only offer Nova through a profile:
+// ap-southeast-1 has no in-region Nova Lite, only apac.amazon.nova-lite-v1:0.
+const MODEL_RE = /^(?:(?:us|eu|apac|ca|jp|au)\.)?amazon\.nova-(?:micro|lite|pro)-v1:0$/;
 export const DEFAULT_AI_MODEL_ID = 'amazon.nova-lite-v1:0';
+const GEO_PROFILE = { ap: 'apac', eu: 'eu', us: 'us', ca: 'ca' };
+
+/** The Nova Lite ID to use in a region when none is configured: its geo inference profile. */
+export function defaultModelFor(region) {
+  const value = String(region || '');
+  if (value.includes('-gov-')) return DEFAULT_AI_MODEL_ID;
+  const geo = GEO_PROFILE[value.split('-')[0]];
+  return geo ? `${geo}.${DEFAULT_AI_MODEL_ID}` : DEFAULT_AI_MODEL_ID;
+}
 
 export function validateBedrockConfig({ region, modelId }) {
   if (!REGION_RE.test(region || '')) throw new Error('Invalid Bedrock region configuration');
   if (!MODEL_RE.test(modelId || '')) {
-    throw new Error('Use an approved Amazon Nova text model ID');
+    throw new Error('Use an approved Amazon Nova text model ID (amazon.nova-*-v1:0, or its us./eu./apac./ca./jp./au. inference profile)');
   }
 }
 
 export function createNovaClient({
   region,
-  modelId = DEFAULT_AI_MODEL_ID,
+  modelId = defaultModelFor(region),
   fetchImpl = fetch,
   credentials,
   timeoutMs = 30_000

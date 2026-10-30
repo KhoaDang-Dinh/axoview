@@ -9,7 +9,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
   DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand
 } from '@aws-sdk/lib-dynamodb';
-import { createNovaClient, DEFAULT_AI_MODEL_ID } from './bedrock.js';
+import { createNovaClient, defaultModelFor } from './bedrock.js';
 import { createGuardrail, isObviousPromptInjection, AiSafetyBlocked } from './guardrails.js';
 import { retrievePublicKnowledge, composeRagContext } from './rag.js';
 import { emitAiTelemetry } from './observability.js';
@@ -19,6 +19,9 @@ const LIMIT_HISTORY_MESSAGES = 12;
 const PROMPT_LENGTH = 2000;
 const TTL_SECONDS = 30 * 86400;
 const MAX_CONVERSATIONS = 30;
+// Pages of conversation summaries read to find the newest (TTL and the daily
+// quota bound a user to a few hundred conversations).
+const MAX_LIST_PAGES = 10;
 
 const responseError = (status, message) => Object.assign(new Error(message), { status });
 
@@ -46,7 +49,7 @@ export function createAiChatRouter({
   authMode = process.env.AUTH_MODE,
   tableName = process.env.DYNAMODB_TABLE || process.env.AXOVIEW_DYNAMODB_TABLE,
   region = process.env.AI_BEDROCK_REGION || process.env.AWS_REGION,
-  modelId = process.env.AI_BEDROCK_MODEL_ID || DEFAULT_AI_MODEL_ID,
+  modelId = process.env.AI_BEDROCK_MODEL_ID || defaultModelFor(region),
   userDailyLimit = settingsInt(process.env.AI_USER_DAILY_LIMIT, 20, 1, 100),
   globalDailyLimit = settingsInt(process.env.AI_GLOBAL_DAILY_LIMIT, 250, 1, 10000),
   ddb,
@@ -56,24 +59,47 @@ export function createAiChatRouter({
   telemetry = emitAiTelemetry,
   guardrailId = process.env.AI_GUARDRAIL_ID,
   guardrailVersion = process.env.AI_GUARDRAIL_VERSION,
-  now = () => new Date()
+  now = () => new Date(),
+  log = console
 } = {}) {
   const router = Router();
-  // Never activate the model without a configured content safety boundary.
-  const inspect = inspectGuardrail || (enabled && guardrailId && guardrailVersion && region
-    ? createGuardrail({ region, guardrailId, guardrailVersion }) : null);
-  const client = ddb || (tableName && region
-    ? DynamoDBDocumentClient.from(new DynamoDBClient({ region }), {
-      marshallOptions: { removeUndefinedValues: true }
-    }) : null);
-  // Avoid evaluating Bedrock config or requesting credentials while disabled.
-  const invoke = invokeNova || (enabled && region ? createNovaClient({ region, modelId }) : null);
+  let inspect = inspectGuardrail || null;
+  let invoke = invokeNova || null;
+  let client = ddb || null;
+  let setupProblem = null;
+  // Never activate the model without a configured content safety boundary,
+  // and never let an AI setting stop the rest of the API: an invalid model or
+  // guardrail ID disables /api/ai (503) instead of throwing at startup.
+  // Nothing is built while disabled, so no Bedrock config or credentials are
+  // evaluated then.
+  if (enabled) {
+    try {
+      if (!inspect && guardrailId && guardrailVersion && region) {
+        inspect = createGuardrail({ region, guardrailId, guardrailVersion });
+      }
+      if (!invoke && region) invoke = createNovaClient({ region, modelId });
+      if (!client && tableName && region) {
+        client = DynamoDBDocumentClient.from(new DynamoDBClient({ region }), {
+          marshallOptions: { removeUndefinedValues: true }
+        });
+      }
+    } catch (error) {
+      setupProblem = error?.message || 'invalid configuration';
+      inspect = inspectGuardrail || null;
+      invoke = invokeNova || null;
+      log.error('[ai] chat disabled, invalid configuration: %s', setupProblem);
+    }
+  }
+  // Live chat is usable only when every piece is in place; /api/config
+  // publishes this so the app keeps its mock preview until then.
+  router.ready = Boolean(enabled && authMode === 'cognito' && tableName &&
+    client && invoke && inspect && !setupProblem);
   router.use((req, res, next) => {
     if (!enabled) return res.status(404).json({ error: 'AI chat is disabled' });
     if (authMode !== 'cognito' || !req.user?.sub) {
       return res.status(401).json({ error: 'Sign in to use Axoview AI' });
     }
-    if (!tableName || !client || !invoke || !inspect) {
+    if (!router.ready) {
       return res.status(503).json({ error: 'AI chat service is not configured' });
     }
     res.setHeader('Cache-Control', 'no-store');
@@ -89,25 +115,30 @@ export function createAiChatRouter({
     return Item || null;
   };
   const wrap = (handler) => async (req, res) => {
-    const startedAt = Date.now();
-    const requestId = randomUUID();
+    const ctx = { requestId: randomUUID(), startedAt: Date.now() };
     try {
-      await handler(req, res);
+      await handler(req, res, ctx);
     } catch (error) {
-      telemetry({ requestId, stage: error instanceof AiSafetyBlocked ? 'input' : 'model',
-        result: error instanceof AiSafetyBlocked ? 'blocked' :
-          error?.status === 429 ? 'rejected' : 'error',
-        latencyMs: Date.now() - startedAt });
+      const status = typeof error?.status === 'number' ? error.status : 0;
+      const clientError = status >= 400 && status < 500;
+      const blocked = error instanceof AiSafetyBlocked;
+      telemetry({
+        requestId: ctx.requestId,
+        stage: blocked ? (error.stage === 'OUTPUT' ? 'output' : 'input')
+          : status === 429 ? 'quota'
+          : error?.name === 'ConditionalCheckFailedException' ? 'storage'
+          : clientError ? 'input' : 'model',
+        result: blocked ? 'blocked' : clientError ? 'rejected' : 'error',
+        latencyMs: Date.now() - ctx.startedAt
+      });
       if (error?.name === 'ConditionalCheckFailedException') {
         return res.status(409).json({ error: 'Conversation changed; reload and retry' });
       }
-      if (error instanceof AiSafetyBlocked) {
+      if (blocked) {
         return res.status(422).json({ error: 'Content blocked by AI safety policy' });
       }
-      if (typeof error?.status === 'number' && error.status >= 400 && error.status < 500) {
-        return res.status(error.status).json({ error: error.message });
-      }
-      console.warn('[ai] request failed: %s', error?.name || 'unknown');
+      if (clientError) return res.status(status).json({ error: error.message });
+      log.warn('[ai] request failed: %s', error?.name || 'unknown');
       return res.status(503).json({ error: 'AI service temporarily unavailable' });
     }
   };
@@ -132,6 +163,19 @@ export function createAiChatRouter({
       throw error;
     }
   };
+  const refundRequest = async (quotaPk, date) => {
+    try {
+      await client.send(new UpdateCommand({
+        TableName: tableName,
+        Key: { PK: quotaPk, SK: `DAY#${date}` },
+        UpdateExpression: 'ADD #requests :minusOne',
+        ExpressionAttributeNames: { '#requests': 'requests' },
+        ExpressionAttributeValues: { ':minusOne': -1 }
+      }));
+    } catch (error) {
+      log.warn('[ai] could not refund a quota reservation: %s', error?.name || 'unknown');
+    }
+  };
   const addUsage = async (quotaPk, date, usage) => {
     try {
       await client.send(new UpdateCommand({
@@ -144,20 +188,33 @@ export function createAiChatRouter({
         }
       }));
     } catch (error) {
-      console.warn('[ai] could not record token usage: %s', error?.name || 'unknown');
+      log.warn('[ai] could not record token usage: %s', error?.name || 'unknown');
     }
   };
 
   router.get('/conversations', wrap(async (req, res) => {
+    // Conversation keys are random UUIDs, so key order says nothing about
+    // recency: read every summary (a small projection), then take the newest.
     const actor = req.user.sub;
-    const { Items = [] } = await client.send(new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-      ExpressionAttributeValues: { ':pk': pk(actor), ':prefix': 'CHAT#' },
-      Limit: MAX_CONVERSATIONS
-    }));
+    const summaries = [];
+    let startKey;
+    for (let page = 0; page < MAX_LIST_PAGES; page++) {
+      const { Items = [], LastEvaluatedKey } = await client.send(new QueryCommand({
+        TableName: tableName,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': pk(actor), ':prefix': 'CHAT#' },
+        ProjectionExpression: 'conversationId, updatedAt, #messages[0]',
+        ExpressionAttributeNames: { '#messages': 'messages' },
+        ...(startKey ? { ExclusiveStartKey: startKey } : {})
+      }));
+      summaries.push(...Items);
+      if (!LastEvaluatedKey) break;
+      startKey = LastEvaluatedKey;
+    }
     return res.json({
-      conversations: Items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      conversations: summaries
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+        .slice(0, MAX_CONVERSATIONS)
         .map(({ conversationId, updatedAt, messages }) => ({
           conversationId, updatedAt, preview: messages?.[0]?.text?.slice(0, 100) || ''
         }))
@@ -173,16 +230,12 @@ export function createAiChatRouter({
     });
   }));
 
-  router.post('/messages', wrap(async (req, res) => {
+  router.post('/messages', wrap(async (req, res, ctx) => {
     const { message, conversationId: existingId } = validateChatInput(req.body);
     const actor = req.user.sub;
-    const requestId = randomUUID();
-    const started = Date.now();
-    if (isObviousPromptInjection(message)) {
-      telemetry({ requestId, stage: 'input', result: 'blocked' });
-      throw new AiSafetyBlocked('INPUT');
-    }
-    await inspect(message, 'INPUT');
+    // Free checks first; every paid Bedrock call (guardrail or model) comes
+    // after the quota reservation, so a user over quota costs nothing.
+    if (isObviousPromptInjection(message)) throw new AiSafetyBlocked('INPUT');
     const id = existingId || randomUUID();
     const prior = existingId ? await getChat(actor, existingId) : null;
     if (existingId && !prior) throw responseError(404, 'Conversation not found');
@@ -190,10 +243,18 @@ export function createAiChatRouter({
     const date = now();
     const day = date.toISOString().slice(0, 10);
     const expires = Math.floor(date.getTime() / 1000) + TTL_SECONDS;
-    // Distributed, atomic per-user and global ceilings BEFORE model invocation.
-    // A failure may consume one quota reservation, but cannot spend model tokens.
-    const used = await reserveRequest(`AI#QUOTA#${actor}`, userDailyLimit, day, expires);
-    await reserveRequest('AI#QUOTA#GLOBAL', globalDailyLimit, day, expires);
+    // Distributed, atomic per-user and global ceilings BEFORE any Bedrock call.
+    // A later failure keeps the reservation (conservative), but a global cap
+    // refusal gives the user's reservation back.
+    const userQuota = `AI#QUOTA#${actor}`;
+    const used = await reserveRequest(userQuota, userDailyLimit, day, expires);
+    try {
+      await reserveRequest('AI#QUOTA#GLOBAL', globalDailyLimit, day, expires);
+    } catch (error) {
+      await refundRequest(userQuota, day);
+      throw error;
+    }
+    await inspect(message, 'INPUT');
 
     const history = (prior?.messages || []).slice(-LIMIT_HISTORY_MESSAGES).map(({ role, text }) => ({ role, text }));
     // Only curated public snippets are eligible for retrieval in this phase.
@@ -233,11 +294,11 @@ export function createAiChatRouter({
       } : { ConditionExpression: 'attribute_not_exists(PK)' })
     }));
     await Promise.all([
-      addUsage(`AI#QUOTA#${actor}`, day, usage),
+      addUsage(userQuota, day, usage),
       addUsage('AI#QUOTA#GLOBAL', day, usage)
     ]);
-    telemetry({ requestId, stage: 'completed', result: 'ok',
-      latencyMs: Date.now() - started, inputTokens: usage.inputTokens,
+    telemetry({ requestId: ctx.requestId, stage: 'completed', result: 'ok',
+      latencyMs: Date.now() - ctx.startedAt, inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens, retrievedDocuments: references.length });
     return res.status(200).json({
       conversationId: id, reply, usage,

@@ -37,7 +37,9 @@ export function AssistantWidget() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [liveMessages, setLiveMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
-  const liveEnabled = runtimeConfig?.ai?.chatEnabled === true && signedIn;
+  // Real replies only when the server says live chat is fully configured;
+  // otherwise the preview keeps its mock replies instead of failing every send.
+  const liveEnabled = runtimeConfig?.ai?.liveChat === true && signedIn;
   const pointer = useRef<{ id: number; x: number; y: number; initialX: number; initialY: number; dragged: boolean } | null>(null);
   const listEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -49,7 +51,7 @@ export function AssistantWidget() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
-  useEffect(() => { listEndRef.current?.scrollIntoView({ block: 'nearest' }); }, [messages.length]);
+  useEffect(() => { listEndRef.current?.scrollIntoView({ block: 'nearest' }); }, [messages.length, liveMessages.length]);
 
   // Never let a feature flag or shared route leak a former user's mock draft.
   useEffect(() => {
@@ -104,10 +106,19 @@ export function AssistantWidget() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, ...(conversationId ? { conversationId } : {}) })
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'AI chat is unavailable');
+      // A proxy or CDN error page is not JSON: show the generic message, not a parser error.
+      const body: { error?: unknown; conversationId?: unknown; reply?: unknown } =
+        await response.json().catch(() => ({}));
+      if (!response.ok || typeof body.reply !== 'string' || typeof body.conversationId !== 'string') {
+        throw new Error(typeof body.error === 'string' ? body.error : 'AI chat is unavailable');
+      }
+      const reply = body.reply;
       setConversationId(body.conversationId);
-      setLiveMessages((messages) => [...messages, { role: 'user', text: message }, { role: 'assistant', text: body.reply }].slice(-12));
+      setLiveMessages((current) => [
+        ...current,
+        { role: 'user' as const, text: message },
+        { role: 'assistant' as const, text: reply }
+      ].slice(-12));
       setDraft('');
     } catch (error) {
       setSendError(error instanceof Error ? error.message : 'AI chat is unavailable');
