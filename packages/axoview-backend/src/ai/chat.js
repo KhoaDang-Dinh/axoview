@@ -89,9 +89,15 @@ export function createAiChatRouter({
     return Item || null;
   };
   const wrap = (handler) => async (req, res) => {
+    const startedAt = Date.now();
+    const requestId = randomUUID();
     try {
       await handler(req, res);
     } catch (error) {
+      telemetry({ requestId, stage: error instanceof AiSafetyBlocked ? 'input' : 'model',
+        result: error instanceof AiSafetyBlocked ? 'blocked' :
+          error?.status === 429 ? 'rejected' : 'error',
+        latencyMs: Date.now() - startedAt });
       if (error?.name === 'ConditionalCheckFailedException') {
         return res.status(409).json({ error: 'Conversation changed; reload and retry' });
       }
