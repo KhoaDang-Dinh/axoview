@@ -11,7 +11,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { SignatureV4 } from '@smithy/signature-v4';
 
 // SignatureV4's hash constructor is also used for HMAC signing-key derivation.
-class Sha256 {
+export class Sha256 {
   constructor(secret) {
     this.hash = secret ? createHmac('sha256', Buffer.from(secret)) : createHash('sha256');
   }
