@@ -1,5 +1,6 @@
 ---
 title: Organising a diagram
+description: Layers, stacking order, copy and paste, snap to grid and collision
 audience: public
 ---
 

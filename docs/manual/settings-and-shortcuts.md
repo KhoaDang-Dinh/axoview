@@ -1,5 +1,6 @@
 ---
 title: Settings and shortcuts
+description: Settings and every keyboard and mouse shortcut
 audience: public
 ---
 

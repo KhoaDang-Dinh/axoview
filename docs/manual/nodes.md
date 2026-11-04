@@ -1,5 +1,6 @@
 ---
 title: Items, icons and labels
+description: Adding items, icons and icon packs, names and labels, details and notes, links
 audience: public
 ---
 

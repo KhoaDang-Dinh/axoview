@@ -14,7 +14,8 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { createNovaClient, defaultModelFor } from './bedrock.js';
 import { createGuardrail, isObviousPromptInjection, AiSafetyBlocked } from './guardrails.js';
-import { retrievePublicKnowledge, composeRagContext } from './rag.js';
+import { composeRagContext } from './rag.js';
+import { docsSearchFromEnv } from './docsSearch.js';
 import { emitAiTelemetry } from './observability.js';
 import {
   composeDiagramContext, extractSuggestions, MAX_SUGGESTIONS, validateDiagramContext
@@ -118,7 +119,8 @@ export function createAiChatRouter({
   ddb,
   invokeNova,
   inspectGuardrail,
-  retrieveKnowledge = retrievePublicKnowledge,
+  // (message) -> sections: keyword + vector search of the manual (docsSearch.js).
+  retrieveKnowledge,
   telemetry = emitAiTelemetry,
   guardrailId = process.env.AI_GUARDRAIL_ID,
   guardrailVersion = process.env.AI_GUARDRAIL_VERSION,
@@ -127,6 +129,12 @@ export function createAiChatRouter({
   log = console
 } = {}) {
   const router = Router();
+  let docsSearch = null;
+  const retrieve = retrieveKnowledge || (async (message) => {
+    // Built on first use, so a disabled router never touches AWS configuration.
+    docsSearch = docsSearch || docsSearchFromEnv(process.env, { log });
+    return (await docsSearch(message, { limit: 3 })).items;
+  });
   let inspect = inspectGuardrail || null;
   let invoke = invokeNova || null;
   let client = ddb || null;
@@ -325,7 +333,7 @@ export function createAiChatRouter({
     const history = (prior?.messages || []).slice(-LIMIT_HISTORY_MESSAGES).map(({ role, text }) => ({ role, text }));
     // Only curated public snippets are eligible for retrieval in this phase.
     // They are data, not instructions; no private diagrams or workspace keys.
-    const references = retrieveKnowledge(message).filter((doc) =>
+    const references = (await retrieve(message)).filter((doc) =>
       typeof doc.id === 'string' && /^[a-z0-9_-]+$/.test(doc.id) &&
       typeof doc.text === 'string' && doc.text.length <= 900 &&
       !isObviousPromptInjection(doc.text)
