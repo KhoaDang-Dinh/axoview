@@ -763,4 +763,10 @@ export interface AxoviewRef {
    * no live canvas to speak for, such as a file explorer.
    */
   openExportImageDialog: (options?: { angle?: 'asViewed' | 'pageDefault' }) => void;
+  /**
+   * The id of the page (view) on screen, or undefined before a diagram loads.
+   * Lets a host describe "this page" to the AI assistant without reaching into
+   * the editor's stores.
+   */
+  getActiveViewId: () => string | undefined;
 }

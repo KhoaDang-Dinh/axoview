@@ -235,9 +235,10 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
         openExportImageDialog: (options) => {
           uiStateActions.setExportImageAngle(options?.angle ?? 'asViewed');
           uiStateActions.setDialog('EXPORT_IMAGE');
-        }
+        },
+        getActiveViewId: () => uiStore.getState().view || undefined
       }),
-      [load, markClean, uiStateActions]
+      [load, markClean, uiStateActions, uiStore]
     );
 
     const mergedInitialData = useMemo(() => {

@@ -1,15 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Box, Button, IconButton, Paper, TextField, Typography } from '@mui/material';
+import { Box, Button, Checkbox, FormControlLabel, IconButton, Paper, TextField, Typography } from '@mui/material';
+import { diagramAgent } from 'axoview';
 import { AutoAwesome, Add, KeyboardArrowDown, ArrowBack, OpenInNew, Send, SmartToy } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppStorage } from '../../providers/AppStorageContext';
 import { apiFetch } from '../../services/apiFetch';
 import { useCognitoSessionStore } from '../../stores/cognitoSessionStore';
+import { useAssistantPageStore } from '../../stores/assistantPageStore';
+import { SuggestionChecklist } from './SuggestionChecklist';
 import {
   AI_CONNECTORS, BUBBLE_SIZE, clampBubblePosition,
   persistBubblePosition, useAssistantStore
 } from '../../stores/assistantStore';
+
+type PlanStep = diagramAgent.PlanStep;
+
+interface LiveMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  sources?: { id: string; title: string }[];
+  /** Raw suggestions from the API, and the page they were checked against. */
+  suggestions?: unknown[];
+  viewId?: string;
+  plan?: PlanStep[];
+}
+
+const isSource = (value: unknown): value is { id: string; title: string } =>
+  typeof value === 'object' && value !== null &&
+  typeof (value as { id?: unknown }).id === 'string' && typeof (value as { title?: unknown }).title === 'string';
 
 export function AssistantWidget() {
   const { runtimeConfig, isInitialized } = useAppStorage();
@@ -36,10 +55,15 @@ export function AssistantWidget() {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [liveMessages, setLiveMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  const [liveMessages, setLiveMessages] = useState<LiveMessage[]>([]);
+  const [includePage, setIncludePage] = useState(false);
+  const readPage = useAssistantPageStore((state) => state.readPage);
   // Real replies only when the server says live chat is fully configured;
   // otherwise the preview keeps its mock replies instead of failing every send.
   const liveEnabled = runtimeConfig?.ai?.liveChat === true && signedIn;
+  // "Include this page": only where the deployment allows diagram context and
+  // there is an editable diagram open (never on a shared, view-only link).
+  const pageOption = liveEnabled && runtimeConfig?.ai?.diagramContextEnabled === true && !isShared && !!readPage;
   const pointer = useRef<{ id: number; x: number; y: number; initialX: number; initialY: number; dragged: boolean } | null>(null);
   const listEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -59,6 +83,7 @@ export function AssistantWidget() {
     setSendError(null);
     setLiveMessages([]);
     setConversationId(null);
+    setIncludePage(false);
   }, [signedIn, location.pathname]);
 
   if (!enabled || (isGuest && !guestAllowed)) return null;
@@ -98,26 +123,40 @@ export function AssistantWidget() {
       setDraft('');
       return;
     }
+    // Read the page at send time, and only if the user asked for it.
+    const page = pageOption && includePage ? readPage?.() ?? null : null;
+    if (pageOption && includePage && !page) {
+      setSendError('Open a diagram first, or untick “Include this page”.');
+      return;
+    }
     setSending(true);
     setSendError(null);
     try {
+      const diagram = page ? diagramAgent.describeDiagram(page.model, { viewId: page.viewId }) : undefined;
       const response = await apiFetch('/api/ai/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, ...(conversationId ? { conversationId } : {}) })
+        body: JSON.stringify({ message, ...(conversationId ? { conversationId } : {}), ...(diagram ? { diagram } : {}) })
       });
       // A proxy or CDN error page is not JSON: show the generic message, not a parser error.
-      const body: { error?: unknown; conversationId?: unknown; reply?: unknown } =
+      const body: { error?: unknown; conversationId?: unknown; reply?: unknown; sources?: unknown; suggestions?: unknown } =
         await response.json().catch(() => ({}));
       if (!response.ok || typeof body.reply !== 'string' || typeof body.conversationId !== 'string') {
         throw new Error(typeof body.error === 'string' ? body.error : 'AI chat is unavailable');
       }
       const reply = body.reply;
+      const sources = Array.isArray(body.sources) ? body.sources.filter(isSource).slice(0, 3) : [];
+      const suggestions = page && Array.isArray(body.suggestions) ? body.suggestions : [];
+      // Each suggestion is checked against the live page before it is shown.
+      const plan = page && suggestions.length
+        ? diagramAgent.planOperations(page.model, page.viewId ?? diagram?.page.id, suggestions)
+        : undefined;
       setConversationId(body.conversationId);
       setLiveMessages((current) => [
         ...current,
         { role: 'user' as const, text: message },
-        { role: 'assistant' as const, text: reply }
+        { role: 'assistant' as const, text: reply, sources,
+          ...(plan ? { suggestions, viewId: page?.viewId ?? diagram?.page.id, plan } : {}) }
       ].slice(-12));
       setDraft('');
     } catch (error) {
@@ -125,6 +164,12 @@ export function AssistantWidget() {
     } finally {
       setSending(false);
     }
+  };
+  const recheck = (index: number) => {
+    const page = readPage?.();
+    setLiveMessages((current) => current.map((entry, i) => (i === index && entry.suggestions && page
+      ? { ...entry, plan: diagramAgent.planOperations(page.model, entry.viewId, entry.suggestions) }
+      : entry)));
   };
   const chat = (
     <Box data-axoview-id="ai-assistant-root" sx={{ position: 'fixed', zIndex: 1400, pointerEvents: 'none', inset: 0 }}>
@@ -166,25 +211,46 @@ export function AssistantWidget() {
           {view === 'chat' ? (
             <>
               <Box sx={{ p: 2, overflowY: 'auto', overflowX: 'hidden', flex: 1 }} aria-live="polite">
-                <Typography variant="caption" color="text.secondary">{liveEnabled ? 'Nova chat · No diagram access · History retained for 30 days' : 'Guest preview only — no model or diagram data is sent.'}</Typography>
+                <Typography variant="caption" color="text.secondary">{liveEnabled
+                  ? (pageOption
+                    ? 'Nova chat · Sees your page only when “Include this page” is ticked · History kept 30 days'
+                    : 'Nova chat · No diagram access · History retained for 30 days')
+                  : 'Guest preview only — no model or diagram data is sent.'}</Typography>
                 {isShared && <Typography sx={{ mt: 1 }} variant="caption" display="block" color="text.secondary">View-only diagram: no editing access.</Typography>}
-                {(liveEnabled ? liveMessages.map((message, id) => ({ ...message, id })) : messages).map((message) => (
-                  <Box key={message.id} sx={{ display: 'flex', justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start', my: 1 }}>
-                    <Box sx={{ p: 1.25, borderRadius: 2, maxWidth: '90%',
-                      bgcolor: message.role === 'user' ? 'primary.main' : 'action.hover',
-                      color: message.role === 'user' ? 'primary.contrastText' : 'text.primary' }}>
-                      <Typography variant="body2" sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{message.text}</Typography>
+                {(liveEnabled ? liveMessages.map((message, id) => ({ ...message, id })) : messages).map((message) => {
+                  const live = message as LiveMessage & { id: number };
+                  return (
+                    <Box key={message.id} sx={{ display: 'flex', justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start', my: 1 }}>
+                      <Box sx={{ p: 1.25, borderRadius: 2, maxWidth: '90%', minWidth: 0,
+                        bgcolor: message.role === 'user' ? 'primary.main' : 'action.hover',
+                        color: message.role === 'user' ? 'primary.contrastText' : 'text.primary' }}>
+                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{message.text}</Typography>
+                        {live.plan && <SuggestionChecklist steps={live.plan} onRecheck={readPage ? () => recheck(live.id) : undefined} />}
+                        {live.sources && live.sources.length > 0 && (
+                          <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}
+                            data-axoview-id="ai-sources">
+                            From the manual: {live.sources.map((source) => source.title).join(' · ')}
+                          </Typography>
+                        )}
+                      </Box>
                     </Box>
-                  </Box>
-                ))}
+                  );
+                })}
                 {sendError && <Typography role="alert" variant="body2" color="error">{sendError}</Typography>}
                 {sending && <Typography variant="caption" color="text.secondary">Nova is responding…</Typography>}
                 <div ref={listEndRef} />
               </Box>
-              <Box component="form" onSubmit={submit} sx={{ p: 1.5, borderTop: 1, borderColor: 'divider', display: 'flex', gap: 1 }}>
-                <TextField fullWidth size="small" label="Message" value={draft} onChange={(e) => setDraft(e.target.value)}
-                  inputProps={{ maxLength: 2000 }} />
-                <IconButton type="submit" color="primary" aria-label="Send message" disabled={!draft.trim() || sending}><Send /></IconButton>
+              <Box component="form" onSubmit={submit} sx={{ p: 1.5, borderTop: 1, borderColor: 'divider' }}>
+                {pageOption && (
+                  <FormControlLabel sx={{ ml: 0, mb: 0.5 }} data-axoview-id="ai-include-page"
+                    control={<Checkbox size="small" checked={includePage} onChange={(e) => setIncludePage(e.target.checked)} />}
+                    label={<Typography variant="caption">Include this page (item names, connections and text) for suggestions</Typography>} />
+                )}
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <TextField fullWidth size="small" label="Message" value={draft} onChange={(e) => setDraft(e.target.value)}
+                    inputProps={{ maxLength: 2000 }} />
+                  <IconButton type="submit" color="primary" aria-label="Send message" disabled={!draft.trim() || sending}><Send /></IconButton>
+                </Box>
               </Box>
             </>
           ) : (
