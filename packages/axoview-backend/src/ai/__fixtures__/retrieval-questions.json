@@ -1,0 +1,227 @@
+{
+  "description": "Questions and the manual section that answers each. regression: written with the section keywords; held_out: written after them and never tuned against. Used by __tests__/rag.eval.spec.js (keyword search, in CI) and src/cli/eval-docs-search.js (the deployed hybrid search).",
+  "regression": [
+    {
+      "question": "How do I connect two servers with a line?",
+      "section": "connectors-connecting-two-items"
+    },
+    {
+      "question": "how to draw an arrow between items",
+      "section": "connectors-connecting-two-items"
+    },
+    {
+      "question": "change a connector to dashed",
+      "section": "connectors-connector-colour-and-line-style"
+    },
+    {
+      "question": "how do I add a waypoint to bend a connector",
+      "section": "connectors-rerouting-a-connector"
+    },
+    {
+      "question": "remove a waypoint from a connection",
+      "section": "connectors-rerouting-a-connector"
+    },
+    {
+      "question": "put a label on a connection",
+      "section": "connectors-naming-a-connector-and-adding-labels"
+    },
+    {
+      "question": "where are the AWS icons",
+      "section": "nodes-icon-packs"
+    },
+    {
+      "question": "add a database icon to my diagram",
+      "section": "nodes-adding-an-item"
+    },
+    {
+      "question": "can I upload my own icon png",
+      "section": "nodes-importing-your-own-icons"
+    },
+    {
+      "question": "what is the difference between name and label",
+      "section": "nodes-name-and-label"
+    },
+    {
+      "question": "change the icon of a node",
+      "section": "nodes-changing-an-item-s-icon"
+    },
+    {
+      "question": "draw a box around my VPC",
+      "section": "shapes-and-text-drawing-a-rectangle"
+    },
+    {
+      "question": "make a bulleted list in a text box",
+      "section": "shapes-and-text-formatting-text-in-a-text-box"
+    },
+    {
+      "question": "hide a layer",
+      "section": "organising-layers"
+    },
+    {
+      "question": "bring an item to the front",
+      "section": "organising-stacking-order"
+    },
+    {
+      "question": "items overlap each other, turn off collision",
+      "section": "organising-snap-to-grid-and-collision"
+    },
+    {
+      "question": "rotate the isometric view",
+      "section": "canvas-rotating-the-isometric-view"
+    },
+    {
+      "question": "switch to a flat 2D view",
+      "section": "canvas-switching-between-2d-and-isometric"
+    },
+    {
+      "question": "how do I move around the canvas",
+      "section": "canvas-panning-moving-around"
+    },
+    {
+      "question": "select multiple items at once",
+      "section": "canvas-selecting-items"
+    },
+    {
+      "question": "undo my last change",
+      "section": "canvas-undo-and-redo"
+    },
+    {
+      "question": "export my diagram as a PNG image",
+      "section": "sharing-and-export-exporting-an-image"
+    },
+    {
+      "question": "back up all my diagrams as a zip",
+      "section": "sharing-and-export-exporting-a-diagram-file-or-a-whole-project"
+    },
+    {
+      "question": "import a json file",
+      "section": "sharing-and-export-importing"
+    },
+    {
+      "question": "share a read only link with my team",
+      "section": "sharing-and-export-sharing-a-view-only-link"
+    },
+    {
+      "question": "present my diagram in a meeting",
+      "section": "sharing-and-export-presenting"
+    },
+    {
+      "question": "draw on the diagram while presenting",
+      "section": "sharing-and-export-annotating"
+    },
+    {
+      "question": "add another page to the diagram",
+      "section": "getting-started-pages"
+    },
+    {
+      "question": "how do I save",
+      "section": "getting-started-saving"
+    },
+    {
+      "question": "what keyboard shortcuts are there for tools",
+      "section": "settings-and-shortcuts-tool-keys"
+    },
+    {
+      "question": "change the language",
+      "section": "settings-and-shortcuts-settings"
+    },
+    {
+      "question": "how many AI messages can I send per day",
+      "section": "ai-assistant-limits"
+    },
+    {
+      "question": "does the assistant see my diagram",
+      "section": "ai-assistant-getting-suggestions-for-your-diagram"
+    },
+    {
+      "question": "connect Claude or ChatGPT to the Axoview manual",
+      "section": "ai-assistant-using-this-manual-from-other-ai-tools"
+    },
+    {
+      "question": "delete a connection between two items",
+      "section": "connectors-deleting-a-connector"
+    }
+  ],
+  "held_out": [
+    {
+      "question": "my lines are too thin, make them thicker",
+      "section": "connectors-connector-colour-and-line-style"
+    },
+    {
+      "question": "I want a kubernetes pod icon",
+      "section": "nodes-icon-packs"
+    },
+    {
+      "question": "how can I show where my private subnet is",
+      "section": "shapes-and-text-drawing-a-rectangle"
+    },
+    {
+      "question": "send the diagram to someone without letting them edit",
+      "section": "sharing-and-export-sharing-a-view-only-link"
+    },
+    {
+      "question": "the text under my server icon is wrong",
+      "section": "nodes-name-and-label"
+    },
+    {
+      "question": "can I write notes on a node that are not shown",
+      "section": "nodes-item-details-and-notes"
+    },
+    {
+      "question": "diagram is too big, I cannot see everything",
+      "section": "canvas-zooming"
+    },
+    {
+      "question": "download an svg",
+      "section": "sharing-and-export-exporting-an-image"
+    },
+    {
+      "question": "where did my diagrams go after I log in",
+      "section": "getting-started-signing-in"
+    },
+    {
+      "question": "put the database behind the server icon",
+      "section": "organising-stacking-order"
+    },
+    {
+      "question": "the end of my arrow is not attached to anything",
+      "section": "connectors-attaching-a-loose-end"
+    },
+    {
+      "question": "make a legend explaining colours",
+      "section": "shapes-and-text-adding-a-text-box"
+    },
+    {
+      "question": "is my chat history stored",
+      "section": "ai-assistant-what-is-sent-and-kept"
+    },
+    {
+      "question": "open a diagram from a file on my computer",
+      "section": "sharing-and-export-importing"
+    },
+    {
+      "question": "turn on azure icons",
+      "section": "nodes-icon-packs"
+    },
+    {
+      "question": "keyboard shortcut to delete",
+      "section": "settings-and-shortcuts-editing-shortcuts"
+    },
+    {
+      "question": "link a node to another diagram",
+      "section": "nodes-linking-an-item"
+    },
+    {
+      "question": "change text colour of a label",
+      "section": "nodes-showing-hiding-and-styling-a-label"
+    },
+    {
+      "question": "create a folder for my diagrams",
+      "section": "getting-started-the-diagrams-panel"
+    },
+    {
+      "question": "make the connection go around another icon",
+      "section": "connectors-rerouting-a-connector"
+    }
+  ]
+}

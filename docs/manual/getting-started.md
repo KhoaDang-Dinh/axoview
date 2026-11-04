@@ -1,5 +1,6 @@
 ---
 title: Getting started
+description: Signing in, the Diagrams panel, creating and saving diagrams, pages
 audience: public
 ---
 

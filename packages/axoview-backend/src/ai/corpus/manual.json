@@ -1,6 +1,6 @@
 {
   "description": "Generated from docs/manual by `npm run ai:manual` in packages/axoview-backend. Do not edit.",
-  "version": "e938e9aaf411",
+  "version": "46e58203183d",
   "chunks": [
     {
       "id": "ai-assistant-what-the-assistant-does",
@@ -57,6 +57,24 @@
         "limit"
       ],
       "hash": "51b80526b24c"
+    },
+    {
+      "id": "ai-assistant-using-this-manual-from-other-ai-tools",
+      "title": "The AI assistant › Using this manual from other AI tools",
+      "text": "The manual is public, so any AI tool can read it:\n\n- As files: /llms.txt on the Axoview site lists every page, and\n  /llms-full.txt holds the whole manual as one text file. Each page is also at\n  /docs/manual/<page>.md.\n- Over MCP: where the site offers it, add https://<your Axoview site>/api/mcp\n  as a remote MCP server in Claude, ChatGPT, Gemini CLI or another MCP client. It\n  needs no sign-in and has two read-only tools: search_manual finds the\n  sections that answer a question, and get_manual_section returns one section.\n\nNeither gives access to your diagrams or your account: only this manual.",
+      "source": "docs/manual/ai-assistant.md#using-this-manual-from-other-ai-tools",
+      "audience": "public",
+      "keywords": [
+        "chatgpt",
+        "claude",
+        "gemini",
+        "mcp",
+        "llms.txt",
+        "other ai",
+        "connect my ai",
+        "api"
+      ],
+      "hash": "bcefcb4e2a26"
     },
     {
       "id": "canvas-zooming",

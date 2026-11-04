@@ -1,5 +1,6 @@
 ---
 title: Connectors
+description: Connecting items, rerouting, waypoints, connector names, labels and styles, deleting
 audience: public
 ---
 

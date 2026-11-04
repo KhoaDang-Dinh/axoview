@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 
 import * as routes from './src/routes.js';
 import { createAiChatRouter } from './src/ai/chat.js';
+import { createMcpRouter } from './src/ai/mcp.js';
 import { createFsAdapter } from './src/adapters/fs.js';
 import { createAwsPublicAdapter, createAwsWorkspaceAdapter } from './src/adapters/aws.js';
 import { addWorkspaceScope } from './src/adapters/workspace.js';
@@ -200,6 +201,9 @@ function isPublicRoute(req) {
   // Always-public endpoints. Per ADR 0010 D6, the public namespace is read-only;
   // both endpoints are GET-only to match the Worker (packages/axoview-worker/src/auth.ts).
   if (req.method === 'GET' && req.path === '/api/config') return true;
+  // The public manual over MCP (src/ai/mcp.js): read-only, public docs only,
+  // and a 404 unless AI_MCP_DOCS_ENABLED is true.
+  if (req.path === '/api/mcp') return true;
   if (req.method === 'GET' && PUBLIC_SNAPSHOT_RE.test(req.path)) return true;
   if (
     req.method === 'POST' &&
@@ -446,6 +450,7 @@ app.post('/api/auth/logout', adapt(revokeCognitoSession, { requireStorage: false
 
 // Phase 2: server-enforced, authenticated Bedrock chat. No guest access.
 app.use('/api/ai', aiChatRouter);
+app.use('/api/mcp', createMcpRouter());
 
 // Diagrams (`sync`: the route, for the change other devices are told about)
 app.get('/api/diagrams', adapt(routes.listDiagrams));

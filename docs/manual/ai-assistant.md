@@ -1,5 +1,6 @@
 ---
 title: The AI assistant
+description: The AI assistant: answers, page suggestions, privacy and limits; the manual for other AI tools
 audience: public
 ---
 
@@ -42,3 +43,19 @@ Without **Include this page**, nothing from your diagram is sent.
 Each account has a daily number of AI requests (20 unless your site sets
 another); the count resets at midnight UTC. Messages are up to 2,000 characters.
 When the limit is reached the assistant says so until the next day.
+
+## Using this manual from other AI tools
+
+<!-- keywords: chatgpt, claude, gemini, mcp, llms.txt, other ai, connect my ai, api -->
+
+The manual is public, so any AI tool can read it:
+
+- **As files:** `/llms.txt` on the Axoview site lists every page, and
+  `/llms-full.txt` holds the whole manual as one text file. Each page is also at
+  `/docs/manual/<page>.md`.
+- **Over MCP:** where the site offers it, add `https://<your Axoview site>/api/mcp`
+  as a remote MCP server in Claude, ChatGPT, Gemini CLI or another MCP client. It
+  needs no sign-in and has two read-only tools: `search_manual` finds the
+  sections that answer a question, and `get_manual_section` returns one section.
+
+Neither gives access to your diagrams or your account: only this manual.
