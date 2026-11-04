@@ -42,6 +42,8 @@ export function validateBedrockConfig({ region, modelId }) {
   }
 }
 
+export const DEFAULT_SYSTEM_PROMPT = 'You are the Axoview assistant. Answer general questions concisely. You currently have no access to diagrams, files, external tools, or private workspace data. Do not claim otherwise.';
+
 export function createNovaClient({
   region,
   modelId = defaultModelFor(region),
@@ -60,11 +62,11 @@ export function createNovaClient({
   const hostname = `bedrock-runtime.${region}.amazonaws.com`;
   const path = `/model/${encodeURIComponent(modelId)}/converse`;
 
-  return async function invokeNova(messages) {
+  return async function invokeNova(messages, { system = DEFAULT_SYSTEM_PROMPT, maxTokens = 384 } = {}) {
     const body = JSON.stringify({
       messages: messages.map(({ role, text }) => ({ role, content: [{ text }] })),
-      system: [{ text: 'You are the Axoview assistant. Answer general questions concisely. You currently have no access to diagrams, files, external tools, or private workspace data. Do not claim otherwise.' }],
-      inferenceConfig: { maxTokens: 384, temperature: 0.3 }
+      system: [{ text: system }],
+      inferenceConfig: { maxTokens: Math.min(Math.max(1, maxTokens), 2048), temperature: 0.3 }
     });
     const signed = await signer.sign({
       protocol: 'https:',

@@ -39,6 +39,7 @@ import { notificationStore } from '../stores/notificationStore';
 import { sequentialName } from '../utils/fileOperations';
 import { apiBaseUrl } from '../utils/apiBaseUrl';
 import { exportAsJSON } from 'axoview';
+import { useAssistantPageStore } from '../stores/assistantPageStore';
 import {
   CORE_ICONS,
   getBundledCatalog,
@@ -512,6 +513,15 @@ export function DiagramLifecycleProvider({
   const isAfterLoadRef = useRef(true);
   const currentModelRef = useRef<DiagramData | null>(null);
   useEffect(() => { currentModelRef.current = currentModel; }, [currentModel]);
+  // The AI assistant reads the open page only when the user asks it to
+  // ("Include this page"), at that moment; nothing is pushed to it.
+  useEffect(() => {
+    const { setReadPage } = useAssistantPageStore.getState();
+    setReadPage(() => (currentModelRef.current
+      ? { model: currentModelRef.current as unknown as Model, viewId: axoviewRef.current?.getActiveViewId() }
+      : null));
+    return () => setReadPage(null);
+  }, []);
 
   const currentDiagramRef = useRef<SavedDiagram | null>(null);
   useEffect(() => { currentDiagramRef.current = currentDiagram; }, [currentDiagram]);

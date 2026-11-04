@@ -4,6 +4,7 @@ export const version = PACKAGE_VERSION;
 export * as reducers from 'src/stores/reducers';
 export { INITIAL_DATA, INITIAL_SCENE_STATE } from 'src/config';
 export * from 'src/schemas';
+export * as diagramAgent from 'src/agent';
 export type {
   AxoviewProps,
   InitialData,

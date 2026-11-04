@@ -1,6 +1,6 @@
 {
   "description": "Generated from docs/manual by `npm run ai:manual` in packages/axoview-backend. Do not edit.",
-  "version": "d07b534804e1",
+  "version": "e938e9aaf411",
   "chunks": [
     {
       "id": "ai-assistant-what-the-assistant-does",
@@ -229,6 +229,20 @@
         "arrowhead"
       ],
       "hash": "2b8b439335f2"
+    },
+    {
+      "id": "connectors-deleting-a-connector",
+      "title": "Connectors › Deleting a connector",
+      "text": "Click the connector's line to select it, then press Delete (Backspace on\nMac) or choose Delete in its context menu. The items it joined stay where\nthey are. Ctrl+Z brings the connector back.",
+      "source": "docs/manual/connectors.md#deleting-a-connector",
+      "audience": "public",
+      "keywords": [
+        "remove connection",
+        "delete line",
+        "disconnect",
+        "unlink"
+      ],
+      "hash": "594855a80e2a"
     },
     {
       "id": "getting-started-what-axoview-is",
