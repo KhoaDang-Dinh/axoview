@@ -21,7 +21,7 @@ describe('fetchRuntimeConfig', () => {
     const cfg = await fetchRuntimeConfig();
     expect(cfg.authMode).toBe('none');
     expect(cfg.ai).toEqual({
-      chatEnabled: false, guestEnabled: false, diagramContextEnabled: false,
+      chatEnabled: false, liveChat: false, guestEnabled: false, diagramContextEnabled: false,
       mcpEnabled: false, ragEnabled: false, agentWriteEnabled: false
     });
     expect(cfg.serverStorage).toBe(false);
@@ -34,11 +34,12 @@ describe('fetchRuntimeConfig', () => {
   test('missing and malformed AI flags remain disabled', async () => {
     (global as any).fetch = async () => ({
       ok: true, status: 200,
-      json: async () => ({ ai: { chatEnabled: true, guestEnabled: 'true' } })
+      json: async () => ({ ai: { chatEnabled: true, liveChat: 'true', guestEnabled: 'true' } })
     }) as Response;
     const { fetchRuntimeConfig } = require('../useRuntimeConfig');
     const cfg = await fetchRuntimeConfig();
     expect(cfg.ai.chatEnabled).toBe(true);
+    expect(cfg.ai.liveChat).toBe(false);
     expect(cfg.ai.guestEnabled).toBe(false);
     expect(cfg.ai.mcpEnabled).toBe(false);
   });

@@ -38,6 +38,8 @@ export interface RuntimeConfig {
   publicBaseUrl: string | null;
   ai: {
     chatEnabled: boolean;
+    /** Real model replies: the server has chat fully configured (Phase 2). */
+    liveChat: boolean;
     guestEnabled: boolean;
     diagramContextEnabled: boolean;
     mcpEnabled: boolean;
@@ -72,6 +74,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   publicBaseUrl: null,
   ai: {
     chatEnabled: false,
+    liveChat: false,
     guestEnabled: false,
     diagramContextEnabled: false,
     mcpEnabled: false,
@@ -129,6 +132,7 @@ export async function fetchRuntimeConfig(): Promise<RuntimeConfig> {
         // Missing/malformed capability values fail closed.
         ai: {
           chatEnabled: data.ai?.chatEnabled === true,
+          liveChat: data.ai?.chatEnabled === true && data.ai?.liveChat === true,
           guestEnabled: data.ai?.guestEnabled === true,
           diagramContextEnabled: data.ai?.diagramContextEnabled === true,
           mcpEnabled: data.ai?.mcpEnabled === true,

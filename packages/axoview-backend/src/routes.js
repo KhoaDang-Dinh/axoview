@@ -210,6 +210,10 @@ export function getConfig(_adapter, ctx) {
       // the existing behaviour.
       ai: {
         chatEnabled: env.AI_CHAT_ENABLED === 'true',
+        // Real model replies (Phase 2): chat enabled AND fully configured
+        // (Cognito, table, model, guardrail). Otherwise the app shows its
+        // mock preview instead of failing every message.
+        liveChat: env.AI_LIVE_CHAT === true,
         guestEnabled: env.AI_GUEST_ENABLED === 'true',
         diagramContextEnabled: env.AI_DIAGRAM_CONTEXT_ENABLED === 'true',
         mcpEnabled: env.AI_MCP_ENABLED === 'true',

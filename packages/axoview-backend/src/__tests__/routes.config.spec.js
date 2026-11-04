@@ -16,6 +16,7 @@ describe('getConfig', () => {
       publicBaseUrl: null,
       ai: {
         chatEnabled: false,
+        liveChat: false,
         guestEnabled: false,
         diagramContextEnabled: false,
         mcpEnabled: false,
@@ -34,9 +35,16 @@ describe('getConfig', () => {
       AI_MCP_ENABLED: 'true', AI_RAG_ENABLED: true
     }})).body.ai;
     expect(flags).toEqual({
-      chatEnabled: true, guestEnabled: false, diagramContextEnabled: false,
+      chatEnabled: true, liveChat: false, guestEnabled: false, diagramContextEnabled: false,
       mcpEnabled: true, ragEnabled: false, agentWriteEnabled: false
     });
+  });
+
+  test('liveChat comes only from the router readiness (a boolean), never from a string', () => {
+    const live = (value) => getConfig(null, makeCtx({ env: { AI_CHAT_ENABLED: 'true', AI_LIVE_CHAT: value } })).body.ai.liveChat;
+    expect(live(true)).toBe(true);
+    expect(live('true')).toBe(false);
+    expect(live(undefined)).toBe(false);
   });
 
   test('surfaces PUBLIC_BASE_URL so the app can mint canonical links', () => {
