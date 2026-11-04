@@ -13,7 +13,7 @@ test('retrieval returns only bounded public source IDs, not private diagrams', (
   const docs = retrievePublicKnowledge('How do I export project ZIP?', { limit: 3 });
   expect(docs.length).toBeGreaterThan(0);
   expect(docs.every((doc) => /^[a-z0-9_-]+$/.test(doc.id))).toBe(true);
-  expect(composeRagContext(docs)).toContain('[source:export]');
+  expect(composeRagContext(docs)).toContain('[source:sharing-and-export-exporting-a-diagram-file-or-a-whole-project]');
 });
 
 test('telemetry omits user content and identifiers', () => {

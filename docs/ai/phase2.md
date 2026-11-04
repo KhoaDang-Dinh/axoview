@@ -1,6 +1,6 @@
 # Phase 2 — Bedrock Nova authenticated chat
 
-Status: feature branch, not a production release. This slice implements ordinary synchronous general chat only. No diagram read, RAG, external MCP OAuth, agent tools, SSE, or write operations.
+Status: merged to dev. Synchronous chat that answers from the user manual ([rag.md](rag.md): public sections only, cited by id). No diagram read, external MCP OAuth, agent tools, SSE, or write operations in this slice.
 
 ## Endpoint
 - POST /api/ai/messages with `{ message, conversationId? }` -> `{ conversationId, reply, usage, requestsRemainingToday }`
