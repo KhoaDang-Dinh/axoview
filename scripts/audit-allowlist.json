@@ -40,7 +40,12 @@
     "lockfile) or \"backend\" (packages/axoview-backend/package-lock.json, prod deps",
     "only: the tree the Docker image installs). Use [\"root\", \"backend\"] when the",
     "advisory is in both. An entry without `scope` covers \"root\" only, so a",
-    "dev-only acceptance can never silently cover a package the image ships."
+    "dev-only acceptance can never silently cover a package the image ships.",
+    "",
+    "2026-11-04 (AI manual PR #40): GHSA-g3hv-75wg-m249 (minimatch, moderate) was",
+    "published that day. Its range is every release below 11.0.1 and every locked",
+    "copy comes from dev tooling (eslint, jest, typescript-eslint, madge, nodemon,",
+    "semantic-release's npm), so it is allowlisted below rather than forced to 11."
   ],
   "allow": [
     {
@@ -65,6 +70,18 @@
       "tripwire": "Re-review immediately if deepmerge enters a production tree or any runtime code merges user-supplied objects with it. Drop this entry once a patched deepmerge ships or jest stops depending on it.",
       "acceptedOn": "2026-10-29",
       "reviewBy": "2027-01-29"
+    },
+    {
+      "id": "GHSA-g3hv-75wg-m249",
+      "package": "minimatch",
+      "title": "minimatch has potential denial of service via globparts amplification",
+      "shipped": false,
+      "scope": "root",
+      "why": "Every locked minimatch (3.1.5, 10.2.4-10.2.6) is marked dev in the root lockfile, under eslint/@eslint/*, jest's glob and test-exclude, @typescript-eslint/typescript-estree, madge's detective-typescript, nodemon and semantic-release's bundled npm; `npm ls minimatch --omit=dev` is empty and the backend's production tree (check-audit [backend]) has no advisory. No Axoview source file or script imports minimatch. The amplification needs an attacker-chosen glob pattern; these tools only expand patterns written in this repo's own configs (eslint.config.mjs, jest configs, madge/knip settings), so no outside input reaches it. It is in neither browser bundle nor the Docker image.",
+      "noForwardFix": "The fix is minimatch 11.0.1, a major release none of these tools accepts yet; npm's only offered remedy is a breaking semantic-release downgrade to 20.1.3.",
+      "tripwire": "Re-review immediately if minimatch enters a production tree, or any runtime code or CI step expands a glob taken from user or PR-author input (for example a workflow that globs a path from an issue or PR body). Drop this entry once eslint, jest and the others move to minimatch >= 11.0.1.",
+      "acceptedOn": "2026-11-04",
+      "reviewBy": "2027-02-04"
     }
   ]
 }

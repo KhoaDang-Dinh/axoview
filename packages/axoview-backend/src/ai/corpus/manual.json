@@ -1,0 +1,708 @@
+{
+  "description": "Generated from docs/manual by `npm run ai:manual` in packages/axoview-backend. Do not edit.",
+  "version": "d07b534804e1",
+  "chunks": [
+    {
+      "id": "ai-assistant-what-the-assistant-does",
+      "title": "The AI assistant › What the assistant does",
+      "text": "The Axoview AI button (bottom right, signed-in users) opens a chat. Ask how to do\nsomething in Axoview and it answers from this manual, citing the sections it\nused. Ask about your diagram and it can suggest changes as a checklist. It never\nedits your diagram: you make every change yourself.",
+      "source": "docs/manual/ai-assistant.md#what-the-assistant-does",
+      "audience": "public",
+      "keywords": [],
+      "hash": "7e6fa813199f"
+    },
+    {
+      "id": "ai-assistant-getting-suggestions-for-your-diagram",
+      "title": "The AI assistant › Getting suggestions for your diagram",
+      "text": "Tick Include this page before sending. The assistant then sees the open\npage's item names, icons, connections, rectangles and text, and can suggest\nsteps such as \"Connect Web server to Database\" or \"Group API and Worker in a\nrectangle called Private subnet\". Each suggestion is checked against your page:\none that refers to something that is not there is shown as not applicable, with\nthe reason. Tick suggestions off as you make them.\n\nWithout Include this page, nothing from your diagram is sent.",
+      "source": "docs/manual/ai-assistant.md#getting-suggestions-for-your-diagram",
+      "audience": "public",
+      "keywords": [
+        "see my diagram",
+        "review",
+        "improve",
+        "recommend",
+        "suggestions",
+        "include this page"
+      ],
+      "hash": "eadedefbd63b"
+    },
+    {
+      "id": "ai-assistant-what-is-sent-and-kept",
+      "title": "The AI assistant › What is sent and kept",
+      "text": "- Your message, and the page summary when you include it, are sent to Amazon\n  Nova through Amazon Bedrock and checked by a content-safety guardrail.\n- The conversation (your messages and the replies) is kept for 30 days. The page\n  summary is used for that one reply and is not stored.\n- Prompts and replies are never written to the service logs.",
+      "source": "docs/manual/ai-assistant.md#what-is-sent-and-kept",
+      "audience": "public",
+      "keywords": [
+        "privacy",
+        "data",
+        "stored",
+        "retention",
+        "logged"
+      ],
+      "hash": "8152769c132d"
+    },
+    {
+      "id": "ai-assistant-limits",
+      "title": "The AI assistant › Limits",
+      "text": "Each account has a daily number of AI requests (20 unless your site sets\nanother); the count resets at midnight UTC. Messages are up to 2,000 characters.\nWhen the limit is reached the assistant says so until the next day.",
+      "source": "docs/manual/ai-assistant.md#limits",
+      "audience": "public",
+      "keywords": [
+        "how many",
+        "per day",
+        "messages",
+        "quota",
+        "daily",
+        "limit"
+      ],
+      "hash": "51b80526b24c"
+    },
+    {
+      "id": "canvas-zooming",
+      "title": "Working with the canvas › Zooming",
+      "text": "Scroll the mouse wheel to zoom. By default the zoom moves toward the cursor; turn\noff Zoom to Cursor in Settings → Canvas to zoom around the centre instead.\nThe zoom controls (bottom right) have Zoom in, Zoom out and Fit to\nscreen. Keep labels readable keeps label text a readable size when you\nzoom far out.",
+      "source": "docs/manual/canvas.md#zooming",
+      "audience": "public",
+      "keywords": [
+        "zoom in",
+        "zoom out",
+        "magnify",
+        "fit",
+        "scale"
+      ],
+      "hash": "fe0dc38b099a"
+    },
+    {
+      "id": "canvas-panning-moving-around",
+      "title": "Working with the canvas › Panning (moving around)",
+      "text": "- Hold the right mouse button and drag, or drag with the middle button.\n- The arrow keys nudge the canvas.\n- The Pan tool (hotkey M) makes a left-drag pan. A right-click without\n  dragging toggles pan mode; a left-click returns to select.",
+      "source": "docs/manual/canvas.md#panning-moving-around",
+      "audience": "public",
+      "keywords": [
+        "move around",
+        "scroll",
+        "navigate",
+        "drag canvas"
+      ],
+      "hash": "294b86ead8b7"
+    },
+    {
+      "id": "canvas-rotating-the-isometric-view",
+      "title": "Working with the canvas › Rotating the isometric view",
+      "text": "- Q turns the floor 15° counter-clockwise and E 15° clockwise; with\n  Shift they jump to the next quarter turn.\n- Alt + drag orbits freely; hold Shift while orbiting to snap to 15°.\n- The rotation controls show the current angle. Set as page default makes\n  this page open at that angle for everyone; Unpin page default returns it to\n  0°. Both are one undo step.\n\nRotation is only available in the isometric view.",
+      "source": "docs/manual/canvas.md#rotating-the-isometric-view",
+      "audience": "public",
+      "keywords": [
+        "rotate",
+        "turn",
+        "angle",
+        "orbit",
+        "spin"
+      ],
+      "hash": "d7584f78723c"
+    },
+    {
+      "id": "canvas-switching-between-2d-and-isometric",
+      "title": "Working with the canvas › Switching between 2D and isometric",
+      "text": "The tool menu has Switch to 2D view and Switch to isometric view. The\ndiagram is the same; only the projection changes.",
+      "source": "docs/manual/canvas.md#switching-between-2d-and-isometric",
+      "audience": "public",
+      "keywords": [
+        "flat",
+        "2d",
+        "top-down",
+        "isometric",
+        "3d",
+        "projection"
+      ],
+      "hash": "ffac17944719"
+    },
+    {
+      "id": "canvas-selecting-items",
+      "title": "Working with the canvas › Selecting items",
+      "text": "- Click an item to select it; click empty canvas to clear the selection.\n- Ctrl/Cmd + click adds or removes an item from the selection.\n- Drag on empty canvas, or use the Lasso select tool (L), to draw a\n  selection box. Freehand lasso (F) selects everything inside a shape\n  you draw.\n- Ctrl+A selects every visible, unlocked item on the page.\n- Once several items are selected, drag inside the selection to move them\n  together.\n- The Select tool (S) returns to normal selection.",
+      "source": "docs/manual/canvas.md#selecting-items",
+      "audience": "public",
+      "keywords": [
+        "multiple",
+        "multi-select",
+        "select many",
+        "box select",
+        "lasso"
+      ],
+      "hash": "3190336086c6"
+    },
+    {
+      "id": "canvas-the-context-menu",
+      "title": "Working with the canvas › The context menu",
+      "text": "Right-click without dragging (long-press on touch) to open the context menu: the\nitem menu over an item, the canvas menu over empty space. It has Details…,\nRename, Add/edit note, Add label, Cut, Copy, Paste,\nDuplicate, stacking order, Assign to layer, grid and collision options\nand Delete.",
+      "source": "docs/manual/canvas.md#the-context-menu",
+      "audience": "public",
+      "keywords": [],
+      "hash": "57549c78e7d8"
+    },
+    {
+      "id": "canvas-undo-and-redo",
+      "title": "Working with the canvas › Undo and redo",
+      "text": "Ctrl+Z undoes; Ctrl+Y or Ctrl+Shift+Z redoes (Cmd on Mac). The tool\nmenu also has Undo and Redo buttons. Deleting, cutting, pasting and\nchanging a page's default angle can all be undone.",
+      "source": "docs/manual/canvas.md#undo-and-redo",
+      "audience": "public",
+      "keywords": [
+        "undo",
+        "redo",
+        "mistake",
+        "revert",
+        "go back"
+      ],
+      "hash": "34a201f80bfc"
+    },
+    {
+      "id": "connectors-connecting-two-items",
+      "title": "Connectors › Connecting two items",
+      "text": "Press C or click Connector in the tool menu. Then, in the default click\nmode, click the first item (or a point on the canvas) and then the second item.\nIn drag mode, drag from the first item to the second. Esc cancels.\n\nChoose the mode in Settings → Connector Settings → Connection Creation\nMode: Click Mode (Recommended) or Drag Mode. The tool menu also shows\nClick / Drag while the connector tool is active.",
+      "source": "docs/manual/connectors.md#connecting-two-items",
+      "audience": "public",
+      "keywords": [
+        "arrow",
+        "line",
+        "link",
+        "join",
+        "draw a connection",
+        "relationship",
+        "edge"
+      ],
+      "hash": "344fed820235"
+    },
+    {
+      "id": "connectors-rerouting-a-connector",
+      "title": "Connectors › Rerouting a connector",
+      "text": "Select the connector, then click a point on its line and drag: this adds a\nwaypoint or moves an existing one. Alt + click a waypoint removes it (the\nconnector does not need to be selected); the two ends stay attached.",
+      "source": "docs/manual/connectors.md#rerouting-a-connector",
+      "audience": "public",
+      "keywords": [
+        "bend",
+        "waypoint",
+        "route",
+        "path",
+        "anchor",
+        "curve"
+      ],
+      "hash": "848ebdf8a888"
+    },
+    {
+      "id": "connectors-attaching-a-loose-end",
+      "title": "Connectors › Attaching a loose end",
+      "text": "If a connector end is not attached to an item, drag that end onto the item you\nwant it connected to.",
+      "source": "docs/manual/connectors.md#attaching-a-loose-end",
+      "audience": "public",
+      "keywords": [],
+      "hash": "b35ddd3cfbc3"
+    },
+    {
+      "id": "connectors-naming-a-connector-and-adding-labels",
+      "title": "Connectors › Naming a connector and adding labels",
+      "text": "Double-click a connector (or Details…) to open its panel:\n\n- Name is the connector's main text (for example \"HTTPS\" or \"writes to\").\n- Labels → Add label adds extra text along the line. Drag a label on\n  the canvas to move it along the connector; use the top bar for its text size\n  and colour. On double lines, choose Line 1 or Line 2.\n- Notes holds longer text that is not drawn.",
+      "source": "docs/manual/connectors.md#naming-a-connector-and-adding-labels",
+      "audience": "public",
+      "keywords": [
+        "label on a connection",
+        "edge label",
+        "text on a line",
+        "protocol"
+      ],
+      "hash": "db69aa78e654"
+    },
+    {
+      "id": "connectors-connector-colour-and-line-style",
+      "title": "Connectors › Connector colour and line style",
+      "text": "Select a connector and use the top bar:\n\n- Connection color sets its colour.\n- Line options → Line style (solid, dotted, dashed), Line type\n  (single, double, double with circle), Width and Show arrow.\n\nWith the connector tool active and nothing selected, the same controls set the\ncolour and line style of the next connector you draw.",
+      "source": "docs/manual/connectors.md#connector-colour-and-line-style",
+      "audience": "public",
+      "keywords": [
+        "dashed",
+        "dotted",
+        "colour",
+        "color",
+        "thickness",
+        "double line",
+        "arrowhead"
+      ],
+      "hash": "2b8b439335f2"
+    },
+    {
+      "id": "getting-started-what-axoview-is",
+      "title": "Getting started › What Axoview is",
+      "text": "Axoview is a diagram editor for isometric (3D-looking) and flat 2D diagrams of\ncloud, network and software architecture. It ships with general icons and AWS,\nGoogle Cloud, Azure and Kubernetes icon packs. You draw by placing items (icons),\njoining them with connectors, and grouping them with rectangles, text boxes and\nlabels.",
+      "source": "docs/manual/getting-started.md#what-axoview-is",
+      "audience": "public",
+      "keywords": [],
+      "hash": "4d3f7b347f43"
+    },
+    {
+      "id": "getting-started-signing-in",
+      "title": "Getting started › Signing in",
+      "text": "On the hosted Axoview site the editor opens at /app and asks you to sign in\nfirst. Sign in with your Axoview account, or with Google when the sign-in page\noffers it. Your diagrams are then kept on the server under your account, so they\nare there the next time you sign in from any browser.\n\nTo sign out, open the account menu (your user name, top right) and choose\nSign out.",
+      "source": "docs/manual/getting-started.md#signing-in",
+      "audience": "public",
+      "keywords": [
+        "login",
+        "log in",
+        "sign out",
+        "account",
+        "password",
+        "google"
+      ],
+      "hash": "311fc454a25b"
+    },
+    {
+      "id": "getting-started-the-diagrams-panel",
+      "title": "Getting started › The Diagrams panel",
+      "text": "The left dock holds four panels: File explorer (Diagrams), Elements,\nLayers and Settings. The Diagrams panel lists your diagrams under\nThis server. Its toolbar has New diagram, New folder, Import,\nExport project, Refresh and Collapse all.\n\n- Click a diagram to open it.\n- Right-click a diagram for Open, Rename, Duplicate, Copy share\n  link, Export as image…, Export as JSON and Delete.\n- Right-click a folder for New diagram, New folder, Rename,\n  Export folder… and Delete. Deleting a folder also deletes the\n  diagrams inside it; Axoview asks first.\n\nThe Elements and Layers panels say \"open or create a diagram first\" until a\ndiagram is open.",
+      "source": "docs/manual/getting-started.md#the-diagrams-panel",
+      "audience": "public",
+      "keywords": [],
+      "hash": "83000c874195"
+    },
+    {
+      "id": "getting-started-creating-a-diagram",
+      "title": "Getting started › Creating a diagram",
+      "text": "Click New diagram in the Diagrams panel (or on the empty start screen). Give\nit a name; you can rename it later from the page tabs (pencil, Rename\ndiagram) or with F2 when nothing is selected.",
+      "source": "docs/manual/getting-started.md#creating-a-diagram",
+      "audience": "public",
+      "keywords": [
+        "new diagram",
+        "start",
+        "create",
+        "blank"
+      ],
+      "hash": "38810d4882ef"
+    },
+    {
+      "id": "getting-started-saving",
+      "title": "Getting started › Saving",
+      "text": "The status area at the top shows whether the open diagram is saved: Saved at\na time, Modified or Unsaved. Press Ctrl+S (Cmd+S on Mac) or use\nSave to save it. Ctrl+O (Cmd+O) opens a diagram.",
+      "source": "docs/manual/getting-started.md#saving",
+      "audience": "public",
+      "keywords": [
+        "save",
+        "autosave",
+        "unsaved",
+        "keep my work"
+      ],
+      "hash": "09f78f8acc37"
+    },
+    {
+      "id": "getting-started-pages",
+      "title": "Getting started › Pages",
+      "text": "A diagram can have up to five pages, shown as tabs along the bottom of the\ncanvas. Each page is a separate drawing that shares the diagram's items list.\n\n- Add page (the + after the tabs) adds one; at five pages the button says\n  \"Page limit reached (5)\".\n- The pencil on a tab renames it; the bin, Delete page, removes it.",
+      "source": "docs/manual/getting-started.md#pages",
+      "audience": "public",
+      "keywords": [
+        "page",
+        "tab",
+        "another page",
+        "multiple pages"
+      ],
+      "hash": "099d349711f1"
+    },
+    {
+      "id": "nodes-adding-an-item",
+      "title": "Items, icons and labels › Adding an item",
+      "text": "Press N or click Add item in the tool menu to open the Elements\npanel. Search for an icon (Search icons), then drag it onto the canvas or\nclick it and click where it should go. RECENTLY USED lists the icons you\nplaced most recently.",
+      "source": "docs/manual/nodes.md#adding-an-item",
+      "audience": "public",
+      "keywords": [
+        "add icon",
+        "place",
+        "server",
+        "database",
+        "node",
+        "insert",
+        "shape library"
+      ],
+      "hash": "864b1b81a7b1"
+    },
+    {
+      "id": "nodes-icon-packs",
+      "title": "Items, icons and labels › Icon packs",
+      "text": "The core icon set is always loaded. AWS Icons, Google Cloud Icons,\nAzure Icons and Kubernetes Icons are extra packs you can turn on or off\nin Settings → Icon Pack Management. With Enable Lazy Loading on, a pack\nloads the first time it is needed, which makes startup faster.",
+      "source": "docs/manual/nodes.md#icon-packs",
+      "audience": "public",
+      "keywords": [
+        "aws",
+        "gcp",
+        "google cloud",
+        "azure",
+        "kubernetes",
+        "k8s",
+        "cloud icons"
+      ],
+      "hash": "e46b0a0f2383"
+    },
+    {
+      "id": "nodes-importing-your-own-icons",
+      "title": "Items, icons and labels › Importing your own icons",
+      "text": "In the Elements panel, Import Icons adds PNG or SVG images as icons. Tick\nTreat as isometric (3D view) for icons drawn in isometric perspective; untick\nit for flat logos and UI elements. Generate icons with AI copies a prompt you\ncan paste into an image generator; replace \"my object\" with what you need and\nimport the PNG it makes.",
+      "source": "docs/manual/nodes.md#importing-your-own-icons",
+      "audience": "public",
+      "keywords": [
+        "upload",
+        "custom icon",
+        "png",
+        "svg",
+        "own image",
+        "logo"
+      ],
+      "hash": "4930efab773b"
+    },
+    {
+      "id": "nodes-name-and-label",
+      "title": "Items, icons and labels › Name and label",
+      "text": "Every item has a Name and a Label (double-click the item, or\nDetails…, to see both under Metadata).\n\n- The Name identifies the item; it is what the Layers panel lists.\n- The Label is the text drawn on the canvas next to the item.\n\nRenaming in the Layers panel does not change the label on the canvas. F2 or\nRename in the context menu renames the selected item inline.",
+      "source": "docs/manual/nodes.md#name-and-label",
+      "audience": "public",
+      "keywords": [
+        "difference",
+        "caption",
+        "title",
+        "identity"
+      ],
+      "hash": "c33bacef47bf"
+    },
+    {
+      "id": "nodes-showing-hiding-and-styling-a-label",
+      "title": "Items, icons and labels › Showing, hiding and styling a label",
+      "text": "With an item selected, the top bar has Show label / Hide label, Label\nsize, Text color and Bold / italic / underline / strikethrough. With\nseveral items selected, size and colour apply to all of them.",
+      "source": "docs/manual/nodes.md#showing-hiding-and-styling-a-label",
+      "audience": "public",
+      "keywords": [],
+      "hash": "e39c907a6149"
+    },
+    {
+      "id": "nodes-item-details-and-notes",
+      "title": "Items, icons and labels › Item details and notes",
+      "text": "Double-click an item (or choose Details…) to open its details panel, with\nits name, label and Notes. Add/edit note in the context menu goes\nstraight to the notes. Notes are saved with the diagram.",
+      "source": "docs/manual/nodes.md#item-details-and-notes",
+      "audience": "public",
+      "keywords": [
+        "description",
+        "metadata",
+        "comment",
+        "notes"
+      ],
+      "hash": "18cc64f00f56"
+    },
+    {
+      "id": "nodes-changing-an-item-s-icon",
+      "title": "Items, icons and labels › Changing an item's icon",
+      "text": "Select one item and use Change icon in the top bar. It changes one item at a\ntime.",
+      "source": "docs/manual/nodes.md#changing-an-item-s-icon",
+      "audience": "public",
+      "keywords": [
+        "swap icon",
+        "replace icon",
+        "different icon"
+      ],
+      "hash": "15ea8b3f4afc"
+    },
+    {
+      "id": "nodes-linking-an-item",
+      "title": "Items, icons and labels › Linking an item",
+      "text": "Select an item and use Link in the top bar: Link to web takes a URL,\nLink to diagram searches your other diagrams. Open linked diagram follows\nthe link.",
+      "source": "docs/manual/nodes.md#linking-an-item",
+      "audience": "public",
+      "keywords": [
+        "hyperlink",
+        "url",
+        "link to another diagram",
+        "drill down"
+      ],
+      "hash": "eac3cbed6b7e"
+    },
+    {
+      "id": "nodes-deleting-an-item",
+      "title": "Items, icons and labels › Deleting an item",
+      "text": "Select it and press Delete (Backspace on Mac), or choose Delete in the\ncontext menu. Connectors attached to it are removed too. Ctrl+Z brings it\nback.",
+      "source": "docs/manual/nodes.md#deleting-an-item",
+      "audience": "public",
+      "keywords": [
+        "remove",
+        "delete node",
+        "erase"
+      ],
+      "hash": "0690d7ea2b64"
+    },
+    {
+      "id": "organising-layers",
+      "title": "Organising a diagram › Layers",
+      "text": "Open the Layers panel from the left dock. Add layer (+) creates a layer;\nitems are assigned with Assign to layer in the context menu, or by dragging\nthem in the panel. Items with no layer appear under Unassigned; drop items\nthere to unassign them.\n\nHide a layer to hide everything on it. Deleting a layer asks what to do with its\ncontents: Keep contents (they become unassigned and visible) or Delete\ncontents too.",
+      "source": "docs/manual/organising.md#layers",
+      "audience": "public",
+      "keywords": [
+        "hide",
+        "show",
+        "visibility",
+        "group items",
+        "layer"
+      ],
+      "hash": "6daad95ec2ef"
+    },
+    {
+      "id": "organising-stacking-order",
+      "title": "Organising a diagram › Stacking order",
+      "text": "When items overlap, the context menu's Bring forward, Send backward,\nBring to front and Send to back change which is on top. Shortcuts:\nCtrl+] brings forward and Ctrl+[ sends backward; add Shift to jump\nto the front or back.",
+      "source": "docs/manual/organising.md#stacking-order",
+      "audience": "public",
+      "keywords": [
+        "front",
+        "back",
+        "z-order",
+        "on top",
+        "behind",
+        "overlap order"
+      ],
+      "hash": "c867f7f335ee"
+    },
+    {
+      "id": "organising-copy-cut-paste-and-duplicate",
+      "title": "Organising a diagram › Copy, cut, paste and duplicate",
+      "text": "Ctrl+C copies and Ctrl+X cuts the selection; Ctrl+V pastes at the\nmouse position, offset so it does not land on top of the original. Connectors\nbetween copied items are copied with them. Duplicate in the context menu\ncopies and pastes in one step.",
+      "source": "docs/manual/organising.md#copy-cut-paste-and-duplicate",
+      "audience": "public",
+      "keywords": [
+        "copy",
+        "paste",
+        "clone",
+        "duplicate"
+      ],
+      "hash": "649001350ef0"
+    },
+    {
+      "id": "organising-snap-to-grid-and-collision",
+      "title": "Organising a diagram › Snap to grid and collision",
+      "text": "By default items snap to the grid and do not overlap. In the context menu,\nUnsnap from grid lets an item sit between grid points, and Disable\ncollision lets it overlap others. Enable snap to grid / Disable snap to\ngrid in the canvas menu change the default for new items.",
+      "source": "docs/manual/organising.md#snap-to-grid-and-collision",
+      "audience": "public",
+      "keywords": [
+        "overlap",
+        "collision",
+        "grid",
+        "snap",
+        "free placement"
+      ],
+      "hash": "98f79b409174"
+    },
+    {
+      "id": "settings-and-shortcuts-settings",
+      "title": "Settings and shortcuts › Settings",
+      "text": "Open Settings from the left dock.\n\n- Language: the interface language.\n- Zoom: Zoom to Cursor on or off.\n- Connector Settings: Click Mode or Drag Mode for drawing connectors.\n- Icon Pack Management: turn the AWS, Google Cloud, Azure and Kubernetes\n  packs on or off, and Enable Lazy Loading.\n- Labels: Expand Button Padding.\n\nF1 (or Help in the zoom controls) opens Keyboard Shortcuts & Help\nwith the full list below.",
+      "source": "docs/manual/settings-and-shortcuts.md#settings",
+      "audience": "public",
+      "keywords": [
+        "preferences",
+        "language",
+        "options",
+        "configure"
+      ],
+      "hash": "8320f944a453"
+    },
+    {
+      "id": "settings-and-shortcuts-tool-keys",
+      "title": "Settings and shortcuts › Tool keys",
+      "text": "Tool keys work when you are not typing in a text field.\n\nKey — Tool\nS — Select\nM — Pan\nN — Add item (Elements panel)\nR — Rectangle\nC — Connector\nT — Text\nL — Lasso select\nF — Freehand lasso\nEsc — Cancel the current tool",
+      "source": "docs/manual/settings-and-shortcuts.md#tool-keys",
+      "audience": "public",
+      "keywords": [
+        "hotkey",
+        "keyboard shortcut",
+        "key",
+        "tool"
+      ],
+      "hash": "7616f2653071"
+    },
+    {
+      "id": "settings-and-shortcuts-editing-shortcuts",
+      "title": "Settings and shortcuts › Editing shortcuts",
+      "text": "Shortcut — Action\nCtrl+Z — Undo\nCtrl+Y or Ctrl+Shift+Z — Redo\nCtrl+X / Ctrl+C / Ctrl+V — Cut / copy / paste\nCtrl+A — Select all\nDelete (Backspace on Mac) — Delete the selection\nF2 — Rename the selected item, or the diagram\nCtrl+] / Ctrl+[ — Bring forward / send backward (add Shift: to front / to back)\nCtrl+S / Ctrl+O — Save / open a diagram\nQ / E — Rotate the view 15° (Shift: quarter turn)\nF1 — Help\n\nUse Cmd instead of Ctrl on a Mac.",
+      "source": "docs/manual/settings-and-shortcuts.md#editing-shortcuts",
+      "audience": "public",
+      "keywords": [],
+      "hash": "130610b36378"
+    },
+    {
+      "id": "settings-and-shortcuts-mouse-and-touch",
+      "title": "Settings and shortcuts › Mouse and touch",
+      "text": "Action — Does\nClick — Select an item; click empty canvas to deselect\nDouble-click — Open the item's details\nCtrl/Cmd + click — Add to or remove from the selection\nDrag on empty canvas — Selection box\nRight-drag or middle-drag — Pan\nRight-click (long-press on touch) — Context menu\nScroll wheel — Zoom\nAlt + drag — Orbit the view (Shift snaps to 15°)\nAlt + click a waypoint — Remove the waypoint",
+      "source": "docs/manual/settings-and-shortcuts.md#mouse-and-touch",
+      "audience": "public",
+      "keywords": [],
+      "hash": "cc774ea80c41"
+    },
+    {
+      "id": "shapes-and-text-drawing-a-rectangle",
+      "title": "Rectangles, text boxes and labels › Drawing a rectangle",
+      "text": "Press R or click Rectangle in the tool menu, then drag on the canvas.\nRectangles mark areas such as a VPC, a subnet, a region or a team boundary; they\nsit under the items placed on them. Esc cancels.",
+      "source": "docs/manual/shapes-and-text.md#drawing-a-rectangle",
+      "audience": "public",
+      "keywords": [
+        "box",
+        "area",
+        "zone",
+        "group",
+        "vpc",
+        "subnet",
+        "region",
+        "boundary",
+        "container"
+      ],
+      "hash": "de1576e28f3c"
+    },
+    {
+      "id": "shapes-and-text-styling-a-rectangle",
+      "title": "Rectangles, text boxes and labels › Styling a rectangle",
+      "text": "Select it and use the top bar: Background color with Opacity, and\nBorder (Line style, Width, Border color). Give it a name in its\ndetails panel; the name is what the Layers panel shows.",
+      "source": "docs/manual/shapes-and-text.md#styling-a-rectangle",
+      "audience": "public",
+      "keywords": [],
+      "hash": "305a5c13953a"
+    },
+    {
+      "id": "shapes-and-text-adding-a-text-box",
+      "title": "Rectangles, text boxes and labels › Adding a text box",
+      "text": "Press T or click Text in the tool menu, then click where the text should\ngo and type. Esc cancels. Text boxes hold paragraphs, so use them for\nexplanations and legends.",
+      "source": "docs/manual/shapes-and-text.md#adding-a-text-box",
+      "audience": "public",
+      "keywords": [
+        "text",
+        "paragraph",
+        "legend",
+        "description",
+        "write"
+      ],
+      "hash": "8f6d1d7a94ce"
+    },
+    {
+      "id": "shapes-and-text-formatting-text-in-a-text-box",
+      "title": "Rectangles, text boxes and labels › Formatting text in a text box",
+      "text": "While editing a text box, the top bar offers Text size, Line spacing,\nAlignment (left, centre, right; top, middle, bottom), Text color, Bold\n/ italic / underline / strikethrough, Bulleted list and Numbered list.\nSelect text and use Link selected text to add a link. Background color\nand Border style the box itself; Fit to text in the context menu resizes\nit to its content.",
+      "source": "docs/manual/shapes-and-text.md#formatting-text-in-a-text-box",
+      "audience": "public",
+      "keywords": [
+        "bullet",
+        "bulleted list",
+        "numbered list",
+        "bold",
+        "font size",
+        "align"
+      ],
+      "hash": "f01151564f01"
+    },
+    {
+      "id": "shapes-and-text-floating-labels",
+      "title": "Rectangles, text boxes and labels › Floating labels",
+      "text": "A label is free text placed anywhere on the canvas, for example a title above a\ngroup. Click Label in the tool menu and click to place it, or choose Add\nlabel in the canvas context menu. Labels can have a background colour and a\nlink.",
+      "source": "docs/manual/shapes-and-text.md#floating-labels",
+      "audience": "public",
+      "keywords": [
+        "title",
+        "heading",
+        "caption",
+        "free text"
+      ],
+      "hash": "47fabf46fb0c"
+    },
+    {
+      "id": "sharing-and-export-sharing-a-view-only-link",
+      "title": "Sharing, presenting and exporting › Sharing a view-only link",
+      "text": "Save the diagram, then click Share. Axoview creates a link; Copy puts it\non the clipboard. Anyone with the link can view the diagram read-only: they see\nthe saved snapshot and cannot edit it or see your other diagrams. Copy share\nlink in a diagram's menu in the Diagrams panel copies the link again later.",
+      "source": "docs/manual/sharing-and-export.md#sharing-a-view-only-link",
+      "audience": "public",
+      "keywords": [
+        "share",
+        "read only",
+        "link",
+        "team",
+        "colleague",
+        "publish"
+      ],
+      "hash": "5d6385442829"
+    },
+    {
+      "id": "sharing-and-export-presenting",
+      "title": "Sharing, presenting and exporting › Presenting",
+      "text": "Present (or Save & Present when there are unsaved changes) shows the\ndiagram without the editing tools. In present mode you can switch Layers on\nand off (Solo shows one layer alone), Hide labels, and click an item to\nsee its details. Back to editing returns to the editor.",
+      "source": "docs/manual/sharing-and-export.md#presenting",
+      "audience": "public",
+      "keywords": [
+        "present",
+        "meeting",
+        "slideshow",
+        "demo",
+        "fullscreen"
+      ],
+      "hash": "ce60e0090a05"
+    },
+    {
+      "id": "sharing-and-export-annotating",
+      "title": "Sharing, presenting and exporting › Annotating",
+      "text": "The Annotate pen (top right of the canvas) opens a palette with Pencil,\nHighlighter, Line, Arrow, Rectangle, Ellipse, Eraser,\nUndo, Redo and Clear all. Annotations are for pointing things out\nwhile presenting: they follow pan and zoom, stay until you clear them or reload\nthe page, and are never saved into the diagram or its exports.",
+      "source": "docs/manual/sharing-and-export.md#annotating",
+      "audience": "public",
+      "keywords": [
+        "draw",
+        "pen",
+        "highlight",
+        "mark up",
+        "annotate"
+      ],
+      "hash": "90d96b771785"
+    },
+    {
+      "id": "sharing-and-export-exporting-an-image",
+      "title": "Sharing, presenting and exporting › Exporting an image",
+      "text": "Export → Export Image opens the image export. Choose the Angle (as\nviewed, or the page default), Show grid, Show labels, Background\ncolor or Transparent background, Crop to content and the Export\nQuality (DPI), then Download as PNG or Download as SVG. Chrome or Edge\ngive the best results.",
+      "source": "docs/manual/sharing-and-export.md#exporting-an-image",
+      "audience": "public",
+      "keywords": [
+        "png",
+        "svg",
+        "picture",
+        "screenshot",
+        "image"
+      ],
+      "hash": "9477a12c9c23"
+    },
+    {
+      "id": "sharing-and-export-exporting-a-diagram-file-or-a-whole-project",
+      "title": "Sharing, presenting and exporting › Exporting a diagram file or a whole project",
+      "text": "- Export → Export JSON downloads the open diagram as a .json file.\n- Export → Export Project (.zip), or Export project in the Diagrams\n  panel, downloads every diagram in a folder structure as one .zip.\n\nUse these to keep a copy outside Axoview or to move diagrams to another site.",
+      "source": "docs/manual/sharing-and-export.md#exporting-a-diagram-file-or-a-whole-project",
+      "audience": "public",
+      "keywords": [
+        "backup",
+        "zip",
+        "all diagrams",
+        "download",
+        "json",
+        "save a copy"
+      ],
+      "hash": "90a9635658f7"
+    },
+    {
+      "id": "sharing-and-export-importing",
+      "title": "Sharing, presenting and exporting › Importing",
+      "text": "Import in the Diagrams panel (or on the start screen) loads a diagram .json\nor a project .zip exported from Axoview. Anything else is rejected with\n\"This file isn't a valid Axoview diagram.\"",
+      "source": "docs/manual/sharing-and-export.md#importing",
+      "audience": "public",
+      "keywords": [
+        "import",
+        "open file",
+        "upload diagram",
+        "json",
+        "zip"
+      ],
+      "hash": "304414e80eb9"
+    }
+  ]
+}
