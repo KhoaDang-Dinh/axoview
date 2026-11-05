@@ -1,5 +1,6 @@
 ---
 title: Working with the canvas
+description: Zoom, pan, rotate, 2D and isometric views, selecting, the context menu, undo
 audience: public
 ---
 

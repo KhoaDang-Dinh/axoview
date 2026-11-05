@@ -1,5 +1,6 @@
 ---
 title: Sharing, presenting and exporting
+description: Share links, present mode, annotations, image and file export, import
 audience: public
 ---
 

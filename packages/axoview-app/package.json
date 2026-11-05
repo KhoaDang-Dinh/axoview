@@ -26,9 +26,9 @@
   },
   "scripts": {
     "prebuild": "node scripts/generateMaterialIconPack.js && cd ../.. && npm run build:lib",
-    "prestart": "node scripts/generateMaterialIconPack.js",
+    "prestart": "node scripts/generateMaterialIconPack.js && node ../../scripts/build-public-docs.mjs",
     "start": "rsbuild dev",
-    "build": "rsbuild build",
+    "build": "node ../../scripts/build-public-docs.mjs && rsbuild build",
     "preview": "rsbuild preview",
     "preview:r1": "node scripts/preview-r1.mjs",
     "og:image": "node scripts/generate-og-image.mjs",

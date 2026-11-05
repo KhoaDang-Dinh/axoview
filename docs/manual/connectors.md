@@ -1,5 +1,6 @@
 ---
 title: Connectors
+description: Connecting items, rerouting, waypoints, connector names, labels and styles, deleting
 audience: public
 ---
 
@@ -54,3 +55,11 @@ Select a connector and use the top bar:
 
 With the connector tool active and nothing selected, the same controls set the
 colour and line style of the next connector you draw.
+
+## Deleting a connector
+
+<!-- keywords: remove connection, delete line, disconnect, unlink -->
+
+Click the connector's line to select it, then press **Delete** (Backspace on
+Mac) or choose **Delete** in its context menu. The items it joined stay where
+they are. **Ctrl+Z** brings the connector back.

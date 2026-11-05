@@ -71,3 +71,30 @@ describe('chunking', () => {
       .toThrow(/Duplicate manual chunk id a-same/);
   });
 });
+
+describe('public manual files (scripts/build-public-docs.mjs)', () => {
+  test('every page, llms.txt and llms-full.txt, without front matter or authoring comments', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { mkdtempSync, readFileSync: read, readdirSync: list, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const out = mkdtempSync(`${tmpdir()}/axoview-public-docs-`);
+    try {
+      execFileSync('node', [fileURLToPath(new URL('../../../../../scripts/build-public-docs.mjs', import.meta.url)), out]);
+      const pageFiles = pages().filter(({ fileName }) => fileName !== 'README.md').map(({ fileName }) => fileName);
+      expect(list(`${out}/docs/manual`).sort()).toEqual(pageFiles.sort());
+      const llms = read(`${out}/llms.txt`, 'utf8');
+      expect(llms.startsWith('# Axoview\n\n> ')).toBe(true);
+      for (const file of pageFiles) expect(llms).toContain(`(/docs/manual/${file})`);
+      for (const file of pageFiles) {
+        const text = read(`${out}/docs/manual/${file}`, 'utf8');
+        expect(text.startsWith('# ')).toBe(true);
+        expect(text).not.toMatch(/<!--\s*keywords|^---$/m);
+      }
+      const full = read(`${out}/llms-full.txt`, 'utf8');
+      expect(full).toContain('## Connecting two items');
+      expect(full).not.toContain('keywords:');
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+});

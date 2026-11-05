@@ -1,6 +1,6 @@
 # Phase 2 — Bedrock Nova authenticated chat
 
-Status: merged to dev. Synchronous chat that answers from the user manual ([rag.md](rag.md): public sections only, cited by id). No diagram read, external MCP OAuth, agent tools, SSE, or write operations in this slice.
+Status: merged to dev. Synchronous chat that answers from the user manual ([rag.md](rag.md): public sections only, cited by id). With `AI_DIAGRAM_CONTEXT_ENABLED=true` a message may include the open page and the reply may carry suggested changes, shown as a checklist ([ADR 0052 addendum 2026-11-04](../adr/0052-ai-assistant-boundaries.md)). No external MCP OAuth, agent tools, SSE, or write operations.
 
 ## Endpoint
 - POST /api/ai/messages with `{ message, conversationId? }` -> `{ conversationId, reply, usage, requestsRemainingToday }`

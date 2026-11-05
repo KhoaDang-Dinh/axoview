@@ -1,5 +1,6 @@
 ---
 title: Rectangles, text boxes and labels
+description: Rectangles, text boxes, floating labels and text formatting
 audience: public
 ---
 

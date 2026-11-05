@@ -13,3 +13,58 @@ All Phase 0 feature flags are false by default. No AI UI, model invocation, MCP 
 Rationale: additive delivery, strong share isolation, limited costs, flag rollback and compatibility with GitOps and canary.
 
 Details: [AI implementation contracts](../ai/README.md).
+
+## Addendum — 2026-11-04: diagram primitives, recommend before write
+
+**Decision.** The diagram operations an agent may use are defined once, in
+axoview-lib (`src/agent`, exported as `diagramAgent` from the Node-safe
+standalone bundle): a small semantic vocabulary (`add_node`, `rename_node`,
+`set_notes`, `remove_node`, `connect`, `disconnect`, `group`, `add_note`) that
+names items the way a person does, never tiles, anchors or colours.
+
+- `describeDiagram` turns one page into bounded data for a model: names, icons,
+  connections, rectangle membership and page text. Never notes, links or
+  styling.
+- `planOperations` checks proposed operations against the live page without
+  changing it, in order (a later step sees what an earlier one adds), and turns
+  each into a step with a reason it does not apply, or how to do it by hand.
+- `applyOperations` performs the ready steps on a copy and refuses to return a
+  model the schema rejects. **It is not wired to any UI or API.**
+
+The assistant only **recommends**: with `AI_DIAGRAM_CONTEXT_ENABLED`, the user
+may tick "Include this page", the API passes the description to the model as
+nonce-marked data (guardrail-checked, never stored), the model may end its reply
+with a `suggestions` block, the API keeps only operations that pass its
+validator, and the app shows them as a checklist the user carries out.
+
+**Why.** Recommending first proves the vocabulary, the page description and the
+prompt on real diagrams while a wrong suggestion costs nothing. Writes later
+reuse the same three functions behind approval, undo and version checks; the
+MCP write tools expose the same vocabulary rather than a second one.
+
+**Contract.** The API checks suggestions with a dependency-free copy of the
+vocabulary's shape rules; `packages/axoview-backend/src/ai/__fixtures__/suggestions.contract.json`
+is asserted by both test suites so the two cannot drift. Answers about using
+Axoview come from the user manual ([docs/ai/rag.md](../ai/rag.md)).
+
+## Addendum — 2026-11-04: the manual as public RAG for every AI
+
+**Decision.** The user manual is public reference material, available to any AI
+three ways from one source (`docs/manual`):
+
+1. **The assistant** retrieves it by keyword and vector search fused by rank
+   (Cohere Embed Multilingual v3 and S3 Vectors in the environment's region).
+2. **Any MCP client** can search and read it at `/api/mcp`, with no sign-in. The
+   endpoint has two read-only tools, follows MCP 2026-07-28, and also answers
+   legacy `initialize` clients.
+3. **Any AI or crawler** can read `/llms.txt`, `/llms-full.txt` and
+   `/docs/manual/*.md`, built with the app.
+
+**Boundary.** This anonymous MCP surface exposes only the shipped public corpus.
+It never touches diagrams, accounts or a model, and the query text is never
+logged. Workspace MCP stays behind OAuth as designed above.
+
+Paid work (embedding a query) is capped per pod per day. Past the cap, search is
+keyword-only. The vector side fails open to keyword search. Index entries carry
+keys, not text, so a stale or tampered index cannot change what is returned.
+Writing to the index is a separate Job role; the API can only query it.

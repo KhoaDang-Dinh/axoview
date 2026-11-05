@@ -13,6 +13,10 @@ import { readFileSync } from 'node:fs';
 
 const MANUAL = JSON.parse(readFileSync(new URL('./corpus/manual.json', import.meta.url), 'utf8'));
 
+/** Every chunk the image ships, whatever its audience (the docs indexer's input). */
+export const MANUAL_CHUNKS = Object.freeze(MANUAL.chunks.map((chunk) => Object.freeze({ ...chunk })));
+export const MANUAL_VERSION = MANUAL.version;
+
 export const PUBLIC_KNOWLEDGE = Object.freeze(MANUAL.chunks
   .filter((chunk) => chunk.audience === 'public')
   .map((chunk) => Object.freeze({ ...chunk })));

@@ -12,7 +12,7 @@ Add a draggable AI bubble on /app, with chat overlay, down-arrow minimize, and a
 | 1 | Mock chat UI, bubble, + menu | Drag/click/keyboard/mobile; guest, login, public share E2E |
 | 2 | Bedrock general chat, quotas, history | User isolation, guest abuse limits |
 | 3 | HTTP run commands, SSE and durable status | Reconnection, idempotency, cancellation |
-| 4 | Diagram context | Authorized owner and exact shared snapshot; no leakage |
+| 4 | Diagram context: **recommendations built** (`AI_DIAGRAM_CONTEXT_ENABLED`, off by default). The user opts in per message ("Include this page"); the app sends `describeDiagram` of its open page, the model suggests operations, the app checks them with `planOperations` and shows a checklist; nothing is written ([ADR 0052 addendum 2026-11-04](../adr/0052-ai-assistant-boundaries.md)) | Authorized owner and exact shared snapshot; no leakage; page description never stored; suggestion contract shared by API and lib |
 | 5 | Remote MCP + OAuth | External client compatibility, read-only, revoke |
 | 6 | Public docs and private RAG | Current ACL recheck after retrieval |
 | 7 | Agent tools, approval-gated writes | Proposal/version bound approvals; denied in view-only |
