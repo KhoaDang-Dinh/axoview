@@ -19,7 +19,7 @@ let nextPort = 3560;
 const running = [];
 let dir;
 
-async function startServer() {
+async function startServer(extraEnv = {}) {
   const port = nextPort++;
   const child = spawn(process.execPath, [SERVER], {
     env: {
@@ -29,7 +29,8 @@ async function startServer() {
       STORAGE_PATH: dir,
       ENABLE_SERVER_STORAGE: 'true',
       AUTH_MODE: 'none',
-      SYNC_HEARTBEAT_MS: '500'
+      SYNC_HEARTBEAT_MS: '500',
+      ...extraEnv
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -48,7 +49,7 @@ async function startServer() {
     }
     await new Promise((r) => setTimeout(r, 120));
   }
-  return { base, port };
+  return { base, port, child, logs };
 }
 
 /** Open a stream and collect its text until `stop()`. */
@@ -191,4 +192,168 @@ test('SIGTERM ends open streams at once, refuses new ones, then exits', async ()
 
   expect(await exited).toBe(0);
   expect(Date.now() - signalled).toBeLessThan(4000);
+}, T);
+
+// --- The stream's contract, piece by piece --------------------------------------------
+
+/** The change events in a stream's text, parsed. */
+function changesIn(text) {
+  return text
+    .split('\n\n')
+    .filter((f) => f.includes('event: change'))
+    .map((f) => JSON.parse(f.split('\n').find((l) => l.startsWith('data: ')).slice(6)));
+}
+
+const json = (method, body, headers = {}) => ({
+  method,
+  headers: { 'Content-Type': 'application/json', ...headers },
+  body: JSON.stringify(body)
+});
+
+test('a fresh stream starts with the reconnect delay, then ready at the current sequence', async () => {
+  const { base, port } = await startServer();
+  await fetch(`${base}/api/folders`, json('POST', { name: 'One' }));
+  const stream = openStream(port);
+  const res = await stream.ready;
+  expect(res.headers['x-accel-buffering']).toBe('no');
+  await until(() => stream.text().includes('event: ready'));
+  expect(stream.text().startsWith('retry: 3000\n\n')).toBe(true);
+  expect(stream.text()).toContain('id: 1\nevent: ready\ndata: {"seq":1}\n\n');
+  expect(changesIn(stream.text())).toEqual([]);
+  stream.stop();
+}, T);
+
+test('every kind of write reaches the stream, with what the other device needs', async () => {
+  const { base, port } = await startServer();
+  const stream = openStream(port);
+  await stream.ready;
+  await until(() => stream.text().includes('event: ready'));
+
+  const { id } = await (await fetch(`${base}/api/diagrams`, json('POST', { name: 'A', items: [] }))).json();
+  await fetch(`${base}/api/diagrams/${id}`, json('PATCH', { name: 'Renamed' }));
+  await fetch(`${base}/api/diagrams/${id}`, json('PATCH', { deletedAt: new Date().toISOString() }));
+  const folder = await (await fetch(`${base}/api/folders`, json('POST', { name: 'F' }))).json();
+  await fetch(`${base}/api/folders/${folder.id}`, json('PUT', { name: 'G' }));
+  await fetch(`${base}/api/tree-manifest`, json('PUT', { version: 1, order: {} }));
+  await fetch(`${base}/api/folders/${folder.id}`, { method: 'DELETE' });
+
+  await until(() => changesIn(stream.text()).length >= 7);
+  const changes = changesIn(stream.text());
+  expect(changes.map((c) => c.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  expect(changes).toEqual([
+    expect.objectContaining({ kind: 'diagram', action: 'create', id }),
+    expect.objectContaining({ kind: 'diagram', action: 'update', id, name: 'Renamed' }),
+    expect.objectContaining({ kind: 'diagram', action: 'update', id, deleted: true }),
+    expect.objectContaining({ kind: 'folder', action: 'create', id: folder.id }),
+    expect.objectContaining({ kind: 'folder', action: 'update', id: folder.id }),
+    expect.objectContaining({ kind: 'tree', action: 'save' }),
+    expect.objectContaining({ kind: 'folder', action: 'delete', id: folder.id })
+  ]);
+  for (const c of changes) expect(Date.parse(c.at)).not.toBeNaN();
+  stream.stop();
+}, T);
+
+test('reads and failed writes publish nothing', async () => {
+  const { base, port } = await startServer();
+  const stream = openStream(port);
+  await stream.ready;
+  await until(() => stream.text().includes('event: ready'));
+
+  await fetch(`${base}/api/diagrams`);
+  await fetch(`${base}/api/tree-manifest`);
+  const missing = await fetch(`${base}/api/diagrams/does-not-exist`, json('PATCH', { name: 'x' }));
+  expect(missing.status).toBeGreaterThanOrEqual(400);
+  const bad = await fetch(`${base}/api/diagrams`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{not json'
+  });
+  expect(bad.status).toBe(400);
+
+  // A real write is seq 1: nothing before it counted.
+  const created = await fetch(`${base}/api/diagrams`, json('POST', { name: 'D', items: [] }));
+  const { id } = await created.json();
+  await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n1' }] }));
+  await until(() => changesIn(stream.text()).length >= 2);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(changesIn(stream.text())).toEqual([
+    expect.objectContaining({ seq: 1, kind: 'diagram', action: 'create', id }),
+    expect.objectContaining({ seq: 2, kind: 'diagram', action: 'save', id })
+  ]);
+  stream.stop();
+}, T);
+
+test('only a well-formed device id is echoed as the change origin', async () => {
+  const { base, port } = await startServer();
+  const stream = openStream(port);
+  await stream.ready;
+  await until(() => stream.text().includes('event: ready'));
+  await fetch(`${base}/api/folders`, json('POST', { name: 'A' }, { 'X-Axoview-Device': 'tab-0001-abcd' }));
+  await fetch(`${base}/api/folders`, json('POST', { name: 'B' }, { 'X-Axoview-Device': 'tab","kind":"resync' }));
+  await fetch(`${base}/api/folders`, json('POST', { name: 'C' }, { 'X-Axoview-Device': 'short' }));
+  await until(() => changesIn(stream.text()).length >= 3);
+  expect(changesIn(stream.text()).map((c) => c.origin)).toEqual(['tab-0001-abcd', undefined, undefined]);
+  expect(changesIn(stream.text()).map((c) => c.kind)).toEqual(['folder', 'folder', 'folder']);
+  stream.stop();
+}, T);
+
+test('resuming: at the current id it is ready; one behind it is that change; a bad id is a fresh start', async () => {
+  const { base, port } = await startServer();
+  await fetch(`${base}/api/folders`, json('POST', { name: 'One' }));
+  await fetch(`${base}/api/folders`, json('POST', { name: 'Two' }));
+
+  const current = openStream(port, { 'Last-Event-ID': '2' });
+  await current.ready;
+  await until(() => current.text().includes('event: ready'));
+  expect(changesIn(current.text())).toEqual([]);
+  current.stop();
+
+  const behind = openStream(port, { 'Last-Event-ID': '1' });
+  await behind.ready;
+  await until(() => changesIn(behind.text()).length === 1);
+  expect(changesIn(behind.text())[0]).toEqual(expect.objectContaining({ seq: 2, kind: 'folder', action: 'create' }));
+  expect(behind.text()).not.toContain('event: ready');
+  behind.stop();
+
+  for (const bad of ['abc', '-1', '1e3', '9999999999999999']) {
+    const stream = openStream(port, { 'Last-Event-ID': bad });
+    await stream.ready;
+    await until(() => stream.text().includes('event: ready'));
+    expect(changesIn(stream.text())).toEqual([]);
+    stream.stop();
+  }
+}, T);
+
+test('a stream ends after its maximum age, so the client reconnects', async () => {
+  const { port } = await startServer({ SYNC_MAX_STREAM_MS: '1200', SYNC_POLL_MS: '100' });
+  const stream = openStream(port);
+  const res = await stream.ready;
+  const started = Date.now();
+  await new Promise((resolve) => res.on('end', resolve));
+  expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  expect(Date.now() - started).toBeLessThan(5000);
+}, T);
+
+test('silence is filled with heartbeats, never longer than the heartbeat interval', async () => {
+  const { port } = await startServer({ SYNC_HEARTBEAT_MS: '300', SYNC_POLL_MS: '100' });
+  const stream = openStream(port);
+  await stream.ready;
+  await until(() => stream.text().includes('event: ready'));
+  await new Promise((r) => setTimeout(r, 1300));
+  const pings = stream.text().split(': ping\n\n').length - 1;
+  expect(pings).toBeGreaterThanOrEqual(3);
+  stream.stop();
+}, T);
+
+test('a closed tab is forgotten: shutdown ends only the streams still open', async () => {
+  const { port, child, logs } = await startServer({ SHUTDOWN_DRAIN_MS: '200', SHUTDOWN_FORCE_MS: '1500' });
+  const kept = openStream(port);
+  const gone = openStream(port);
+  await kept.ready;
+  await gone.ready;
+  await until(() => kept.text().includes('event: ready') && gone.text().includes('event: ready'));
+  gone.stop();
+  await new Promise((r) => setTimeout(r, 300));
+  const exited = new Promise((resolve) => child.on('exit', resolve));
+  child.kill('SIGTERM');
+  await exited;
+  expect(logs.join('')).toContain('ending 1 sync stream(s)');
 }, T);
