@@ -22,7 +22,8 @@ import userEvent from '@testing-library/user-event';
 let routeParams: Record<string, string | undefined> = {};
 jest.mock('react-router-dom', () => ({
   useParams: () => routeParams,
-  useNavigate: () => jest.fn()
+  useNavigate: () => jest.fn(),
+  useLocation: () => ({ pathname: window.location.pathname, search: window.location.search, hash: '', state: null, key: 'default' })
 }));
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({

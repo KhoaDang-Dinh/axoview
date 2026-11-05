@@ -524,3 +524,57 @@ describe('useInitialDataManager - Orphaned Connector Handling', () => {
     expect(console.warn).not.toHaveBeenCalled();
   });
 });
+
+describe('useInitialDataManager - opening on a requested page (LoadOptions.view)', () => {
+  let mockChangeView: jest.Mock;
+  const view = (id: string) => ({ id, name: id, items: [], connectors: [], rectangles: [], textBoxes: [] });
+  const twoPages: InitialData = {
+    version: '1.0', title: 'Two pages', description: '', colors: [], icons: [], items: [],
+    views: [view('overview'), view('details')]
+  } as InitialData;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const modelStore = { actions: { set: jest.fn(), clearHistory: jest.fn() }, icons: [], colors: [] };
+    (modelStoreModule.useModelStore as jest.Mock).mockImplementation((selector) =>
+      typeof selector === 'function' ? selector(modelStore) : modelStore
+    );
+    const uiStore = {
+      actions: {
+        setScroll: jest.fn(), setZoom: jest.fn(), setPendingFitToView: jest.fn(),
+        setIconCategoriesState: jest.fn(), setFreshlyLoadedCategoryIds: jest.fn(),
+        setSelectedIds: jest.fn(), setItemControls: jest.fn(), setNotification: jest.fn(),
+        resetUiState: jest.fn(), jumpViewRotation: jest.fn()
+      },
+      rendererEl: null,
+      editorMode: 'INTERACTIVE'
+    };
+    (uiStateStoreModule.useUiStateStore as jest.Mock).mockImplementation((selector) =>
+      typeof selector === 'function' ? selector(uiStore) : uiStore
+    );
+    (uiStateStoreModule.useUiStateStoreApi as jest.Mock).mockReturnValue({
+      getState: jest.fn().mockReturnValue({ view: null, rendererEl: null })
+    });
+    mockChangeView = jest.fn();
+    (useViewModule.useView as jest.Mock).mockReturnValue({ changeView: mockChangeView });
+    require('src/schemas/model').modelSchema.safeParse.mockReturnValue({ success: true });
+  });
+
+  it('opens the requested page when the diagram has it', () => {
+    const { result } = renderHook(() => useInitialDataManager());
+    act(() => { result.current.load(twoPages, { view: 'details' }); });
+    expect(mockChangeView).toHaveBeenCalledWith('details', expect.anything());
+  });
+
+  it('falls back to the first page when the requested one does not exist (a stale link)', () => {
+    const { result } = renderHook(() => useInitialDataManager());
+    act(() => { result.current.load(twoPages, { view: 'deleted-page' }); });
+    expect(mockChangeView).toHaveBeenCalledWith('overview', expect.anything());
+  });
+
+  it('without a request it opens the first page, as before', () => {
+    const { result } = renderHook(() => useInitialDataManager());
+    act(() => { result.current.load(twoPages); });
+    expect(mockChangeView).toHaveBeenCalledWith('overview', expect.anything());
+  });
+});

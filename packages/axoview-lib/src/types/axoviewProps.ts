@@ -703,6 +703,12 @@ export interface IconPackManagerProps {
 export interface AxoviewProps {
   initialData?: InitialData;
   onModelUpdated?: (Model: Model) => void;
+  /**
+   * The page (view) on screen changed: a page tab clicked, a page added or
+   * removed, a diagram loaded. Lets a host keep the page in its URL so a
+   * refresh reopens it. Not called while no diagram is loaded.
+   */
+  onActiveViewChange?: (viewId: string) => void;
   width?: number | string;
   height?: number | string;
   enableDebugTools?: boolean;
@@ -752,6 +758,11 @@ export interface AxoviewProps {
 export interface LoadOptions {
   /** When true, zoom and scroll are preserved instead of being reset to defaults. */
   preserveViewport?: boolean;
+  /**
+   * Open on this page (view id) when the diagram has it, e.g. the page named
+   * in the host's URL after a refresh. Ignored when no page has this id.
+   */
+  view?: string;
 }
 
 export interface AxoviewRef {

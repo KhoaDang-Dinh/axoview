@@ -246,7 +246,12 @@ export const useInitialDataManager = () => {
         uiStateActions.setItemControls(null);
 
         const activeViewId = uiStateStoreApi.getState().view;
+        const requestedView =
+          options?.view && merged.views.some((v) => v.id === options.view)
+            ? options.view
+            : undefined;
         const targetViewId =
+          requestedView ??
           merged.view ??
           (activeViewId && merged.views.some((v) => v.id === activeViewId)
             ? activeViewId
