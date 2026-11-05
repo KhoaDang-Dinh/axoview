@@ -6,8 +6,11 @@ import { dismissBootScreens } from '../utils/bootScreen';
 import {
   beginCognitoSignIn,
   bootstrapCognitoSession,
+  signOutFromOtherTab,
   useCognitoSessionStore
 } from '../stores/cognitoSessionStore';
+import { onTabMessage, postToTabs } from '../services/sync/tabChannel';
+import { signOutDriveFromOtherTab } from '../stores/authStore';
 
 // Where to return after sign-in: a diagram link (/d/<id>?page=<view>) opened
 // while signed out. Only that shape is kept, so the stored value can never
@@ -54,11 +57,27 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
       if (cancelled) return;
       setReady(true);
       if (window.location.pathname.endsWith('/auth/callback') && useCognitoSessionStore.getState().status === 'signed-in') {
+        // Tabs left on the sign-in screen pick up the new session.
+        postToTabs({ type: 'account-signed-in' });
         navigate(takeSignInReturn(), { replace: true });
       }
     });
     return () => { cancelled = true; };
   }, [config, isInitialized, location.key, navigate]);
+
+  // Other tabs of this browser: signing out in one signs out all of them, and
+  // signing in again brings the ones on the sign-in screen back.
+  useEffect(() => onTabMessage((message) => {
+    if (message.type === 'account-signed-out') {
+      void signOutFromOtherTab();
+    } else if (message.type === 'account-signed-in') {
+      if (config && useCognitoSessionStore.getState().status !== 'signed-in') {
+        void bootstrapCognitoSession(config);
+      }
+    } else if (message.type === 'drive-signed-out') {
+      signOutDriveFromOtherTab();
+    }
+  }), [config]);
 
   const isPublicShare = location.pathname.startsWith('/display/p/');
   const showSignIn =
