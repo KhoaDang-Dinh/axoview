@@ -32,7 +32,7 @@ Both are annotated read-only, idempotent and closed-world.
 
 The server is dual-era: a legacy client (2025-11-25, 2025-06-18, 2025-03-26) that opens with `initialize` gets the same tools, and no session id is minted. The app's Origin allowlist applies (`403` for a foreign browser origin).
 
-**Cost.** Each search embeds the query (Bedrock, Cohere) and queries S3 Vectors only while this pod's daily budget lasts (`AI_MCP_DAILY_VECTOR_LIMIT`, default 2,000); after that, search is keyword-only and free until UTC midnight. The query text is never logged. One `mcp.request` JSON line records method, tool, result count, search mode and latency.
+**Cost.** Each search embeds the query (Bedrock, Cohere) and queries S3 Vectors only while this pod's daily budget lasts (`AI_MCP_DAILY_VECTOR_LIMIT`, default 2,000); after that, search is keyword-only and free until UTC midnight. The query text is never logged. One `mcp.request` JSON line per request, errors included, records method, result, tool, outcome (hit, empty, invalid), result count, search mode and latency ([observability.md](observability.md)).
 
 **Where.** The Express API (EKS, Docker). The Cloudflare Worker does not mount it.
 
