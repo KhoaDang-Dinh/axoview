@@ -23,6 +23,7 @@ Add a draggable AI bubble on /app, with chat overlay, down-arrow minimize, and a
 - [Authorization](authorization.md)
 - [Events/SSE](events.md)
 - [MCP](mcp.md)
+- [Observability: the log lines CloudWatch reads](observability.md)
 - [Release tests](testing.md)
 
 `GET /api/config` publishes `ai` with chatEnabled, guestEnabled, diagramContextEnabled, mcpEnabled, ragEnabled, agentWriteEnabled; all default **false** and require exact server-side string `true` to enable. These advertise UI capabilities only: every future AI route must separately enforce flags and permissions.

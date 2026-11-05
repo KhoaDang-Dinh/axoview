@@ -86,15 +86,17 @@ describe('modern clients (2026-07-28)', () => {
     expect(body.result.content[0].text).toContain('https://axoview.example/docs/manual/connectors.md');
     // The log line never carries the query.
     expect(logs.join('\n')).not.toContain('arrow');
-    expect(JSON.parse(logs.at(-1))).toMatchObject({ event: 'mcp.request', tool: 'search_manual', results: 1, mode: 'hybrid', era: 'modern' });
+    expect(JSON.parse(logs.at(-1))).toMatchObject({ event: 'mcp.request', method: 'tools/call', result: 'ok',
+      tool: 'search_manual', outcome: 'hit', results: 1, mode: 'hybrid', era: 'modern' });
   });
 
   test('get_manual_section reads one section; an unknown id is a tool error the model can recover from', async () => {
-    const { url } = await serve();
+    const { url, logs } = await serve();
     const ok = await modern(url, 'tools/call', { name: 'get_manual_section', arguments: { id: 'canvas-zooming' } });
     expect(ok.body.result.structuredContent).toMatchObject({ id: 'canvas-zooming', url: 'https://axoview.example/docs/manual/canvas.md#zooming' });
     const missing = await modern(url, 'tools/call', { name: 'get_manual_section', arguments: { id: 'no-such-section' } });
     expect(missing.body.result).toMatchObject({ isError: true });
+    expect(JSON.parse(logs.at(-1))).toMatchObject({ result: 'ok', tool: 'get_manual_section', outcome: 'invalid' });
     const bad = await modern(url, 'tools/call', { name: 'search_manual', arguments: { query: 'x', limit: 99 } });
     expect(bad.body.result.isError).toBe(true);
   });
@@ -138,6 +140,31 @@ describe('modern clients (2026-07-28)', () => {
     expect([unknown.status, unknown.body.error.code]).toEqual([404, -32601]);
     expect((await fetch(url)).status).toBe(405);
     expect((await fetch(url, { method: 'DELETE' })).status).toBe(405);
+  });
+});
+
+describe('telemetry: one mcp.request line per request, errors included', () => {
+  test('a client mistake is logged as rejected, with its code; a caller-chosen method name is not echoed', async () => {
+    const { url, logs } = await serve();
+    await modern(url, 'resources/list');
+    await modern(url, 'tools/list', {}, { 'mcp-method': 'tools/call' });
+    const lines = logs.map((line) => JSON.parse(line));
+    expect(lines).toEqual([
+      expect.objectContaining({ event: 'mcp.request', method: 'other', result: 'rejected', code: -32601 }),
+      expect.objectContaining({ event: 'mcp.request', method: 'tools/list', result: 'rejected', code: -32020 })
+    ]);
+    expect(logs.join('\n')).not.toContain('resources/list');
+  });
+
+  test('a search with no results is an empty outcome; a failing search is an error', async () => {
+    const empty = await serve({ hybridSearch: async () => ({ mode: 'hybrid', items: [] }) });
+    await modern(empty.url, 'tools/call', { name: 'search_manual', arguments: { query: 'zzz' } });
+    expect(JSON.parse(empty.logs.at(-1))).toMatchObject({ result: 'ok', outcome: 'empty', results: 0 });
+
+    const failing = await serve({ hybridSearch: async () => { throw new Error('vectors down'); } });
+    const response = await modern(failing.url, 'tools/call', { name: 'search_manual', arguments: { query: 'zoom' } });
+    expect(response.status).toBe(500);
+    expect(JSON.parse(failing.logs.at(-1))).toMatchObject({ method: 'tools/call', result: 'error', code: -32603 });
   });
 });
 

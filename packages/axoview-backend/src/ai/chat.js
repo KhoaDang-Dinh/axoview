@@ -16,7 +16,7 @@ import { createNovaClient, defaultModelFor } from './bedrock.js';
 import { createGuardrail, isObviousPromptInjection, AiSafetyBlocked } from './guardrails.js';
 import { composeRagContext } from './rag.js';
 import { docsSearchFromEnv } from './docsSearch.js';
-import { emitAiTelemetry } from './observability.js';
+import { emitAgentTelemetry, emitAiTelemetry } from './observability.js';
 import {
   composeDiagramContext, extractSuggestions, MAX_SUGGESTIONS, validateDiagramContext
 } from './suggestions.js';
@@ -122,6 +122,7 @@ export function createAiChatRouter({
   // (message) -> sections: keyword + vector search of the manual (docsSearch.js).
   retrieveKnowledge,
   telemetry = emitAiTelemetry,
+  agentTelemetry = emitAgentTelemetry,
   guardrailId = process.env.AI_GUARDRAIL_ID,
   guardrailVersion = process.env.AI_GUARDRAIL_VERSION,
   diagramContextEnabled = process.env.AI_DIAGRAM_CONTEXT_ENABLED === 'true',
@@ -377,6 +378,12 @@ export function createAiChatRouter({
     telemetry({ requestId: ctx.requestId, stage: 'completed', result: 'ok',
       latencyMs: Date.now() - ctx.startedAt, inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens, retrievedDocuments: references.length });
+    // An agent turn: the user shared a page, so the model could propose edits.
+    if (diagramText) {
+      agentTelemetry({ requestId: ctx.requestId, suggestions: suggestions.length,
+        dropped: extracted.dropped,
+        sources: cited.sources?.length || 0, latencyMs: Date.now() - ctx.startedAt });
+    }
     return res.status(200).json({
       conversationId: id, reply, usage,
       sources: cited.sources,

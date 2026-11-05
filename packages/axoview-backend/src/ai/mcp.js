@@ -18,6 +18,7 @@
 import { Router } from 'express';
 import { PUBLIC_KNOWLEDGE } from './rag.js';
 import { docsSearchFromEnv, createDocsSearch } from './docsSearch.js';
+import { emitMcpTelemetry } from './observability.js';
 
 export const MODERN_VERSIONS = ['2026-07-28'];
 export const LEGACY_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
@@ -102,7 +103,10 @@ export function createMcpRouter({
   keywordSearch = createDocsSearch({ corpus }),
   dailyVectorLimit = Number(process.env.AI_MCP_DAILY_VECTOR_LIMIT) || 2000,
   now = () => new Date(),
-  log = console
+  log = console,
+  // One mcp.request line per request (observability.js); by default through
+  // log.info, so a test's log captures it.
+  telemetry = (fields) => emitMcpTelemetry(fields, (line) => log.info?.(line))
 } = {}) {
   const router = Router();
   const byId = new Map(corpus.map((chunk) => [chunk.id, chunk]));
@@ -212,6 +216,8 @@ export function createMcpRouter({
     const message = req.body;
     const reply = (status, payload) => res.status(status).type('application/json').send(JSON.stringify({ jsonrpc: '2.0', ...payload }));
     let id = null;
+    let method;
+    let modern = false;
     try {
       if (!req.is('application/json')) throw new RpcError(415, -32700, 'Content-Type must be application/json');
       if (Number(req.headers['content-length'] || 0) > MAX_BODY_BYTES || JSON.stringify(message ?? null).length > MAX_BODY_BYTES) {
@@ -229,7 +235,8 @@ export function createMcpRouter({
       const meta = params && typeof params === 'object' ? params._meta : undefined;
       const metaVersion = meta && typeof meta === 'object' ? meta[`${META}protocolVersion`] : undefined;
       const headerVersion = req.get('MCP-Protocol-Version');
-      const modern = metaVersion !== undefined && message.method !== 'initialize';
+      method = message.method;
+      modern = metaVersion !== undefined && message.method !== 'initialize';
 
       if (modern) {
         if (typeof headerVersion !== 'string' || headerVersion !== metaVersion) {
@@ -257,14 +264,23 @@ export function createMcpRouter({
       const version = modern ? metaVersion : (headerVersion || params?.protocolVersion || LEGACY_VERSIONS[0]);
       const result = await dispatch(message.method, params, { modern, version });
       // Never the query text: method, tool, result count and timing only.
-      log.info?.(JSON.stringify({
-        event: 'mcp.request', method: message.method,
-        ...(message.method === 'tools/call' ? { tool: params?.name, results: result?.structuredContent?.results?.length ?? (result?.isError ? -1 : 1), mode: result?.structuredContent?.mode } : {}),
-        era: modern ? 'modern' : 'legacy', latencyMs: Date.now() - started
-      }));
+      const results = result?.structuredContent?.results?.length ?? (result?.isError ? -1 : 1);
+      telemetry({
+        method, result: 'ok', era: modern ? 'modern' : 'legacy', latencyMs: Date.now() - started,
+        ...(method === 'tools/call' ? {
+          tool: params?.name, results, mode: result?.structuredContent?.mode,
+          outcome: result?.isError ? 'invalid' : results === 0 ? 'empty' : 'hit'
+        } : {})
+      });
       return reply(200, { id, result });
     } catch (error) {
-      if (error instanceof RpcError) {
+      const rpc = error instanceof RpcError;
+      // Unknown methods answer 200 to legacy clients; still a client mistake.
+      telemetry({
+        method, result: rpc ? (error.httpStatus >= 500 ? 'error' : 'rejected') : 'error',
+        code: rpc ? error.code : -32603, era: modern ? 'modern' : 'legacy', latencyMs: Date.now() - started
+      });
+      if (rpc) {
         return reply(error.httpStatus, { ...(id !== null ? { id } : {}), error: { code: error.code, message: error.message, ...(error.data ? { data: error.data } : {}) } });
       }
       log.error?.('[mcp] request failed: %s', error?.name || 'unknown');

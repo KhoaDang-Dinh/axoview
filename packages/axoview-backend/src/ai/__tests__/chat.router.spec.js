@@ -8,6 +8,7 @@ import { afterEach, expect, jest, test } from '@jest/globals';
 import http from 'node:http';
 import express from 'express';
 import { createAiChatRouter } from '../chat.js';
+import { emitAgentTelemetry } from '../observability.js';
 import { defaultModelFor, validateBedrockConfig } from '../bedrock.js';
 
 /** A DynamoDB stand-in: conditional quota updates, Get/Put, and a Query that
@@ -88,6 +89,7 @@ function chatRouter(overrides = {}) {
     invokeNova: async () => { calls.model++; return { text: 'Hello', usage: { inputTokens: 3, outputTokens: 1 } }; },
     inspectGuardrail: async () => { calls.guardrail++; return true; },
     telemetry: () => {},
+    agentTelemetry: () => {},
     log: { warn: () => {}, error: () => {} },
     ...overrides
   });
@@ -241,6 +243,29 @@ test('with diagram context on, the page reaches the model as marked data and sug
   const saved = await (await api.get(`/conversations/${body.conversationId}`)).json();
   expect(JSON.stringify(saved)).not.toContain('Production');
   expect(saved.messages.at(-1).text).toBe('Connect them.');
+});
+
+test('an agent turn logs its outcome, counts only; plain chat logs none', async () => {
+  const events = [];
+  const agentTelemetry = (fields) => events.push(emitAgentTelemetry(fields, () => {}));
+  const reply = { text: SUGGESTING };
+  const { router } = chatRouter({
+    diagramContextEnabled: true, agentTelemetry,
+    invokeNova: async () => ({ text: reply.text, usage: { inputTokens: 1, outputTokens: 1 } })
+  });
+  const api = await serve(router);
+  await api.post({ message: 'What is missing?', diagram: PAGE });
+  reply.text = 'Try this.\n```suggestions\n[{"op":"explode","target":{"id":"n1"}}]\n```';
+  await api.post({ message: 'And now?', diagram: PAGE });
+  reply.text = 'It looks complete.';
+  await api.post({ message: 'Anything else?', diagram: PAGE });
+  await api.post({ message: 'How do I zoom?' });
+  expect(events.map(({ outcome, suggestions, dropped }) => ({ outcome, suggestions, dropped }))).toEqual([
+    { outcome: 'suggested', suggestions: 1, dropped: 0 },
+    { outcome: 'malformed', suggestions: 0, dropped: 1 },
+    { outcome: 'none', suggestions: 0, dropped: 0 }
+  ]);
+  expect(JSON.stringify(events)).not.toMatch(/Database|Production|SQL|What is missing/);
 });
 
 test('with diagram context off, a page in the request is a 400 before any cost', async () => {
