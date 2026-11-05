@@ -78,6 +78,9 @@ function App() {
       <Routes>
         <Route path="/" element={<EditorPage />} />
         <Route path="/auth/callback" element={<EditorPage />} />
+        {/* The open diagram (server storage), so a refresh reopens it:
+            /app/d/<id>?page=<view id>. */}
+        <Route path="/d/:diagramId" element={<EditorPage />} />
         <Route
           path="/ai/connect/:clientId"
           element={
@@ -133,6 +136,7 @@ function EditorShell() {
     frozenInitialDataRef,
     iconPackManagerProp,
     handleModelUpdated,
+    handleActiveViewChange,
     handleCreateBlankDiagram,
     sidebarTogglePortalTarget,
     styleControlsPortalTarget,
@@ -332,6 +336,7 @@ function EditorShell() {
             ref={axoviewRef}
             initialData={frozenInitialDataRef.current ?? undefined}
             onModelUpdated={handleModelUpdated}
+            onActiveViewChange={handleActiveViewChange}
             exposeStoreBridge={perfMonitoringEnabled}
             editorMode={isReadonlyUrl ? 'EXPLORABLE_READONLY' : 'EDITABLE'}
             locale={currentLocale}

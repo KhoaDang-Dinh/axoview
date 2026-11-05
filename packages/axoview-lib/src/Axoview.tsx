@@ -78,6 +78,7 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
       width = '100%',
       height = '100%',
       onModelUpdated,
+      onActiveViewChange,
       enableDebugTools = false,
       exposeStoreBridge = false,
       editorMode = 'EDITABLE',
@@ -276,6 +277,18 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
         setWindowCursor('default');
       };
     }, []);
+
+    // The page on screen, reported to the host (onActiveViewChange) once a
+    // diagram is loaded. Through a ref, like onModelUpdated below.
+    const activeViewId = useUiStateStore((state) => state.view);
+    const onActiveViewChangeRef = useRef(onActiveViewChange);
+    useEffect(() => {
+      onActiveViewChangeRef.current = onActiveViewChange;
+    });
+    useEffect(() => {
+      if (!initialDataManager.isReady || !activeViewId) return;
+      onActiveViewChangeRef.current?.(activeViewId);
+    }, [activeViewId, initialDataManager.isReady]);
 
     // Use a ref so onModelUpdated changes never re-trigger this effect (prevents infinite re-render loop)
     const onModelUpdatedRef = useRef(onModelUpdated);

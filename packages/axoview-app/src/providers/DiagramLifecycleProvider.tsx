@@ -7,7 +7,7 @@ import {
   useRef,
   useState
 } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { downloadBlob } from '../utils/downloadBlob';
 import { useTranslation } from 'react-i18next';
 import { flattenCollections } from '@isoflow/isopacks/dist/utils';
@@ -175,6 +175,8 @@ export interface DiagramLifecycleContextValue {
   handleOpenClick: () => void;
   handlePreviewClick: () => Promise<void>;
   handleModelUpdated: (model: Model) => void;
+  /** The editor switched page: kept in the URL (/d/<id>?page=<view>). */
+  handleActiveViewChange: (viewId: string) => void;
   handleExportJSON: () => void;
   handleExportImage: () => void;
   handleExportProject: () => void;
@@ -249,12 +251,14 @@ export function DiagramLifecycleProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const { readonlyDiagramId, shareUuid, driveFileId } = useParams<{
+  const { readonlyDiagramId, shareUuid, driveFileId, diagramId: urlDiagramId } = useParams<{
     readonlyDiagramId: string;
     shareUuid: string;
     driveFileId: string;
+    diagramId: string;
   }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { t } = useTranslation('app');
   const {
     storage,
@@ -525,6 +529,63 @@ export function DiagramLifecycleProvider({
 
   const currentDiagramRef = useRef<SavedDiagram | null>(null);
   useEffect(() => { currentDiagramRef.current = currentDiagram; }, [currentDiagram]);
+
+  // ---------------------------------------------------------------------------
+  // The open diagram and page in the URL: /app/d/<id>?page=<view id>
+  // ---------------------------------------------------------------------------
+  // So a refresh (or a bookmark) reopens the diagram and page you were on,
+  // instead of an empty /app. Server storage only: a session diagram lives in
+  // this browser (restored from localStorage), a Drive file has its own
+  // /display/drive/<id> link. Always `replace`: switching diagrams or pages
+  // adds no history entries.
+  const urlDiagramIdRef = useRef<string | null>(null);
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const urlTracksDiagram =
+    serverStorageAvailable && !isReadonlyUrl && storageManager?.activeProviderId !== 'google-drive';
+  const urlTracksDiagramRef = useRef(urlTracksDiagram);
+  urlTracksDiagramRef.current = urlTracksDiagram;
+  const writeDiagramUrl = useCallback((id: string | null, viewId?: string) => {
+    const { pathname, search } = locationRef.current;
+    const onDiagramUrl = pathname.startsWith('/d/');
+    let target: string;
+    if (id && urlTracksDiagramRef.current) {
+      target = `/d/${encodeURIComponent(id)}${viewId ? `?page=${encodeURIComponent(viewId)}` : ''}`;
+    } else if (onDiagramUrl) {
+      target = '/';
+    } else {
+      return;
+    }
+    if (pathname + search === target) return;
+    navigate(target, { replace: true });
+    // Two writes in one tick (a load, then its page) must compare against
+    // this one, not the location of the last render.
+    const [nextPath, nextQuery] = target.split('?');
+    locationRef.current = { ...locationRef.current, pathname: nextPath, search: nextQuery ? `?${nextQuery}` : '' };
+  }, [navigate]);
+  // handleDiagramManagerLoad is declared above this hook's callbacks.
+  const writeDiagramUrlRef = useRef(writeDiagramUrl);
+  writeDiagramUrlRef.current = writeDiagramUrl;
+
+  // The editor switched page. The lib reports from a child effect, before
+  // currentDiagramRef updates, so this keys off urlDiagramIdRef (set at load).
+  const handleActiveViewChange = useCallback((viewId: string) => {
+    if (urlDiagramIdRef.current) writeDiagramUrl(urlDiagramIdRef.current, viewId);
+  }, [writeDiagramUrl]);
+
+  // Reopening from the URL. Until that attempt ends, "no diagram open" is the
+  // normal boot state, not a reason to clear the URL.
+  const urlRestorePendingRef = useRef(!!urlDiagramId);
+  // The URL diagram this tab has dealt with (reopened, failed, or already
+  // open). Reopening happens once per URL: after that, "nothing open" means
+  // it was closed or deleted, and must not bring it back.
+  const urlHandledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (currentDiagram || urlRestorePendingRef.current) return;
+    urlDiagramIdRef.current = null;
+    writeDiagramUrl(null);
+  }, [currentDiagram, writeDiagramUrl]);
 
   const diagramNameRef = useRef(diagramName);
   useEffect(() => { diagramNameRef.current = diagramName; }, [diagramName]);
@@ -1183,7 +1244,8 @@ export function DiagramLifecycleProvider({
       // remote: the open diagram reloaded because another device saved it
       // (realtime sync) — keep the viewport, and never write back from here,
       // or two devices would answer each other's saves forever.
-      { remote = false }: { remote?: boolean } = {}
+      // view: open on this page if the diagram has it (the URL's ?page=).
+      { remote = false, view }: { remote?: boolean; view?: string } = {}
     ) => {
       const data: PersistedDiagramBlob = isPersistedDiagramBlob(rawData) ? rawData : {};
 
@@ -1228,15 +1290,22 @@ export function DiagramLifecycleProvider({
       setLastSaved(new Date(newDiagram.updatedAt));
       autoSave.resetStatus();
       isAfterLoadRef.current = true;
+      const requestedView =
+        view && mergedData.views.some((v) => v.id === view) ? view : undefined;
+      // The URL follows the open diagram from here on (writeDiagramUrl).
+      urlDiagramIdRef.current = id;
       if (!axoviewRef.current) {
         // Axoview not mounted yet (EmptyStateScreen showing) — seed initialData so it
         // mounts with the correct diagram instead of the stale frozen data.
-        frozenInitialDataRef.current = mergedData;
+        frozenInitialDataRef.current = requestedView
+          ? ({ ...mergedData, view: requestedView } as DiagramData)
+          : mergedData;
       }
       axoviewRef.current?.load(
         mergedData as InitialData,
-        remote ? { preserveViewport: true } : undefined
+        remote ? { preserveViewport: true } : requestedView ? { view: requestedView } : undefined
       );
+      if (!remote) writeDiagramUrlRef.current(id, axoviewRef.current?.getActiveViewId() ?? requestedView);
       if (!remote && !hasDefaultIcons && storageRef.current) {
         storageRef.current.saveDiagram(id, mergedData).catch(() => {});
       }
@@ -1244,6 +1313,54 @@ export function DiagramLifecycleProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.resetStatus; whole autoSave churns on every save-status change
     [iconPackManager, autoSave.resetStatus]
   );
+
+  // A refresh or a bookmark on /app/d/<id>?page=<view>: open that diagram on
+  // that page once server storage is ready. The editor only mounts after
+  // sign-in (CognitoSessionProvider), so this never races the session. A
+  // diagram that is gone or not this user's: say so and fall back to /app.
+  useEffect(() => {
+    if (!urlDiagramId || isReadonlyUrl || !isInitialized) return;
+    if (urlHandledRef.current === urlDiagramId) return;
+    const done = () => { urlRestorePendingRef.current = false; };
+    if (!serverStorageAvailable) {
+      urlHandledRef.current = urlDiagramId;
+      done();
+      navigate('/', { replace: true });
+      return;
+    }
+    if (currentDiagramRef.current?.id === urlDiagramId) {
+      // Opened in this tab (the URL followed it): nothing to reopen.
+      urlHandledRef.current = urlDiagramId;
+      done();
+      return;
+    }
+    if (!storage) return;
+    if (storageManager && storageManager.activeProviderId !== 'local') {
+      setActiveProviderId('local');
+      return;
+    }
+    urlHandledRef.current = urlDiagramId;
+    const page = new URLSearchParams(locationRef.current.search).get('page') || undefined;
+    void (async () => {
+      try {
+        const raw: unknown = await storage.loadDiagram(urlDiagramId);
+        await handleDiagramManagerLoad(urlDiagramId, raw, '', { view: page });
+      } catch (e) {
+        console.warn('Could not reopen the diagram in the URL:', e);
+        notificationStore.push({
+          severity: 'warning',
+          message: t(
+            'diagram.linkUnavailable',
+            "That diagram can't be opened. It may have been deleted, or it belongs to another account."
+          )
+        });
+        navigate('/', { replace: true });
+      } finally {
+        done();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t and notificationStore are stable; re-run only when the URL target or storage readiness changes
+  }, [urlDiagramId, isReadonlyUrl, isInitialized, serverStorageAvailable, storage, storageManager, setActiveProviderId, handleDiagramManagerLoad, navigate]);
 
   // ---------------------------------------------------------------------------
   // Create blank diagram (for canvas card or file tree)
@@ -2000,6 +2117,7 @@ export function DiagramLifecycleProvider({
     handleOpenClick,
     handlePreviewClick,
     handleModelUpdated,
+    handleActiveViewChange,
     handleExportJSON,
     handleExportImage,
     handleExportProject,
