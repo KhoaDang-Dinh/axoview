@@ -1,6 +1,6 @@
 # Regression Test Suite Reference
 
-**Last updated:** 2026-11-06 (rev 2 — totals re-measured after view rotation, ADRs 0049–0051; previous rev 2026-09-30 re-measured totals; the Worker's `app.spec.ts` probe-input block now expects `404` for unknown `/api/*` paths in every auth mode, including shared-token with no secret; previous rev 2026-09-24 added the contract "Testing against the Docker image" (ADR 0048))
+**Last updated:** 2026-11-06 (rev 3 — the live-update Docker specs and their DOM signals, scripting the API on the dev server; previous rev 2026-10-04 re-measured totals after view rotation, ADRs 0049–0051; previous rev 2026-09-30 re-measured totals; the Worker's `app.spec.ts` probe-input block now expects `404` for unknown `/api/*` paths in every auth mode, including shared-token with no secret; previous rev 2026-09-24 added the contract "Testing against the Docker image" (ADR 0048))
 **Unit / integration totals** (measured 2026-10-04 via `npm test` per workspace):
 
 | Workspace | Passing | Suites |
