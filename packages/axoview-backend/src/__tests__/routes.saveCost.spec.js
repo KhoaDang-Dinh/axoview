@@ -102,7 +102,7 @@ describe('editor save cost (DynamoDB + S3)', () => {
       result = await save(adapter, 'd1', { ...model(), lastModified: 'whenever' }, version);
     });
     expect(counts).toEqual({ GetCommand: 1 });
-    expect(result.body).toEqual({ success: true, id: 'd1', unchanged: true });
+    expect(result.body).toEqual({ success: true, id: 'd1', unchanged: true, lastModified: expect.any(String) });
     expect(result.sync).toBe(false);
     expect(versionOf(result)).toBe(version);
     expect(doubles.objects.size).toBe(objectsBefore);

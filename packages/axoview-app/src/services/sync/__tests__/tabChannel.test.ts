@@ -67,6 +67,29 @@ describe('over BroadcastChannel', () => {
     expect(got).toEqual([{ type: 'drive-signed-out' }]);
   });
 
+  it('an autosave checkpoint and its upload reach the other tab; malformed ones do not', async () => {
+    const a = loadTab();
+    const b = loadTab();
+    const got: Array<{ type: string }> = [];
+    b.onTabMessage((m) => got.push(m));
+    const checkpoint = {
+      type: 'diagram-checkpoint' as const, userKey: 'u1', id: 'd1', device: 'tab-a-device',
+      rev: 'r2', parents: ['r1'], baseVersion: 4, model: { title: 'T', items: [], views: [] }
+    };
+    a.postToTabs(checkpoint, { fallback: false });
+    a.postToTabs({ type: 'diagram-uploaded', userKey: 'u1', id: 'd1', rev: 'r2', version: 5 }, { fallback: false });
+    const raw = new FakeChannel('axoview-tabs');
+    for (const junk of [
+      { ...checkpoint, model: null },
+      { ...checkpoint, device: '../x' },
+      { ...checkpoint, parents: 'r1' },
+      { ...checkpoint, baseVersion: -1 },
+      { type: 'diagram-uploaded', userKey: 'u1', id: 'd1', rev: '', version: 5 }
+    ]) raw.postMessage(junk);
+    await flush();
+    expect(got.map((m) => m.type)).toEqual(['diagram-checkpoint', 'diagram-uploaded']);
+  });
+
   it('unsubscribing stops delivery', async () => {
     const a = loadTab();
     const b = loadTab();
@@ -94,5 +117,16 @@ describe('without BroadcastChannel: the storage-event fallback', () => {
     window.dispatchEvent(new StorageEvent('storage', { key: 'other', newValue: '{}' }));
     window.dispatchEvent(new StorageEvent('storage', { key: 'axoview-tabs-message', newValue: 'not json' }));
     expect(got).toEqual([{ type: 'diagram-deleted', id: 'd1' }]);
+  });
+
+  it('a message carrying a diagram never goes through localStorage', () => {
+    const tab = loadTab();
+    const setItem = jest.spyOn(Storage.prototype, 'setItem');
+    tab.postToTabs({
+      type: 'diagram-checkpoint', userKey: 'u1', id: 'd1', device: 'tab-a-device',
+      rev: 'r1', parents: [], model: { title: 'big' }
+    }, { fallback: false });
+    expect(setItem).not.toHaveBeenCalled();
+    setItem.mockRestore();
   });
 });

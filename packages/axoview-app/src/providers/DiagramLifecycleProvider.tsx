@@ -8,7 +8,11 @@ import {
   useState
 } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { onTabMessage } from '../services/sync/tabChannel';
+import { onTabMessage, postToTabs, type TabMessage } from '../services/sync/tabChannel';
+import { getDeviceId } from '../services/sync/deviceId';
+import { othersPresent, usePresenceStore } from '../services/sync/presence';
+import { useDraftStore } from '../stores/draftStore';
+import { useCognitoSessionStore } from '../stores/cognitoSessionStore';
 import { registerBeforeSignOut } from '../services/session/beforeSignOut';
 import { downloadBlob } from '../utils/downloadBlob';
 import { useTranslation } from 'react-i18next';
@@ -29,7 +33,7 @@ import { useAppStorage } from './AppStorageContext';
 import { useAuthStore } from '../stores/authStore';
 import { fetchRuntimeConfig } from '../hooks/useRuntimeConfig';
 import { readDriveDisplayFile } from '../services/drive/drivePublicRead';
-import { useAutoSave, SaveStatus } from '../hooks/useAutoSave';
+import { useAutoSave, SaveStatus, type AutoSaveBatching } from '../hooks/useAutoSave';
 import { useRealtimeSync } from '../hooks/useRealtimeSync';
 import { DiagramManager } from '../components/DiagramManager';
 import { SaveDialog } from '../components/SaveDialog';
@@ -248,6 +252,26 @@ const DiagramLifecycleContext = createContext<DiagramLifecycleContextValue>(
   null as unknown as DiagramLifecycleContextValue
 );
 
+/**
+ * Batched uploads: while no other browser has the workspace open, a checkpoint
+ * reaches the server at most this long after it was made (and at once on
+ * every flush point). See stores/draftStore.ts.
+ */
+const UPLOAD_BATCH_MS = 30_000;
+/** How many earlier checkpoints a tab message names (see tabChannel.ts). */
+const LINEAGE_LIMIT = 32;
+
+/**
+ * Whether two models show the same diagram: the same items, pages (with
+ * their nodes, connectors, shapes and text) and colours. Icons are left out:
+ * a loaded model carries every loaded pack's icons, a saved one only what the
+ * diagram uses.
+ */
+function sameContent(a: DiagramData, b: DiagramData): boolean {
+  const content = (m: DiagramData) => JSON.stringify([m.items ?? [], m.views ?? [], m.colors ?? []]);
+  return content(a) === content(b);
+}
+
 export function DiagramLifecycleProvider({
   children
 }: {
@@ -399,7 +423,68 @@ export function DiagramLifecycleProvider({
   // Auto-save (server mode only)
   // ---------------------------------------------------------------------------
   const lastAutoSavedIdRef = useRef<string | null>(null);
+
+  // Batched uploads (server storage; stores/draftStore.ts, hooks/useAutoSave.ts).
+  // Each autosave is a checkpoint in this browser; while no other browser has
+  // the workspace open the upload waits up to UPLOAD_BATCH_MS and carries the
+  // latest checkpoint. Drafts belong to the signed-in user (one shared key
+  // when the deployment has no sign-in).
+  const signedInSub = useCognitoSessionStore((state) => state.user?.sub ?? null);
+  const userKeyRef = useRef('workspace');
+  userKeyRef.current = signedInSub ?? 'workspace';
+  // The active provider, not `storage.id`: the manager always says 'local'.
+  const batchingEnabled = serverStorageAvailable && !isReadonlyUrl &&
+    !!storage && storageManager?.activeProviderId === 'local';
+  const serverModeRef = useRef(false);
+  serverModeRef.current = serverStorageAvailable && storageManager?.activeProviderId === 'local';
+  // Filled in below, once the storage helpers exist.
+  const knownVersionOfRef = useRef<(id: string) => number | undefined>(() => undefined);
+  const serverStampOf = (id: string): string | undefined =>
+    (storageRef.current as { serverStamp?: (id: string) => string | undefined } | null)?.serverStamp?.(id);
+  // Per diagram: the checkpoints the content on screen descends from, newest
+  // last (its own, or one taken from another tab). See the tab handler.
+  const lineageRef = useRef<Map<string, string[]>>(new Map());
+  // Set once recoverDraft exists (it needs the loader, defined further down).
+  const recoverDraftRef = useRef<(id: string, loaded: DiagramData) => Promise<void>>(async () => {});
+  // Per diagram: the sibling tab whose checkpoint is on screen here. Its upload
+  // carries content this tab already shows (see the realtime sync filter).
+  const adoptedFromRef = useRef<Map<string, string>>(new Map());
+  const batch = useMemo<AutoSaveBatching | null>(() => {
+    if (!batchingEnabled) return null;
+    return {
+      maxDelayMs: UPLOAD_BATCH_MS,
+      uploadNow: () => othersPresent(),
+      checkpoint: async (id, model) => {
+        const userKey = userKeyRef.current;
+        const baseVersion = knownVersionOfRef.current(id);
+        const baseStamp = serverStampOf(id);
+        const result = await useDraftStore.getState().checkpoint({ userKey, id, model, baseVersion, baseStamp });
+        const parents = (lineageRef.current.get(id) ?? []).slice(-LINEAGE_LIMIT);
+        lineageRef.current.set(id, [...parents, result.rev]);
+        // This tab's own content now: a sibling's save of this diagram is news again.
+        adoptedFromRef.current.delete(id);
+        postToTabs(
+          {
+            type: 'diagram-checkpoint', userKey, id, device: getDeviceId(),
+            rev: result.rev, parents, baseVersion, baseStamp, model
+          },
+          { fallback: false }
+        );
+        return result;
+      },
+      onUploaded: (id, rev) => {
+        const userKey = userKeyRef.current;
+        void useDraftStore.getState().uploaded(userKey, id, rev);
+        postToTabs(
+          { type: 'diagram-uploaded', userKey, id, rev, version: knownVersionOfRef.current(id), stamp: serverStampOf(id) },
+          { fallback: false }
+        );
+      }
+    };
+  }, [batchingEnabled]);
+
   const autoSave = useAutoSave({
+    batch,
     storage,
     enabled: !!storage && !isReadonlyUrl,
     onSaved: (id, savedAt) => {
@@ -621,12 +706,26 @@ export function DiagramLifecycleProvider({
   );
   const hasUnsavedWorkRef = useRef(hasUnsavedWork);
   useEffect(() => { hasUnsavedWorkRef.current = hasUnsavedWork; }, [hasUnsavedWork]);
+  // Leaving the page: with batched uploads, work saved in the browser (a
+  // persisted draft, restored on the next open) is not at risk, so only work
+  // that is not even there warns. The flush on `pagehide` below still tries
+  // to upload it.
+  const hasWorkAtRiskOnUnload = useCallback(
+    (): boolean =>
+      (batch ? autoSave.hasUnpersistedWork() : autoSave.hasUnsavedWork()) ||
+      dirtyDiagramIdsRef.current.size > 0 ||
+      (!serverStorageAvailable && sessionWorkUnexportedRef.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the autoSave predicates are stable; the rest are refs
+    [batch, autoSave.hasUnpersistedWork, autoSave.hasUnsavedWork, serverStorageAvailable]
+  );
+  const hasWorkAtRiskOnUnloadRef = useRef(hasWorkAtRiskOnUnload);
+  useEffect(() => { hasWorkAtRiskOnUnloadRef.current = hasWorkAtRiskOnUnload; }, [hasWorkAtRiskOnUnload]);
   const beforeUnloadMessageRef = useRef('');
   useEffect(() => { beforeUnloadMessageRef.current = t('alert.beforeUnload'); }, [t]);
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!hasUnsavedWorkRef.current()) return;
+      if (!hasWorkAtRiskOnUnloadRef.current()) return;
       e.preventDefault();
       e.returnValue = beforeUnloadMessageRef.current;
       return e.returnValue;
@@ -1310,9 +1409,17 @@ export function DiagramLifecycleProvider({
         remote ? { preserveViewport: true } : requestedView ? { view: requestedView } : undefined
       );
       if (!remote) writeDiagramUrlRef.current(id, axoviewRef.current?.getActiveViewId() ?? requestedView);
-      if (!remote && !hasDefaultIcons && storageRef.current) {
+      // Write the icon-merged diagram back (a migration for diagrams stored
+      // before packs loaded on demand). Not on server storage: the stored
+      // document is already the lean shape this would write, so every open
+      // was a full upload the server found unchanged (and, before it could
+      // tell, a real write that made every other device reload).
+      if (!remote && !hasDefaultIcons && storageRef.current && !serverModeRef.current) {
         storageRef.current.saveDiagram(id, mergedData).catch(() => {});
       }
+      // Edits to this diagram that are saved in this browser but never
+      // reached the server (a crash, a tab closed before its upload).
+      if (!remote) void recoverDraftRef.current(id, mergedData);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.resetStatus; whole autoSave churns on every save-status change
     [iconPackManager, autoSave.resetStatus]
@@ -1667,6 +1774,13 @@ export function DiagramLifecycleProvider({
   const knownVersionOf = (id: string): number | undefined =>
     (storageRef.current as { knownVersion?: (id: string) => number | undefined } | null)
       ?.knownVersion?.(id);
+  knownVersionOfRef.current = knownVersionOf;
+  const noteVersion = (id: string, version: number) =>
+    (storageRef.current as { noteVersion?: (id: string, version: number) => void } | null)
+      ?.noteVersion?.(id, version);
+  const noteStamp = (id: string, stamp: string) =>
+    (storageRef.current as { noteStamp?: (id: string, stamp: string) => void } | null)
+      ?.noteStamp?.(id, stamp);
 
   // Another device saved the open diagram: load its content in place. Skipped
   // when this tab has unsaved work (its next save wins), when another diagram
@@ -1714,13 +1828,148 @@ export function DiagramLifecycleProvider({
   // every kind of storage (the server's sync stream follows for server
   // storage, and finds nothing left to close).
   useEffect(() => onTabMessage((message) => {
+    if (message.type === 'diagram-checkpoint') {
+      void takeCheckpointRef.current(message);
+      return;
+    }
+    if (message.type === 'diagram-uploaded') {
+      if (message.userKey !== userKeyRef.current) return;
+      void useDraftStore.getState().uploaded(message.userKey, message.id, message.rev);
+      // This tab shows exactly that checkpoint: it is now that server version.
+      const held = lineageRef.current.get(message.id)?.slice(-1)[0];
+      if (held === message.rev && message.version !== undefined) noteVersion(message.id, message.version);
+      if (held === message.rev && message.stamp) noteStamp(message.id, message.stamp);
+      return;
+    }
     if (message.type !== 'diagram-deleted') return;
     if (currentDiagramRef.current?.id === message.id) {
       closeDeletedElsewhereRef.current(message.id, 'tab');
     } else {
       setFileTreeRefreshToken((n) => n + 1);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- noteVersion reads refs only
   }), []);
+
+  // Another tab of this browser checkpointed an edit to the diagram open here:
+  // show it at once (no server round trip). Taken only when this tab has no
+  // edit of its own that is not checkpointed yet (that one goes out next and
+  // the other tab takes it instead), and, when this tab has a checkpoint still
+  // queued for upload, only if the other tab's content descends from it: then
+  // that tab's upload carries both, and this tab's queued one is dropped.
+  // Otherwise both upload and the later save wins, as between devices.
+  const takeCheckpoint = useCallback(async (
+    message: Extract<TabMessage, { type: 'diagram-checkpoint' }>
+  ) => {
+    if (!batchingEnabled || message.userKey !== userKeyRef.current) return;
+    const open = currentDiagramRef.current;
+    if (!open || open.id !== message.id) return;
+    if (autoSave.hasUnpersistedWork()) return;
+    const held = lineageRef.current.get(message.id)?.slice(-1)[0];
+    if (autoSave.hasUnsavedWork() && held && !message.parents.includes(held)) return;
+    autoSave.dropQueued(message.id);
+    lineageRef.current.set(message.id, [...message.parents, message.rev].slice(-LINEAGE_LIMIT - 1));
+    adoptedFromRef.current.set(message.id, message.device);
+    useDraftStore.getState().adopt({
+      userKey: message.userKey,
+      id: message.id,
+      model: message.model as DiagramData,
+      baseVersion: message.baseVersion,
+      baseStamp: message.baseStamp,
+      rev: message.rev,
+      savedAt: Date.now()
+    });
+    if (message.baseVersion !== undefined) noteVersion(message.id, message.baseVersion);
+    if (message.baseStamp) noteStamp(message.id, message.baseStamp);
+    await handleDiagramManagerLoad(message.id, message.model, diagramNameRef.current || open.name, {
+      remote: true
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoSave's predicates and dropQueued are stable; noteVersion reads refs
+  }, [batchingEnabled, handleDiagramManagerLoad, autoSave.hasUnpersistedWork, autoSave.hasUnsavedWork, autoSave.dropQueued]);
+  const takeCheckpointRef = useRef(takeCheckpoint);
+  takeCheckpointRef.current = takeCheckpoint;
+
+  // Opening a diagram that has a draft in this browser (stores/draftStore.ts):
+  // edits that never reached the server. Edited from the version the server
+  // still has: restore and upload them. The server moved on since (another
+  // device saved): offer them instead of overwriting that save unasked.
+  const recoverDraft = useCallback(async (id: string, loaded: DiagramData) => {
+    if (!batchingEnabled) return;
+    const userKey = userKeyRef.current;
+    // The server state as this load found it, before anything below can
+    // write and move it.
+    const serverStamp = serverStampOf(id);
+    const serverVersion = knownVersionOfRef.current(id);
+    const draft = await useDraftStore.getState().find(userKey, id);
+    if (!draft) return;
+    const open = currentDiagramRef.current;
+    if (open?.id !== id || autoSave.hasUnsavedWork()) return;
+    // This tab's own checkpoint, still on its way up: not a leftover.
+    if (lineageRef.current.get(id)?.includes(draft.rev)) return;
+    // Its edits reached the server after all (an upload sent as the tab
+    // closed, delivered late): nothing to restore.
+    if (sameContent(draft.model, loaded)) {
+      await useDraftStore.getState().discard(userKey, id);
+      return;
+    }
+    const restore = async () => {
+      if (currentDiagramRef.current?.id !== id) return;
+      await handleDiagramManagerLoad(id, draft.model, diagramNameRef.current || open.name, { remote: true });
+      lineageRef.current.set(id, [draft.rev]);
+      autoSave.scheduleSave(id, draft.model);
+      if ((await autoSave.saveNow()) === 'saved') await useDraftStore.getState().discard(userKey, id);
+    };
+    // Unchanged since the draft was made: same server stamp (its version, or
+    // lastModified on a store without versions). Unknown on either side: a
+    // draft from before stamps existed, or a backend that reports none.
+    const unchangedSince = draft.baseStamp && serverStamp
+      ? draft.baseStamp === serverStamp
+      : draft.baseVersion === undefined || serverVersion === undefined || draft.baseVersion === serverVersion;
+    if (unchangedSince) {
+      await restore();
+      notificationStore.push({
+        severity: 'info',
+        message: t('sync.draftRestored', 'Restored edits from this browser that had not reached the server yet.')
+      });
+      return;
+    }
+    notificationStore.push({
+      severity: 'warning',
+      message: t(
+        'sync.draftOutdated',
+        'This browser has edits to this diagram that never reached the server, and the diagram has changed since.'
+      ),
+      action: { label: t('sync.restoreDraft', 'Restore my edits'), onClick: () => { void restore(); } }
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoSave's methods are stable; t and notificationStore too
+  }, [batchingEnabled, handleDiagramManagerLoad, autoSave.hasUnsavedWork, autoSave.scheduleSave, autoSave.saveNow]);
+  recoverDraftRef.current = recoverDraft;
+
+  // Batched uploads go out at once when it matters: the tab is hidden or the
+  // page is going away (keepalive upload; the draft covers a failure), or
+  // another browser opened the workspace and should see edits live.
+  useEffect(() => {
+    if (!batch) return undefined;
+    const flush = () => {
+      if (autoSave.hasUnsavedWork()) void autoSaveSaveNowRef.current();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    let company = othersPresent();
+    const stopWatching = usePresenceStore.subscribe(() => {
+      const now = othersPresent();
+      if (now && !company) flush();
+      company = now;
+    });
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      stopWatching();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoSave.hasUnsavedWork is stable
+  }, [batch, autoSave.hasUnsavedWork]);
 
   // Signing out (here or in another tab): save pending edits first.
   useEffect(() => registerBeforeSignOut(async () => {
@@ -1739,6 +1988,13 @@ export function DiagramLifecycleProvider({
       };
     },
     reloadOpenDiagram: reloadOpenDiagramFromRemote,
+    alreadyHave: (change) => {
+      if (change.kind !== 'diagram' || change.action !== 'save' || !change.id || !change.origin) return false;
+      if (currentDiagramRef.current?.id !== change.id) return false;
+      if (adoptedFromRef.current.get(change.id) !== change.origin) return false;
+      if (change.version !== undefined) noteVersion(change.id, change.version);
+      return true;
+    },
     refreshTree: () => setFileTreeRefreshToken((n) => n + 1),
     // The hook warns ("deleted in another tab or on another device") and
     // refreshes the tree.
@@ -1819,11 +2075,14 @@ export function DiagramLifecycleProvider({
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      // Either case: with Caps Lock on (or Shift held) the key is 'S', and
+      // Ctrl+S used to do nothing, leaving the save to the autosave.
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === 's') {
         e.preventDefault();
         handleSaveClick();
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+      if ((e.ctrlKey || e.metaKey) && key === 'o') {
         e.preventDefault();
         handleOpenClick();
       }

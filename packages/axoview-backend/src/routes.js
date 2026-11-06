@@ -296,7 +296,11 @@ export async function createDiagram(adapter, ctx) {
     lastModified: new Date().toISOString()
   };
   const written = await putJson(adapter, `diagrams/${id}`, data);
-  return { status: 201, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id, written) };
+  return {
+    status: 201,
+    body: { success: true, id, lastModified: data.lastModified },
+    headers: await diagramVersionHeaders(adapter, id, written)
+  };
 }
 
 export async function saveDiagram(adapter, ctx) {
@@ -336,7 +340,12 @@ export async function saveDiagram(adapter, ctx) {
     if (storedHash && storedHash === (await contentHash(body)) && (!state || ctx.ifMatch !== undefined)) {
       return {
         status: 200,
-        body: { success: true, id, unchanged: true },
+        body: {
+          success: true,
+          id,
+          unchanged: true,
+          lastModified: state?.item?.lastModified ?? existing?.lastModified
+        },
         headers: etag(state?.version),
         sync: false
       };
@@ -353,7 +362,13 @@ export async function saveDiagram(adapter, ctx) {
       expectedVersion: ctx.ifMatch,
       ...(state !== undefined ? { known: state?.item ?? null } : {})
     });
-    return { status: 200, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id, written) };
+    // lastModified: the stamp a client without versions (the fs store) uses
+    // to tell whether the diagram changed since it last saw it.
+    return {
+      status: 200,
+      body: { success: true, id, lastModified: data.lastModified },
+      headers: await diagramVersionHeaders(adapter, id, written)
+    };
   });
 }
 
@@ -371,7 +386,11 @@ export async function patchDiagram(adapter, ctx) {
     };
     const written = await putJson(adapter, `diagrams/${id}`, updated);
     // The new version, so the client's next save is not refused as stale.
-    return { status: 200, body: { success: true }, headers: await diagramVersionHeaders(adapter, id, written) };
+    return {
+      status: 200,
+      body: { success: true, lastModified: updated.lastModified },
+      headers: await diagramVersionHeaders(adapter, id, written)
+    };
   });
 }
 

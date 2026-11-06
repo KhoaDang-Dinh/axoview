@@ -85,6 +85,9 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
   return undefined;
 }
 
+/** Under the browsers' 64 KB keepalive budget, with room for another request. */
+const KEEPALIVE_MAX_BYTES = 48_000;
+
 export class LocalStorageProvider implements StorageProvider {
   readonly id = 'local' as const;
   readonly displayName = 'Local Storage';
@@ -100,6 +103,8 @@ export class LocalStorageProvider implements StorageProvider {
   // The version of the content this tab actually holds: set on load and save,
   // never by a listing (which only tells which version exists on the server).
   private readonly contentVersions = new Map<string, number>();
+  /** lastModified of each diagram as this tab last saw it on the server (serverStamp). */
+  private readonly serverModified = new Map<string, string>();
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl ?? apiBaseUrl();
@@ -146,7 +151,32 @@ export class LocalStorageProvider implements StorageProvider {
       this.diagramVersions.set(id, Number(match[1]));
       this.contentVersions.set(id, Number(match[1]));
     }
-    return response.json();
+    const data = await response.json();
+    this.rememberStamp(id, data);
+    return data;
+  }
+
+  /**
+   * Which state of `id` on the server this tab last saw (loaded or wrote):
+   * its version where the backend versions diagrams, else its lastModified
+   * (the fs store). A draft records it, so on the next open the app can tell
+   * whether the diagram changed elsewhere since the draft was made.
+   */
+  serverStamp(id: string): string | undefined {
+    const version = this.contentVersions.get(id);
+    if (version !== undefined) return `v${version}`;
+    const modified = this.serverModified.get(id);
+    return modified ? `t${modified}` : undefined;
+  }
+
+  /** Another tab of this browser wrote `id`; this tab shows that content. */
+  noteStamp(id: string, stamp: string): void {
+    if (stamp.startsWith('t')) this.serverModified.set(id, stamp.slice(1));
+  }
+
+  private rememberStamp(id: string, body: unknown): void {
+    const modified = (body as { lastModified?: unknown } | null)?.lastModified;
+    if (typeof modified === 'string') this.serverModified.set(id, modified);
   }
 
   /**
@@ -158,6 +188,16 @@ export class LocalStorageProvider implements StorageProvider {
     return this.contentVersions.get(id);
   }
 
+  /**
+   * Another tab of this browser holds `id` at `version` and this tab now shows
+   * the same content (it took that tab's checkpoint): save against it next,
+   * and do not reload when the sync stream reports it.
+   */
+  noteVersion(id: string, version: number): void {
+    this.diagramVersions.set(id, version);
+    this.contentVersions.set(id, version);
+  }
+
   private async putDiagram(id: string, body: string): Promise<Response> {
     const version = this.diagramVersions.get(id);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -166,6 +206,10 @@ export class LocalStorageProvider implements StorageProvider {
       method: 'PUT',
       headers,
       body,
+      // A save flushed as the tab is hidden or closed must outlive the page.
+      // Browsers cap keepalive bodies at 64 KB (all in flight together); a
+      // larger diagram is still saved in the browser as a draft.
+      keepalive: new Blob([body]).size < KEEPALIVE_MAX_BYTES,
       signal: timeoutSignal(15000)
     });
   }
@@ -190,6 +234,7 @@ export class LocalStorageProvider implements StorageProvider {
     }
     if (!response.ok) throw new Error(`Failed to save diagram: ${response.status}`);
     this.rememberVersion(id, response);
+    this.rememberStamp(id, await response.json().catch(() => null));
   }
 
   /**
@@ -235,6 +280,7 @@ export class LocalStorageProvider implements StorageProvider {
     });
     if (!response.ok) throw new Error(`Failed to create diagram: ${response.status}`);
     const result = await response.json();
+    this.rememberStamp(result.id, result);
     const version = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
     if (version) {
       this.diagramVersions.set(result.id, Number(version[1]));
@@ -253,6 +299,7 @@ export class LocalStorageProvider implements StorageProvider {
       });
       if (!response.ok) throw new Error(`Failed to soft-delete diagram: ${response.status}`);
       this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
     } else {
       const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
         method: 'DELETE',
@@ -455,6 +502,7 @@ export class LocalStorageProvider implements StorageProvider {
       });
       if (!response.ok) throw new Error(`Failed to restore diagram: ${response.status}`);
       this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
     } else {
       const list = this.sessionListDiagrams();
       const updated = list.map((d) =>
@@ -475,6 +523,7 @@ export class LocalStorageProvider implements StorageProvider {
       });
       if (!response.ok) throw new Error(`Failed to rename diagram: ${response.status}`);
       this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
     } else {
       // MQA #14: keep the per-diagram blob's `title` in sync with the list-level
       // `name`. The export path reads from the blob (`loadDiagram`), so renaming
