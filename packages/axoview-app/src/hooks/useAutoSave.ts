@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StorageProvider } from '../services/storage/types';
 import type { DiagramData } from '../diagramUtils';
 
-export type SaveStatus = 'idle' | 'saving' | 'error';
+/**
+ * `local`: the latest edit is saved in this browser (a persisted draft) and
+ * its upload is batched (see `UseAutoSaveOptions.batch`).
+ */
+export type SaveStatus = 'idle' | 'saving' | 'local' | 'error';
 
 /**
  * What a `saveNow()` flush actually did.
@@ -14,11 +18,34 @@ export type SaveStatus = 'idle' | 'saving' | 'error';
  */
 export type FlushOutcome = 'nothing-pending' | 'saved' | 'error';
 
+/**
+ * Batched uploads (server storage). Without this every autosave goes to
+ * storage 2 s after the user pauses, as it always has. With it, that moment is
+ * a CHECKPOINT (the model saved in the browser, stores/draftStore.ts), and the
+ * upload follows:
+ *   - at once when `uploadNow()` says so (another browser has the workspace
+ *     open, services/sync/presence.ts) or the checkpoint could not be
+ *     persisted (no IndexedDB: nothing would survive a crash);
+ *   - otherwise `maxDelayMs` after the first checkpoint not yet uploaded, as
+ *     one upload of the latest one.
+ * `saveNow()` always uploads at once, so every flush point (switching diagram,
+ * sharing, exporting, signing out, Ctrl+S, the tab hidden) still means "on the
+ * server".
+ */
+export interface AutoSaveBatching {
+  checkpoint: (diagramId: string, model: DiagramData) => Promise<{ rev: string; persisted: boolean }>;
+  uploadNow: () => boolean;
+  maxDelayMs: number;
+  /** The upload that included checkpoint `rev` landed. */
+  onUploaded?: (diagramId: string, rev: string) => void;
+}
+
 interface UseAutoSaveOptions {
   storage: StorageProvider | null;
   enabled: boolean;
   onSaved?: (diagramId: string, savedAt: Date) => void;
   onError?: (error: Error) => void;
+  batch?: AutoSaveBatching | null;
 }
 
 export interface UseAutoSaveResult {
@@ -38,6 +65,14 @@ export interface UseAutoSaveResult {
    */
   hasUnsavedWork: () => boolean;
   /**
+   * Like hasUnsavedWork, but work whose latest checkpoint is persisted in the
+   * browser does not count: closing the tab then loses nothing (the draft is
+   * restored on the next open). The `beforeunload` warning reads this.
+   */
+  hasUnpersistedWork: () => boolean;
+  /** Drop a queued upload of `diagramId`: another tab of this browser holds newer content and uploads it. */
+  dropQueued: (diagramId: string) => void;
+  /**
    * Reset status back to idle (e.g. after loading a new diagram). Flushes
    * queued work first — a reset must not be a silent discard of the previous
    * diagram's last edit (A1/LIFE-09).
@@ -47,18 +82,37 @@ export interface UseAutoSaveResult {
 
 const DEBOUNCE_MS = 2000;
 
+interface Pending {
+  diagramId: string;
+  model: DiagramData;
+  /** The checkpoint this model was saved as, once it has been. */
+  rev?: string;
+  /** That checkpoint reached IndexedDB. */
+  persisted?: boolean;
+}
+
 export function useAutoSave({
   storage,
   enabled,
   onSaved,
   onError,
+  batch = null,
 }: UseAutoSaveOptions): UseAutoSaveResult {
   const [saveStatus, setSaveStatusState] = useState<SaveStatus>('idle');
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
   // What's queued for the next flush
-  const pendingRef = useRef<{ diagramId: string; model: DiagramData } | null>(null);
+  const pendingRef = useRef<Pending | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The batched upload's deadline (see AutoSaveBatching), armed by the first
+  // checkpoint not yet uploaded.
+  const uploadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The model on the wire was a persisted checkpoint (beforeunload need not warn).
+  const inFlightPersistedRef = useRef(false);
+  // The last checkpoint per diagram: an upload of newer content includes it.
+  const lastRevRef = useRef<Map<string, string>>(new Map());
+  const batchRef = useRef(batch);
+  useEffect(() => { batchRef.current = batch; }, [batch]);
   // The write currently on the wire, if any (writes are serialised — see startSave)
   const inFlightRef = useRef<Promise<void> | null>(null);
   const statusRef = useRef<SaveStatus>('idle');
@@ -77,11 +131,20 @@ export function useAutoSave({
     if (mountedRef.current) setSaveStatusState(next);
   }, []);
 
+  const clearUploadTimer = useCallback(() => {
+    if (uploadTimerRef.current) {
+      clearTimeout(uploadTimerRef.current);
+      uploadTimerRef.current = null;
+    }
+  }, []);
+
   /** One write. Never overlaps another — see `startSave`. */
   const performSave = useCallback(async () => {
     const pending = pendingRef.current;
     if (!pending || !storageRef.current) return;
     pendingRef.current = null;
+    clearUploadTimer();
+    inFlightPersistedRef.current = !!pending.persisted;
 
     setStatus('saving');
     try {
@@ -89,17 +152,25 @@ export function useAutoSave({
       const savedAt = new Date();
       if (mountedRef.current) setLastSaved(savedAt);
       // A newer edit landed while this write was on the wire: the diagram is
-      // NOT saved, so stay 'saving' until that one lands too (LIFE-08).
-      setStatus(pendingRef.current ? 'saving' : 'idle');
+      // NOT saved, so stay 'saving' until that one lands too (LIFE-08). A newer
+      // one that is only a checkpoint so far is 'local'.
+      const next = pendingRef.current as Pending | null;
+      setStatus(next ? (next.rev && next.persisted ? 'local' : 'saving') : 'idle');
       onSavedRef.current?.(pending.diagramId, savedAt);
+      // This upload carried its own checkpoint, or newer content than the
+      // last one (a flush before the debounce): either way that draft is done.
+      const rev = pending.rev ?? lastRevRef.current.get(pending.diagramId);
+      if (rev) batchRef.current?.onUploaded?.(pending.diagramId, rev);
     } catch (e) {
       // Keep the model that could not be written so a retry has something to
       // send (LIFE-01) — unless a newer edit has already superseded it.
       if (!pendingRef.current) pendingRef.current = pending;
       setStatus('error');
       onErrorRef.current?.(e instanceof Error ? e : new Error('Auto-save failed'));
+    } finally {
+      inFlightPersistedRef.current = false;
     }
-  }, [setStatus]);
+  }, [setStatus, clearUploadTimer]);
 
   /**
    * Start a write, queued behind any write already on the wire. Two overlapping
@@ -115,19 +186,55 @@ export function useAutoSave({
     return run;
   }, [performSave]);
 
+  /** The debounce fired: upload now, or (batching) checkpoint and maybe upload later. */
+  const onDebounced = useCallback(async () => {
+    const policy = batchRef.current;
+    const pending = pendingRef.current;
+    if (!policy || !pending) {
+      void startSave();
+      return;
+    }
+    let result: { rev: string; persisted: boolean };
+    try {
+      result = await policy.checkpoint(pending.diagramId, pending.model);
+    } catch {
+      result = { rev: '', persisted: false };
+    }
+    if (result.rev) lastRevRef.current.set(pending.diagramId, result.rev);
+    // A newer edit (or a flush) replaced this model meanwhile: its own
+    // debounce or the flush takes it from here.
+    if (pendingRef.current !== pending) return;
+    pending.rev = result.rev || undefined;
+    pending.persisted = result.persisted;
+    if (!result.persisted || policy.uploadNow()) {
+      void startSave();
+      return;
+    }
+    setStatus('local');
+    if (!uploadTimerRef.current) {
+      uploadTimerRef.current = setTimeout(() => {
+        uploadTimerRef.current = null;
+        void startSave();
+      }, policy.maxDelayMs);
+    }
+  }, [startSave, setStatus]);
+
   const scheduleSave = useCallback(
     (diagramId: string, model: DiagramData) => {
       if (!enabled) return;
+      // One queued model at a time: opening another diagram flushes this one
+      // first (resetStatus), so a queued checkpoint is never replaced by
+      // another diagram's edit.
       pendingRef.current = { diagramId, model };
       // Show 'saving' immediately so the status bar responds at once
       setStatus('saving');
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
-        void startSave();
+        void onDebounced();
       }, DEBOUNCE_MS);
     },
-    [enabled, startSave, setStatus]
+    [enabled, onDebounced, setStatus]
   );
 
   const saveNow = useCallback(async (): Promise<FlushOutcome> => {
@@ -135,6 +242,7 @@ export function useAutoSave({
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
+    clearUploadTimer();
     if (pendingRef.current && storageRef.current) {
       await startSave();
     } else if (inFlightRef.current) {
@@ -146,24 +254,42 @@ export function useAutoSave({
       return statusRef.current === 'error' ? 'error' : 'nothing-pending';
     }
     return statusRef.current === 'error' ? 'error' : 'saved';
-  }, [startSave]);
+  }, [startSave, clearUploadTimer]);
 
   const hasUnsavedWork = useCallback(
     () => !!pendingRef.current || !!inFlightRef.current || statusRef.current !== 'idle',
     []
   );
 
+  const hasUnpersistedWork = useCallback(() => {
+    const pending = pendingRef.current;
+    if (pending && !pending.persisted) return true;
+    if (inFlightRef.current && !inFlightPersistedRef.current) return true;
+    // A failed upload with nothing queued: its model went back into the queue
+    // (LIFE-01), so the `pending` check above covers it.
+    return false;
+  }, []);
+
+  const dropQueued = useCallback((diagramId: string) => {
+    const pending = pendingRef.current;
+    if (!pending || pending.diagramId !== diagramId || debounceTimerRef.current) return;
+    pendingRef.current = null;
+    clearUploadTimer();
+    if (!inFlightRef.current) setStatus('idle');
+  }, [clearUploadTimer, setStatus]);
+
   const resetStatus = useCallback(() => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
+    clearUploadTimer();
     // Flush, don't discard: the pending model is keyed by its own diagram id,
     // so writing it out cannot collide with the diagram being loaded.
     if (pendingRef.current && storageRef.current) void startSave();
     pendingRef.current = null;
     setStatus('idle');
-  }, [startSave, setStatus]);
+  }, [startSave, setStatus, clearUploadTimer]);
 
   // Teardown: flush, don't drop. `EditorPage` is the element of every route, so
   // an in-app navigation unmounts this hook mid-debounce (LIFE-05).
@@ -175,9 +301,10 @@ export function useAutoSave({
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
       }
+      clearUploadTimer();
       if (pendingRef.current && storageRef.current) void startSave();
     };
-  }, [startSave]);
+  }, [startSave, clearUploadTimer]);
 
   // Disabling autosave must disarm an already-armed timer too — only
   // `scheduleSave` consulted the flag, so a save armed a moment earlier still
@@ -190,7 +317,10 @@ export function useAutoSave({
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
     }
-  }, [enabled]);
+    clearUploadTimer();
+  }, [enabled, clearUploadTimer]);
 
-  return { saveStatus, lastSaved, scheduleSave, saveNow, hasUnsavedWork, resetStatus };
+  return {
+    saveStatus, lastSaved, scheduleSave, saveNow, hasUnsavedWork, hasUnpersistedWork, dropQueued, resetStatus
+  };
 }

@@ -68,6 +68,38 @@ it('on 409, re-reads the version and saves again with it', async () => {
   expect(p.knownVersion('d1')).toBe(5);
 });
 
+it('on a 409 that names the current version, saves again against it without re-reading the diagram', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { title: 'A' }, '"3"'),
+    response(409, { code: 'VERSION_CONFLICT', currentVersion: 4 }),
+    response(200, { ok: true }, '"5"')
+  ]);
+  await p.loadDiagram('d1');
+  await p.saveDiagram('d1', { title: 'mine' });
+  expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['GET -', 'PUT "3"', 'PUT "4"']);
+  expect(p.knownVersion('d1')).toBe(5);
+});
+
+it('a rename, trash or restore records the version it produced, so the next save is not stale', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { title: 'A' }, '"3"'),   // load
+    response(200, { success: true }, '"4"'), // rename
+    response(200, { ok: true }, '"5"'),      // save: goes out against 4, first time
+    response(200, { success: true }, '"6"'), // trash
+    response(200, { success: true }, '"7"')  // restore
+  ]);
+  await p.loadDiagram('d1');
+  await p.renameDiagram('d1', 'Renamed');
+  await p.saveDiagram('d1', { title: 'Renamed' });
+  expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['GET -', 'PATCH -', 'PUT "4"']);
+  await p.deleteDiagram('d1', true);
+  expect(p.knownVersion('d1')).toBe(6);
+  await p.restoreDiagram('d1');
+  expect(p.knownVersion('d1')).toBe(7);
+});
+
 it('on 428 (version never learned), learns it and saves', async () => {
   const p = await serverProvider();
   const calls = script([

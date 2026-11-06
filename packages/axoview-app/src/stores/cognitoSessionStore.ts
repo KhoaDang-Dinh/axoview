@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import { apiBaseUrl } from '../utils/apiBaseUrl';
+import { wipeAllDrafts } from './draftStore';
+import { postToTabs } from '../services/sync/tabChannel';
+import { runBeforeSignOut } from '../services/session/beforeSignOut';
 
 export interface CognitoAuthConfig {
   domain: string;
@@ -200,6 +203,8 @@ export async function bootstrapCognitoSession(config: CognitoAuthConfig): Promis
 }
 
 export async function signOutCognito(): Promise<void> {
+  // Save pending edits while the session still works.
+  await runBeforeSignOut();
   try {
     await fetch(`${apiBaseUrl()}/api/auth/logout`, {
       method: 'POST',
@@ -213,5 +218,22 @@ export async function signOutCognito(): Promise<void> {
     sessionStorage.removeItem(PROVIDER_KEY);
     sessionStorage.removeItem(LINK_RETRY_KEY);
     useCognitoSessionStore.getState()._clear('signed-out');
+    // Edits saved in this browser but not uploaded (stores/draftStore.ts) go
+    // with the session: the next person at this computer must not find them.
+    // The flush above already uploaded what it could.
+    void wipeAllDrafts();
+    // Every other tab of this browser signs out too (CognitoSessionProvider).
+    postToTabs({ type: 'account-signed-out' });
   }
+}
+
+/**
+ * Another tab signed out: the session (its refresh cookie) is gone, so this
+ * tab saves what it can and drops its in-memory session too. No server call.
+ */
+export async function signOutFromOtherTab(): Promise<void> {
+  if (useCognitoSessionStore.getState().status !== 'signed-in') return;
+  await runBeforeSignOut();
+  useCognitoSessionStore.getState()._clear('signed-out');
+  void wipeAllDrafts();
 }

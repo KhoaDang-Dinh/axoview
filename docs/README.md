@@ -124,6 +124,8 @@ Deep snapshots cut on a date and left immutable. Read for the comprehensive narr
 | [0050](adr/0050-view-rotation-render-and-legibility-policy.md) | View rotation: render & legibility policy (element classes, keep-upright, procedural grid, export dpr) — Accepted |
 | [0051](adr/0051-view-rotation-default-angle-sharing-and-export.md) | View rotation: per-page default angle, viewer controls, export angle — Accepted |
 | [0052](adr/0052-ai-assistant-boundaries.md) | Additive AI assistant, chat-header MCP integrations, authorized SSE and agent boundaries — Accepted |
+| [0053](adr/0053-presence-on-the-sync-stream.md) | Presence on the sync stream (join/renew/here/leave, tab and browser ids, other browsers only) — Accepted |
+| [0054](adr/0054-local-drafts-and-batched-uploads.md) | Local drafts and batched uploads (2 s checkpoints in the browser, one upload per 30 s while alone, recovery on open) — Accepted |
 
 ---
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { connectRealtimeSync, type SyncChange } from '../services/sync/realtimeSync';
+import { usePresenceStore } from '../services/sync/presence';
 
 /**
  * Realtime multi-device sync for server storage (one user, many devices).
@@ -34,6 +35,8 @@ export interface SyncState {
 
 /** What this tab does about one change from another device. Pure. */
 export function planSyncReaction(change: SyncChange, state: SyncState): SyncReaction {
+  // Who else is here changes nothing on screen (services/sync/presence.ts).
+  if (change.kind === 'presence') return { type: 'ignore' };
   if (change.kind === 'resync') {
     if (!state.openDiagramId) return { type: 'refreshTree' };
     return state.hasUnsavedWork ? { type: 'refreshTree' } : { type: 'reloadOpen', refreshTree: true };
@@ -74,6 +77,11 @@ export interface UseRealtimeSyncOptions {
   /** User-facing notice (existing toast system); called at most once per conflict. */
   notify: (severity: 'info' | 'warning', message: string) => void;
   t: (key: string, fallback: string) => string;
+  /**
+   * True for a change this tab already holds by another route (a sibling
+   * tab's upload of a checkpoint this tab took over the tab channel): skip it.
+   */
+  alreadyHave?: (change: SyncChange) => boolean;
 }
 
 /** Hidden this long, the stream closes (resumed on show). */
@@ -118,7 +126,12 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
     };
 
     const handle = (change: SyncChange) => {
+      if (change.kind === 'presence') {
+        usePresenceStore.getState().apply(change);
+        return;
+      }
       const current = optionsRef.current;
+      if (current.alreadyHave?.(change)) return;
       const state = current.getState();
       const reaction = planSyncReaction(change, state);
       switch (reaction.type) {
@@ -149,7 +162,7 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
           current.refreshTree();
           current.notify(
             'warning',
-            current.t('sync.deletedElsewhere', 'This diagram was deleted on another device.')
+            current.t('sync.deletedElsewhere', 'This diagram was deleted in another tab or on another device.')
           );
           return;
         case 'openRenamed':
@@ -194,6 +207,9 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
       document.removeEventListener('visibilitychange', onVisibility);
       if (hiddenTimer) clearTimeout(hiddenTimer);
       close();
+      // Without a stream nothing tells this tab who is here: assume no one
+      // until it hears again (a fresh stream's join is answered at once).
+      usePresenceStore.getState().clear();
     };
   }, [enabled, baseUrl]);
 }

@@ -7,6 +7,8 @@
  * and returns `{ status, body }` or throws HttpError.
  */
 
+import { contentHash, pickServerOwned, SERVER_OWNED_DIAGRAM_FIELDS } from './diagramContent.js';
+
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const UUID_PATTERN = /^[a-zA-Z0-9_-]{21,64}$/;
 
@@ -45,8 +47,6 @@ const RESERVED_DIAGRAM_IDS = new Set([
  * link with A's content. Same class as the engine block's finding that
  * reference integrity is checked and *identity* integrity is not (E4/CLIP-01).
  */
-const SERVER_OWNED_DIAGRAM_FIELDS = ['shareUuid', 'created', 'workspaceId'];
-
 function stripServerOwnedFields(body) {
   const out = { ...(body || {}) };
   for (const key of SERVER_OWNED_DIAGRAM_FIELDS) delete out[key];
@@ -132,20 +132,34 @@ async function getJson(adapter, key) {
   return JSON.parse(new TextDecoder().decode(buf));
 }
 
+/**
+ * Write a document. Internal mutations (rename, trash, share state) write over
+ * the latest stored version; full editor saves (saveDiagram) pass the version
+ * the client observed instead. Resolves to what the adapter reports back
+ * (`{ version }` from a versioned store, nothing from the fs one).
+ */
 async function putJson(adapter, key, value) {
   const options = {};
-  // Internal mutations (rename, trash, share state) use the latest stored
-  // version. Full editor saves pass the version observed by the client below.
-  if (key.startsWith('diagrams/') && adapter.getDiagramVersion) {
+  if (key.startsWith('diagrams/') && adapter.getDiagramState) {
+    // One metadata read, handed to the write so it does not read again. The
+    // write is still conditional on that version, so a racing save is refused.
+    const state = await adapter.getDiagramState(key.slice('diagrams/'.length));
+    options.expectedVersion = state?.version ?? 0;
+    options.known = state?.item ?? null;
+  } else if (key.startsWith('diagrams/') && adapter.getDiagramVersion) {
     options.expectedVersion = (await adapter.getDiagramVersion(key.slice('diagrams/'.length))) ?? 0;
   }
-  await adapter.put(key, new TextEncoder().encode(JSON.stringify(value, null, 2)), options);
+  return adapter.put(key, new TextEncoder().encode(JSON.stringify(value, null, 2)), options);
 }
 
-function diagramVersionHeaders(adapter, id) {
-  return adapter.getDiagramVersion
-    ? adapter.getDiagramVersion(id).then((version) => version == null ? {} : { ETag: `"${version}"` })
-    : Promise.resolve({});
+const etag = (version) => (typeof version === 'number' ? { ETag: `"${version}"` } : {});
+
+/** The ETag for a write: the version it produced, else (an adapter that does not report it) a lookup. */
+async function diagramVersionHeaders(adapter, id, written) {
+  if (typeof written?.version === 'number') return etag(written.version);
+  if (!adapter.getDiagramVersion) return {};
+  const version = await adapter.getDiagramVersion(id);
+  return version == null ? {} : etag(version);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +250,16 @@ export async function listDiagrams(adapter, _ctx) {
 
 export async function getDiagram(adapter, ctx) {
   const id = assertId(ctx.params.id);
+  if (adapter.getDiagramWithVersion) {
+    // One metadata read gives both the object and its version.
+    const found = await adapter.getDiagramWithVersion(id);
+    if (!found?.bytes) throw new HttpError(404, 'Diagram not found');
+    return {
+      status: 200,
+      body: JSON.parse(new TextDecoder().decode(found.bytes)),
+      headers: etag(found.version)
+    };
+  }
   const data = await getJson(adapter, `diagrams/${id}`);
   if (!data) throw new HttpError(404, 'Diagram not found');
   return { status: 200, body: data, headers: await diagramVersionHeaders(adapter, id) };
@@ -271,8 +295,12 @@ export async function createDiagram(adapter, ctx) {
     created: new Date().toISOString(),
     lastModified: new Date().toISOString()
   };
-  await putJson(adapter, `diagrams/${id}`, data);
-  return { status: 201, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id) };
+  const written = await putJson(adapter, `diagrams/${id}`, data);
+  return {
+    status: 201,
+    body: { success: true, id, lastModified: data.lastModified },
+    headers: await diagramVersionHeaders(adapter, id, written)
+  };
 }
 
 export async function saveDiagram(adapter, ctx) {
@@ -291,11 +319,38 @@ export async function saveDiagram(adapter, ctx) {
     // `patchDiagram` (rename / trash) always preserved the field, so the loss
     // was specific to the full replace. Carry the server-owned fields across
     // the same way, which also makes the two write paths agree.
-    const existing = await getJson(adapter, `diagrams/${id}`);
-    const preserved = {};
-    for (const key of SERVER_OWNED_DIAGRAM_FIELDS) {
-      if (existing && existing[key] !== undefined) preserved[key] = existing[key];
+    //
+    // Cost: a versioned store (DynamoDB + S3) keeps the server-owned fields and
+    // a content digest on the metadata item, so this is ONE metadata read and
+    // no object read. The fs store, and an item written before those fields
+    // existed, read the stored document instead.
+    const state = adapter.getDiagramState ? await adapter.getDiagramState(id) : undefined;
+    const existing = state === undefined
+      ? await getJson(adapter, `diagrams/${id}`)
+      : state?.owned === null
+        ? await state.readDocument()
+        : null;
+    const preserved = state?.owned ?? pickServerOwned(existing);
+    const storedHash = state?.contentHash ?? (existing ? await contentHash(existing) : null);
+
+    // Nothing the user can see changed (an undo back to the saved state, a
+    // second tab saving what the first already saved): write nothing and tell
+    // nobody. A versioned store still requires If-Match, so a save without one
+    // goes on to the write and is refused there as before.
+    if (storedHash && storedHash === (await contentHash(body)) && (!state || ctx.ifMatch !== undefined)) {
+      return {
+        status: 200,
+        body: {
+          success: true,
+          id,
+          unchanged: true,
+          lastModified: state?.item?.lastModified ?? existing?.lastModified
+        },
+        headers: etag(state?.version),
+        sync: false
+      };
     }
+
     const data = {
       ...body,
       ...preserved,
@@ -303,8 +358,17 @@ export async function saveDiagram(adapter, ctx) {
       lastModified: new Date().toISOString()
     };
     const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
-    await adapter.put(`diagrams/${id}`, bytes, { expectedVersion: ctx.ifMatch });
-    return { status: 200, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id) };
+    const written = await adapter.put(`diagrams/${id}`, bytes, {
+      expectedVersion: ctx.ifMatch,
+      ...(state !== undefined ? { known: state?.item ?? null } : {})
+    });
+    // lastModified: the stamp a client without versions (the fs store) uses
+    // to tell whether the diagram changed since it last saw it.
+    return {
+      status: 200,
+      body: { success: true, id, lastModified: data.lastModified },
+      headers: await diagramVersionHeaders(adapter, id, written)
+    };
   });
 }
 
@@ -320,8 +384,13 @@ export async function patchDiagram(adapter, ctx) {
       id,
       lastModified: new Date().toISOString()
     };
-    await putJson(adapter, `diagrams/${id}`, updated);
-    return { status: 200, body: { success: true } };
+    const written = await putJson(adapter, `diagrams/${id}`, updated);
+    // The new version, so the client's next save is not refused as stale.
+    return {
+      status: 200,
+      body: { success: true, lastModified: updated.lastModified },
+      headers: await diagramVersionHeaders(adapter, id, written)
+    };
   });
 }
 

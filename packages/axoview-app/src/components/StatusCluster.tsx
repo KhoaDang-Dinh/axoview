@@ -62,6 +62,21 @@ export function StatusCluster() {
           </Stack>
         );
       }
+      if (saveStatus === 'local') {
+        // Saved as a draft in this browser; the batched upload follows within
+        // seconds, or at once when the tab is hidden or someone else opens the
+        // workspace (stores/draftStore.ts).
+        return (
+          <Typography
+            variant="caption"
+            data-axoview-id="status-saved-in-browser"
+            title={t('status.savedInBrowserHint', 'Your edits are safe here and are being sent to the server.')}
+            sx={{ color: 'text.disabled', userSelect: 'none', whiteSpace: 'nowrap' }}
+          >
+            {t('status.savedInBrowser', 'Saved in this browser')}
+          </Typography>
+        );
+      }
       if (lastSaved) {
         return (
           <Typography variant="caption" sx={{ color: 'text.disabled', userSelect: 'none', whiteSpace: 'nowrap' }}>

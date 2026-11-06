@@ -1,4 +1,5 @@
 import { apiFetch } from '../apiFetch';
+import { getBrowserId } from './browserId';
 import { getDeviceId } from './deviceId';
 
 /**
@@ -8,14 +9,16 @@ import { getDeviceId } from './deviceId';
  */
 export interface SyncChange {
   seq: number;
-  kind: 'diagram' | 'folder' | 'tree' | 'resync';
-  action?: 'create' | 'save' | 'update' | 'move' | 'delete';
+  kind: 'diagram' | 'folder' | 'tree' | 'resync' | 'presence';
+  action?: 'create' | 'save' | 'update' | 'move' | 'delete' | 'join' | 'renew' | 'here' | 'leave';
   id?: string;
   version?: number;
   name?: string;
   deleted?: boolean;
   /** Device (tab) that made the change; absent for writes without the header. */
   origin?: string;
+  /** Presence only: the browser that tab belongs to (services/sync/browserId.ts). */
+  browser?: string;
   at?: string;
 }
 
@@ -33,6 +36,7 @@ export interface RealtimeSyncOptions {
   onUnavailable?: () => void;
   fetchImpl?: typeof apiFetch;
   deviceId?: string;
+  browserId?: string;
 }
 
 export interface RealtimeSyncConnection {
@@ -108,7 +112,14 @@ export function connectRealtimeSync(options: RealtimeSyncOptions): RealtimeSyncC
       silenceTimer = setTimeout(() => active.abort(), SILENCE_MS);
     };
     try {
-      const headers: Record<string, string> = { Accept: 'text/event-stream' };
+      // The ids make this stream announce the tab's presence (backend
+      // server.js): who else has the workspace open decides whether uploads
+      // can be batched (services/sync/presence.ts).
+      const headers: Record<string, string> = {
+        Accept: 'text/event-stream',
+        'X-Axoview-Device': deviceId,
+        'X-Axoview-Browser': options.browserId ?? getBrowserId()
+      };
       if (lastEventId !== null) headers['Last-Event-ID'] = lastEventId;
       const response = await fetchImpl(`${options.baseUrl}/api/sync/events`, {
         headers,
