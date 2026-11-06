@@ -92,13 +92,20 @@ test('journey: create, edit and save, reload, rename, create again, share, delet
   });
 
   await test.step('3. reload: the diagram is still listed, from the server', async () => {
-    const listed = waitForApi(page, 'GET', '/api/diagrams');
+    // Read the body as the response lands: the app can list again (the sync
+    // stream connecting refreshes the tree), and Chromium may drop an earlier
+    // response's body before a late res.json() ("No resource with given
+    // identifier").
+    const listed = waitForApi(page, 'GET', '/api/diagrams').then(async (res) => ({
+      status: res.status(),
+      body: (await res.json()) as DiagramMeta[]
+    }));
     await page.reload();
     await waitForAppReady(page);
     await explorer.open();
     const res = await listed;
-    expect(res.status()).toBe(200);
-    const ids = ((await res.json()) as DiagramMeta[]).map((d) => d.id);
+    expect(res.status).toBe(200);
+    const ids = res.body.map((d) => d.id);
     expect(ids).toContain(firstId);
     await expect(explorer.getRowByName(firstName)).toBeVisible();
   });
@@ -213,11 +220,14 @@ test('journey: create, edit and save, reload, rename, create again, share, delet
     expect(res.status(), `DELETE /api/diagrams/${secondId}`).toBe(200);
     await expect(row).toBeHidden({ timeout: 5_000 });
 
-    const listed = waitForApi(page, 'GET', '/api/diagrams');
+    // Body read on arrival, as in step 3.
+    const listed = waitForApi(page, 'GET', '/api/diagrams').then(
+      async (res) => (await res.json()) as DiagramMeta[]
+    );
     await page.reload();
     await waitForAppReady(page);
     await explorer.open();
-    const ids = ((await (await listed).json()) as DiagramMeta[]).map((d) => d.id);
+    const ids = (await listed).map((d) => d.id);
     expect(ids).not.toContain(secondId);
     expect(ids).toContain(firstId);
     await expect(explorer.getRowByName(RENAMED)).toBeVisible();
