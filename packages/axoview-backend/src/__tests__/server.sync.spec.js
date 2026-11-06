@@ -316,6 +316,33 @@ test('reads and failed writes publish nothing', async () => {
   stream.stop();
 }, T);
 
+test('a save that changes nothing publishes nothing', async () => {
+  const { base, port } = await startServer();
+  const stream = openStream(port);
+  await stream.ready;
+  await until(() => stream.text().includes('event: ready'));
+
+  const created = await fetch(`${base}/api/diagrams`, json('POST', { name: 'D', items: [] }));
+  const { id } = await created.json();
+  const first = await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n1' }] }));
+  expect((await first.json()).unchanged).toBeUndefined();
+  // The same content again (a second tab, an undo back): written by nobody,
+  // announced to nobody.
+  const again = await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n1' }] }));
+  expect(again.status).toBe(200);
+  expect(await again.json()).toEqual({ success: true, id, unchanged: true });
+  // Then a real change is the next sequence number.
+  await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n2' }] }));
+  await until(() => changesIn(stream.text()).length >= 3);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(changesIn(stream.text())).toEqual([
+    expect.objectContaining({ seq: 1, action: 'create', id }),
+    expect.objectContaining({ seq: 2, action: 'save', id }),
+    expect.objectContaining({ seq: 3, action: 'save', id })
+  ]);
+  stream.stop();
+}, T);
+
 test('only a well-formed device id is echoed as the change origin', async () => {
   const { base, port } = await startServer();
   const stream = openStream(port);
