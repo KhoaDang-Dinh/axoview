@@ -26,8 +26,8 @@ E2E suite lives at [`packages/axoview-e2e/`](../../packages/axoview-e2e/) (Playw
 
 | Section | What is in it |
 |---|---|
-| [Contracts the suite depends on](#contracts-the-suite-depends-on) | how CI shards the e2e run and the two invariants that keep it safe · reading a gate's exit code · gate authoring · the merged scene canvas · label counter-scale · the exploratory lane · the e2e rig traps |
-| [Testing against the Docker image](#testing-against-the-docker-image-adr-0048) | the `Docker Gate` smoke and the full regression against the built image: the runner and its resource contract, exit codes, the bridge flag, the insecure origin, why the port is never 3000, reading `summary.json`, attributing a failure |
+| [Contracts the suite depends on](#contracts-the-suite-depends-on) | how CI shards the e2e run and the two invariants that keep it safe · reading a gate's exit code · gate authoring · the merged scene canvas · label counter-scale · the exploratory lane · the e2e rig traps · scripting the API on the dev server (`helpers/mockApi.ts`) |
+| [Testing against the Docker image](#testing-against-the-docker-image-adr-0048) | the `Docker Gate` smoke and the full regression against the built image: the runner and its resource contract, exit codes, the bridge flag, the insecure origin, why the port is never 3000, reading `summary.json`, attributing a failure · live-update specs and their DOM signals |
 | [Engine performance harness](#engine-performance-harness-2026-06-15--adr-0020) | `npm run perf`, its env knobs, and the same-session A/B measurement rule |
 | [Quick Reference](#quick-reference) | layer → suite index |
 | [Classifications](#classifications) | what ✅ VALID and ⚠️ SEMI-VALID mean |
@@ -144,7 +144,7 @@ failed to load over plain HTTP. So the built image has two gates of its own
 
 | Check | What runs | When | Status |
 |---|---|---|---|
-| `Docker Gate` ([docker-smoke.yml](../../.github/workflows/docker-smoke.yml)) | [`tests-docker/`](../../packages/axoview-e2e/tests-docker/), no bridge: the write journey from a secure and an insecure origin, the Origin-gate table, a storage-OFF boot probe | every PR and push to master | required |
+| `Docker Gate` ([docker-smoke.yml](../../.github/workflows/docker-smoke.yml)) | [`tests-docker/`](../../packages/axoview-e2e/tests-docker/), no bridge: the write journey from a secure and an insecure origin, the Origin-gate table, reload and live updates (`sync-and-reload.spec.ts`: the diagram and page kept across a reload, a dead link, changes from the API, two tabs, two browsers), a storage-OFF boot probe | every PR and push to master | required |
 | `Docker Regression Gate` ([docker-regression.yml](../../.github/workflows/docker-regression.yml)) | the whole `tests/` suite, storage OFF, 4 shards | every PR and push to master | required |
 
 **One runner for both, local and CI:** [`scripts/e2e-docker.js`](../../scripts/e2e-docker.js).
@@ -265,11 +265,42 @@ pre-existing or environmental. If it passes there, re-run the candidate alone:
 still failing means a regression, passing means a flake. CI's `attribute` job
 applies the same rule and only annotates. It never turns red into green.
 
+**Live updates need a stream open first.** `sync-and-reload.spec.ts` waits for
+`GET /api/sync/events` before it changes anything: a stream starts at the
+current sequence, so a change made before it opened is not replayed. It also
+proves nginx passes the stream through unbuffered, which the dev server can't.
+Changes made through the `api` fixture carry no device id, so the open tab
+treats them as another device's: the same path an agent's write takes.
+
+**The page tab and the explorer toggle are the DOM signals.** `view-tab`
+carries `aria-selected` and `data-view-id`; `dock-file-explorer-toggle` carries
+`aria-pressed`. `FileExplorerPOM.open()` reads `aria-pressed` rather than row
+visibility: the explorer reopens itself after a reload
+(`axoview-explorer-open`), and clicking the toggle while its rows are still
+loading closed it again (a race the journey lost on slower machines).
+
 **Checking what an image really ships.** Read it from inside the image rather
 than inferring it from the source:
 `docker run --rm --entrypoint sh <image> -c '<command>'`. For example,
 `grep -o 3.9.2 /usr/share/nginx/html/app.html` confirmed that the
 `AXOVIEW_VERSION` build arg reached the bundle.
+
+### Scripting the API on the dev server (2026-11-06)
+
+The dev config starts the app only, and on the dev server `/api/*` is
+cross-origin (`http://localhost:3001`) and credentialed. A spec that needs a
+backend there scripts it with
+[`helpers/mockApi.ts`](../../packages/axoview-e2e/helpers/mockApi.ts):
+`installApiMock(context, origin, { 'POST /api/ai/messages': … })`. It adds the
+CORS headers and answers preflights (Chromium applies CORS to a fulfilled
+response too), records every call with its parsed body, answers anything
+unscripted with 404 and lists it in `unhandled`. `ai-assistant.spec.ts` uses it
+for `/api/config`, the Cognito refresh and the chat endpoint.
+
+**Nothing may listen on 3001 during a dev run.** A backend left there (a local
+`npm run dev:backend`, or a stand-in for the image) turns the local-storage
+specs into server-storage runs against whatever that server holds, and
+explorer specs fail on rows they didn't create. CI never has one.
 
 ### The bulk canvas is ONE canvas (2026-08-02, R3/GPU-13)
 
