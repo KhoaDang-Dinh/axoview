@@ -152,6 +152,8 @@ export const LeftDock = ({
             <IconButton
               size="small"
               onClick={onFileExplorerToggle}
+              aria-label={t('fileExplorer')}
+              aria-pressed={!!fileExplorerOpen}
               data-axoview-id="dock-file-explorer-toggle"
               sx={{
                 borderRadius: 1,
