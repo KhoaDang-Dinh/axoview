@@ -233,7 +233,15 @@ data: {"seq":42,"kind":"diagram","action":"save","id":"diagram_…","version":7,
 | `folder` *, `tree` | refresh the folder tree |
 | `resync` | changes were missed: refresh everything shown |
 
-- Ignore changes whose `origin` is your own device id.
+- Every change arrives, in order. A stream that is a few changes behind (several
+  saves inside one poll, a reconnect with `Last-Event-ID`) is sent each of them
+  from the server's change queue, kept for an hour, up to 100 changes. Only
+  further behind than that, or ahead of the server, is it sent one `resync`.
+- If the open diagram is deleted, or moved to the trash, close it: you get
+  `delete`, or `update` with `deleted: true`.
+- Ignore changes whose `origin` is your own device id. Make the id unique per
+  app instance (the web app makes one per page load, so a duplicated tab gets
+  its own).
 - The server pings every 15 s and ends each stream after about 5 minutes.
   Reconnect with `Last-Event-ID`; also after 45 s of silence.
 - Close the stream while the app is in the background, and treat returning to

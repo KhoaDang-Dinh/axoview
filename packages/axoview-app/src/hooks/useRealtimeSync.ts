@@ -149,7 +149,7 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
           current.refreshTree();
           current.notify(
             'warning',
-            current.t('sync.deletedElsewhere', 'This diagram was deleted on another device.')
+            current.t('sync.deletedElsewhere', 'This diagram was deleted in another tab or on another device.')
           );
           return;
         case 'openRenamed':
