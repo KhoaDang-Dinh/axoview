@@ -104,6 +104,18 @@ test.describe('batched uploads while one browser has the workspace open', () => 
     expect(await itemsOnServer(api, id)).toBe(1);
   });
 
+  test('closing the tab uploads what is queued (keepalive)', async ({ page, context, api }) => {
+    const id = await createDiagram(page);
+    // A second page keeps the context (and its network) alive after the first closes.
+    const keeper = await context.newPage();
+    await placeFirstIcon(page);
+    await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
+    expect(await itemsOnServer(api, id)).toBe(0);
+    await page.close({ runBeforeUnload: true });
+    await expect.poll(() => itemsOnServer(api, id), { timeout: 10_000 }).toBe(1);
+    await keeper.close();
+  });
+
   test('another browser opening the workspace: edits upload at once again', async ({ page, browser, api, apiLog }) => {
     let id = '';
     const puts = countPuts(page, () => id);

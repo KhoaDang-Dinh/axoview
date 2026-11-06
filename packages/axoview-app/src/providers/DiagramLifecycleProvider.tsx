@@ -1847,7 +1847,6 @@ export function DiagramLifecycleProvider({
     } else {
       setFileTreeRefreshToken((n) => n + 1);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- noteVersion reads refs only
   }), []);
 
   // Another tab of this browser checkpointed an edit to the diagram open here:
