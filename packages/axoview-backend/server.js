@@ -280,6 +280,15 @@ const SYNC_MAX_STREAM_MS = Number(process.env.SYNC_MAX_STREAM_MS) || 5 * 60_000;
 const SYNC_GAP_MS = Number(process.env.SYNC_GAP_MS) || 3_000;
 // The device (browser tab) that made a change, so it can ignore its own echo.
 const DEVICE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+// Presence (who else has the workspace open) rides the sync stream; 'off'
+// stops the announcements (the app then always batches its uploads).
+const SYNC_PRESENCE = process.env.SYNC_PRESENCE !== 'off';
+
+/** A request header that is a well-formed device or browser id, else null. */
+function idHeader(req, name) {
+  const value = req.headers[name];
+  return typeof value === 'string' && DEVICE_ID_RE.test(value) ? value : null;
+}
 
 // Open sync streams, ended at shutdown so their tabs reconnect to another pod.
 const openSyncStreams = new Set();
@@ -496,10 +505,31 @@ app.get('/api/sync/events', async (req, res) => {
   }
   const workspaceId = syncWorkspaceId(req);
   let closed = false;
+
+  // Presence: which browsers have this workspace open, so a browser alone can
+  // batch its uploads and one with company saves at once (the app's
+  // services/sync/presence.ts). One event when a stream opens ('join' for a
+  // fresh tab, 'renew' for the reconnect every few minutes), one when the tab
+  // closes it ('leave'), and one 'here' from each other browser's stream when a
+  // new tab joins, so the newcomer learns who was already there. Ids only: a
+  // random id per tab and per browser, never who the user is.
+  const device = idHeader(req, 'x-axoview-device');
+  const browser = idHeader(req, 'x-axoview-browser');
+  const answered = new Set();
+  const announce = (action) => {
+    if (!SYNC_PRESENCE || !device || !browser) return Promise.resolve();
+    return syncCursor
+      .bump(workspaceId, { kind: 'presence', action, origin: device, browser, at: new Date().toISOString() })
+      .catch((err) => console.warn('[sync] presence %s not published', action, err?.name || err));
+  };
+
   openSyncStreams.add(res);
   req.on('close', () => {
     closed = true;
     openSyncStreams.delete(res);
+    // Only the tab closing it is the browser leaving. A stream the server
+    // ended (its maximum age, a shutdown) is reconnected at once: no 'leave'.
+    if (!res.writableEnded && !shuttingDown) void announce('leave');
   });
   const write = (chunk) => { if (!closed) res.write(chunk); };
 
@@ -520,7 +550,18 @@ app.get('/api/sync/events', async (req, res) => {
     // a gap that outlives SYNC_GAP_MS becomes one `resync`.
     const catchUp = async (current) => {
       const result = await collectSyncEvents(syncCursor, workspaceId, lastSeq, current);
-      for (const event of result.events) write(sseFrame(event.event, event.seq, event.data));
+      for (const event of result.events) {
+        write(sseFrame(event.event, event.seq, event.data));
+        // A new tab of ANOTHER browser joined: tell it this one is here, once.
+        const data = event.data;
+        if (
+          data.kind === 'presence' && data.action === 'join' && data.browser !== browser &&
+          typeof data.origin === 'string' && !answered.has(data.origin)
+        ) {
+          answered.add(data.origin);
+          void announce('here');
+        }
+      }
       lastSeq = result.lastSeq;
       if (result.complete) {
         gapSince = null;
@@ -538,11 +579,13 @@ app.get('/api/sync/events', async (req, res) => {
 
     const current = await syncCursor.read(workspaceId);
     write('retry: 3000\n\n');
+    const resuming = lastSeq !== null;
     if (lastSeq === null) lastSeq = current.seq;
     const resumedWithChanges = await catchUp(current);
     if (!resumedWithChanges && gapSince === null) {
       write(sseFrame('ready', current.seq, { seq: current.seq }));
     }
+    await announce(resuming ? 'renew' : 'join');
 
     const started = Date.now();
     let lastWrite = Date.now();
