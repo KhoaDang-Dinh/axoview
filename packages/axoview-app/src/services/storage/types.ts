@@ -73,6 +73,15 @@ export interface StorageProvider {
   listDiagrams(folderId?: string | null): Promise<DiagramMeta[]>;
   loadDiagram(id: string): Promise<unknown>;
   saveDiagram(id: string, data: unknown): Promise<void>;
+  /**
+   * Server version tracking, for providers whose backend versions diagrams
+   * (LocalStorageProvider in server mode). Optional: Drive and session
+   * storage have none. See realtime sync and stores/draftStore.ts.
+   */
+  knownVersion?(id: string): number | undefined;
+  noteVersion?(id: string, version: number): void;
+  serverStamp?(id: string): string | undefined;
+  noteStamp?(id: string, stamp: string): void;
   createDiagram(data: unknown, folderId?: string | null): Promise<string>;
   deleteDiagram(id: string, soft?: boolean): Promise<void>;
   restoreDiagram(id: string): Promise<void>;   // clears deletedAt
