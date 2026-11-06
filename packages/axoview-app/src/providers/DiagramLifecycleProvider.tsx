@@ -8,6 +8,8 @@ import {
   useState
 } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { onTabMessage } from '../services/sync/tabChannel';
+import { registerBeforeSignOut } from '../services/session/beforeSignOut';
 import { downloadBlob } from '../utils/downloadBlob';
 import { useTranslation } from 'react-i18next';
 import { flattenCollections } from '@isoflow/isopacks/dist/utils';
@@ -423,6 +425,8 @@ export function DiagramLifecycleProvider({
       });
     }
   });
+  const autoSaveSaveNowRef = useRef(autoSave.saveNow);
+  autoSaveSaveNowRef.current = autoSave.saveNow;
 
   // ---------------------------------------------------------------------------
   // File explorer panel state
@@ -1673,13 +1677,55 @@ export function DiagramLifecycleProvider({
     if (!open || !s || hasUnsavedWorkRef.current()) return;
     const before = knownVersionOf(open.id);
     const raw = await s.loadDiagram(open.id);
-    if (currentDiagramRef.current?.id !== open.id || hasUnsavedWorkRef.current()) return;
+    if (currentDiagramRef.current?.id !== open.id) return;
+    // Moved to the trash while this tab missed the event (a resync): close it
+    // as a delete, not show the trashed copy.
+    if (raw && typeof raw === 'object' && (raw as { deletedAt?: unknown }).deletedAt) {
+      closeDeletedElsewhereRef.current(open.id, 'device');
+      return;
+    }
+    if (hasUnsavedWorkRef.current()) return;
     const after = knownVersionOf(open.id);
     if (before !== undefined && after !== undefined && after === before) return;
     await handleDiagramManagerLoad(open.id, raw, diagramNameRef.current || open.name, {
       remote: true
     });
   }, [handleDiagramManagerLoad]);
+
+  // A diagram deleted elsewhere while open here: close it (the URL goes back
+  // to /app with it) and say where it went. `tab`: another tab of this
+  // browser told us at once (tabChannel); `device`: the server's sync said so.
+  const closeDeletedElsewhere = useCallback((id: string, where: 'tab' | 'device') => {
+    if (currentDiagramRef.current?.id !== id) return;
+    notifyDiagramDeletedFromTree(id);
+    setFileTreeRefreshToken((n) => n + 1);
+    notificationStore.push({
+      severity: 'warning',
+      message: where === 'tab'
+        ? t('sync.deletedInAnotherTab', 'This diagram was deleted in another tab.')
+        : t('sync.deletedElsewhere', 'This diagram was deleted in another tab or on another device.')
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t and notificationStore are stable
+  }, [notifyDiagramDeletedFromTree]);
+  const closeDeletedElsewhereRef = useRef(closeDeletedElsewhere);
+  closeDeletedElsewhereRef.current = closeDeletedElsewhere;
+
+  // Other tabs of this browser: a deleted diagram closes here at once, for
+  // every kind of storage (the server's sync stream follows for server
+  // storage, and finds nothing left to close).
+  useEffect(() => onTabMessage((message) => {
+    if (message.type !== 'diagram-deleted') return;
+    if (currentDiagramRef.current?.id === message.id) {
+      closeDeletedElsewhereRef.current(message.id, 'tab');
+    } else {
+      setFileTreeRefreshToken((n) => n + 1);
+    }
+  }), []);
+
+  // Signing out (here or in another tab): save pending edits first.
+  useEffect(() => registerBeforeSignOut(async () => {
+    if (currentDiagramRef.current) await autoSaveSaveNowRef.current();
+  }), []);
 
   useRealtimeSync({
     enabled: serverStorageAvailable && storage?.id === 'local' && !isReadonlyUrl,
@@ -1694,6 +1740,8 @@ export function DiagramLifecycleProvider({
     },
     reloadOpenDiagram: reloadOpenDiagramFromRemote,
     refreshTree: () => setFileTreeRefreshToken((n) => n + 1),
+    // The hook warns ("deleted in another tab or on another device") and
+    // refreshes the tree.
     onOpenDeleted: notifyDiagramDeletedFromTree,
     onOpenRenamed: notifyDiagramRenamedFromTree,
     notify: (severity, message) => notificationStore.push({ severity, message }),

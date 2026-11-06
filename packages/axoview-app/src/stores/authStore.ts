@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { notificationStore } from './notificationStore';
 import { authDebug } from '../utils/authDebug';
+import { postToTabs } from '../services/sync/tabChannel';
 
 // ADR 0035 — Google Identity & Drive Authorization (token model).
 //
@@ -389,6 +390,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   signOut: () => {
+    // Every other tab of this browser disconnects Drive too (unless this
+    // sign-out is that: a message from another tab).
+    if (!signingOutFromOtherTab) postToTabs({ type: 'drive-signed-out' });
     const { accessToken, _revoke, _waiters } = get();
     clearAuthTimeout();
     if (accessToken && _revoke) _revoke(accessToken);
@@ -730,3 +734,17 @@ export const authStore = {
   markExpired: () => useAuthStore.getState().markExpired(),
   markDriveScopeMissing: () => useAuthStore.getState().markDriveScopeMissing()
 };
+
+let signingOutFromOtherTab = false;
+
+/** Another tab signed out of Google Drive: drop this tab's token too. */
+export function signOutDriveFromOtherTab(): void {
+  const state = useAuthStore.getState();
+  if (state.status === 'UNAUTHENTICATED') return;
+  signingOutFromOtherTab = true;
+  try {
+    state.signOut();
+  } finally {
+    signingOutFromOtherTab = false;
+  }
+}

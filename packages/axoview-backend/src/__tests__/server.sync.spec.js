@@ -122,7 +122,7 @@ test('a save on one device reaches the other device\'s stream', async () => {
   stream.stop();
 }, T);
 
-test('a stream resuming from an old event id is told to resync', async () => {
+test('a stream resuming a few changes behind replays each of them (the queue)', async () => {
   const { base, port } = await startServer();
   await fetch(`${base}/api/folders`, {
     method: 'POST',
@@ -136,7 +136,42 @@ test('a stream resuming from an old event id is told to resync', async () => {
   });
   const stream = openStream(port, { 'Last-Event-ID': '0' });
   await stream.ready;
+  await until(() => stream.text().includes('"kind":"tree"'));
+  expect(stream.text()).not.toContain('resync');
+  const frames = stream.text().split('\n\n').filter((f) => f.includes('event: change'));
+  expect(frames.map((f) => JSON.parse(f.split('\n').find((l) => l.startsWith('data: ')).slice(6))))
+    .toEqual([
+      expect.objectContaining({ seq: 1, kind: 'folder', action: 'create' }),
+      expect.objectContaining({ seq: 2, kind: 'tree', action: 'save' })
+    ]);
+  stream.stop();
+}, T);
+
+test('a stream ahead of the server (a restarted server, a rebuilt table) is told to resync', async () => {
+  const { base, port } = await startServer();
+  await fetch(`${base}/api/folders`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'F' })
+  });
+  const stream = openStream(port, { 'Last-Event-ID': '99' });
+  await stream.ready;
   await until(() => stream.text().includes('"kind":"resync"'));
+  stream.stop();
+}, T);
+
+test('a burst of writes inside one poll arrives as each change, a delete included', async () => {
+  const { base, port } = await startServer({ SYNC_POLL_MS: '1500' });
+  const stream = openStream(port);
+  await stream.ready;
+  await until(() => stream.text().includes('event: ready'));
+  const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const { id } = await (await fetch(`${base}/api/diagrams`, json('POST', { name: 'A', items: [] }))).json();
+  await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'A', items: [{ id: 'n1' }] }));
+  await fetch(`${base}/api/diagrams/${id}`, { method: 'DELETE' });
+  await until(() => stream.text().includes('"action":"delete"'), 6000);
+  const frames = stream.text().split('\n\n').filter((f) => f.includes('event: change'));
+  const changes = frames.map((f) => JSON.parse(f.split('\n').find((l) => l.startsWith('data: ')).slice(6)));
+  expect(changes.map((c) => [c.seq, c.action])).toEqual([[1, 'create'], [2, 'save'], [3, 'delete']]);
+  expect(stream.text()).not.toContain('resync');
   stream.stop();
 }, T);
 
@@ -277,6 +312,33 @@ test('reads and failed writes publish nothing', async () => {
   expect(changesIn(stream.text())).toEqual([
     expect.objectContaining({ seq: 1, kind: 'diagram', action: 'create', id }),
     expect.objectContaining({ seq: 2, kind: 'diagram', action: 'save', id })
+  ]);
+  stream.stop();
+}, T);
+
+test('a save that changes nothing publishes nothing', async () => {
+  const { base, port } = await startServer();
+  const stream = openStream(port);
+  await stream.ready;
+  await until(() => stream.text().includes('event: ready'));
+
+  const created = await fetch(`${base}/api/diagrams`, json('POST', { name: 'D', items: [] }));
+  const { id } = await created.json();
+  const first = await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n1' }] }));
+  expect((await first.json()).unchanged).toBeUndefined();
+  // The same content again (a second tab, an undo back): written by nobody,
+  // announced to nobody.
+  const again = await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n1' }] }));
+  expect(again.status).toBe(200);
+  expect(await again.json()).toEqual({ success: true, id, unchanged: true });
+  // Then a real change is the next sequence number.
+  await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n2' }] }));
+  await until(() => changesIn(stream.text()).length >= 3);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(changesIn(stream.text())).toEqual([
+    expect.objectContaining({ seq: 1, action: 'create', id }),
+    expect.objectContaining({ seq: 2, action: 'save', id }),
+    expect.objectContaining({ seq: 3, action: 'save', id })
   ]);
   stream.stop();
 }, T);

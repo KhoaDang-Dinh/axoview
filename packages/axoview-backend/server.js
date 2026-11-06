@@ -17,7 +17,8 @@ import {
   createDynamoSyncCursor,
   createMemorySyncCursor,
   describeChange,
-  nextSyncEvent,
+  collectSyncEvents,
+  resyncEvent,
   sseFrame
 } from './src/syncCursor.js';
 import { verifyCognitoAccessToken } from './src/cognitoAuth.js';
@@ -274,6 +275,9 @@ const SYNC_HEARTBEAT_MS = Number(process.env.SYNC_HEARTBEAT_MS) || 15_000;
 // a stream never outlives the access token it was opened with by much, and
 // connections rebalance across API pods.
 const SYNC_MAX_STREAM_MS = Number(process.env.SYNC_MAX_STREAM_MS) || 5 * 60_000;
+// A change whose queue entry is not readable after this long is sent as
+// `resync` (the entry's write failed, or it is older than the queue).
+const SYNC_GAP_MS = Number(process.env.SYNC_GAP_MS) || 3_000;
 // The device (browser tab) that made a change, so it can ignore its own echo.
 const DEVICE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -373,7 +377,9 @@ function adapt(handler, { requireStorage = true, sync = null } = {}) {
           : adapter.forWorkspace(req.user.sub)
         : adapter;
       const result = await handler(requestAdapter, makeCtx(req));
-      if (sync && result.status >= 200 && result.status < 300) {
+      // `sync: false`: a write that changed nothing (an unchanged save) has
+      // nothing to tell the other devices.
+      if (sync && result.sync !== false && result.status >= 200 && result.status < 300) {
         await publishChange(req, sync, result);
       }
       for (const [name, value] of Object.entries(result.headers || {})) {
@@ -509,15 +515,34 @@ app.get('/api/sync/events', async (req, res) => {
   const header = req.headers['last-event-id'];
   let lastSeq = typeof header === 'string' && /^[0-9]{1,15}$/.test(header) ? Number(header) : null;
   try {
+    let gapSince = null;
+    // Sends what the stream missed, replaying the queue (src/syncCursor.js);
+    // a gap that outlives SYNC_GAP_MS becomes one `resync`.
+    const catchUp = async (current) => {
+      const result = await collectSyncEvents(syncCursor, workspaceId, lastSeq, current);
+      for (const event of result.events) write(sseFrame(event.event, event.seq, event.data));
+      lastSeq = result.lastSeq;
+      if (result.complete) {
+        gapSince = null;
+      } else if (gapSince === null) {
+        gapSince = Date.now();
+      } else if (Date.now() - gapSince >= SYNC_GAP_MS) {
+        const resync = resyncEvent(current.seq);
+        write(sseFrame(resync.event, resync.seq, resync.data));
+        lastSeq = current.seq;
+        gapSince = null;
+        return true;
+      }
+      return result.events.length > 0;
+    };
+
     const current = await syncCursor.read(workspaceId);
     write('retry: 3000\n\n');
-    const missed = nextSyncEvent(lastSeq, current);
-    if (missed) {
-      write(sseFrame(missed.event, missed.seq, missed.data));
-    } else {
+    if (lastSeq === null) lastSeq = current.seq;
+    const resumedWithChanges = await catchUp(current);
+    if (!resumedWithChanges && gapSince === null) {
       write(sseFrame('ready', current.seq, { seq: current.seq }));
     }
-    lastSeq = current.seq;
 
     const started = Date.now();
     let lastWrite = Date.now();
@@ -525,10 +550,7 @@ app.get('/api/sync/events', async (req, res) => {
       await syncCursor.wait(workspaceId, SYNC_POLL_MS);
       if (closed) break;
       const next = await syncCursor.read(workspaceId);
-      const event = nextSyncEvent(lastSeq, next);
-      if (event) {
-        write(sseFrame(event.event, event.seq, event.data));
-        lastSeq = next.seq;
+      if (await catchUp(next)) {
         lastWrite = Date.now();
       } else if (Date.now() - lastWrite >= SYNC_HEARTBEAT_MS) {
         write(': ping\n\n');
