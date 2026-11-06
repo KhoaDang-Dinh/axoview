@@ -221,10 +221,11 @@ export function AssistantWidget() {
                   const live = message as LiveMessage & { id: number };
                   return (
                     <Box key={message.id} sx={{ display: 'flex', justifyContent: message.role === 'user' ? 'flex-end' : 'flex-start', my: 1 }}>
-                      <Box sx={{ p: 1.25, borderRadius: 2, maxWidth: '90%', minWidth: 0,
+                      <Box data-axoview-id="ai-message" data-role={message.role}
+                        sx={{ p: 1.25, borderRadius: 2, maxWidth: '90%', minWidth: 0,
                         bgcolor: message.role === 'user' ? 'primary.main' : 'action.hover',
                         color: message.role === 'user' ? 'primary.contrastText' : 'text.primary' }}>
-                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{message.text}</Typography>
+                        <Typography variant="body2" data-axoview-id="ai-message-text" sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{message.text}</Typography>
                         {live.plan && <SuggestionChecklist steps={live.plan} onRecheck={readPage ? () => recheck(live.id) : undefined} />}
                         {live.sources && live.sources.length > 0 && (
                           <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}
@@ -236,7 +237,7 @@ export function AssistantWidget() {
                     </Box>
                   );
                 })}
-                {sendError && <Typography role="alert" variant="body2" color="error">{sendError}</Typography>}
+                {sendError && <Typography role="alert" data-axoview-id="ai-send-error" variant="body2" color="error">{sendError}</Typography>}
                 {sending && <Typography variant="caption" color="text.secondary">Nova is responding…</Typography>}
                 <div ref={listEndRef} />
               </Box>
@@ -248,8 +249,8 @@ export function AssistantWidget() {
                 )}
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <TextField fullWidth size="small" label="Message" value={draft} onChange={(e) => setDraft(e.target.value)}
-                    inputProps={{ maxLength: 2000 }} />
-                  <IconButton type="submit" color="primary" aria-label="Send message" disabled={!draft.trim() || sending}><Send /></IconButton>
+                    inputProps={{ maxLength: 2000, 'data-axoview-id': 'ai-message-input' }} />
+                  <IconButton type="submit" color="primary" aria-label="Send message" data-axoview-id="ai-send" disabled={!draft.trim() || sending}><Send /></IconButton>
                 </Box>
               </Box>
             </>
