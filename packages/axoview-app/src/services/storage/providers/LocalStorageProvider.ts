@@ -179,15 +179,30 @@ export class LocalStorageProvider implements StorageProvider {
     // replaces it. Without this, every later autosave retried the same stale
     // version and failed until a reload threw the edits away.
     if (response.status === 409 || response.status === 428) {
-      await this.refreshVersion(id);
+      // A 409 that names the current version saves a download of the whole
+      // diagram just to learn it.
+      const conflict = response.status === 409
+        ? await response.json().catch(() => null) as { currentVersion?: unknown } | null
+        : null;
+      if (typeof conflict?.currentVersion === 'number') this.diagramVersions.set(id, conflict.currentVersion);
+      else await this.refreshVersion(id);
       response = await this.putDiagram(id, body);
     }
     if (!response.ok) throw new Error(`Failed to save diagram: ${response.status}`);
-    const nextVersion = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (nextVersion) {
-      this.diagramVersions.set(id, Number(nextVersion[1]));
-      this.contentVersions.set(id, Number(nextVersion[1]));
-    }
+    this.rememberVersion(id, response);
+  }
+
+  /**
+   * The version a successful write produced (its ETag): the next save goes out
+   * against it. A rename, trash or restore changes the version too; without
+   * this the next autosave was refused as stale, re-downloaded the diagram to
+   * learn the version, and saved again.
+   */
+  private rememberVersion(id: string, response: Response): void {
+    const match = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
+    if (!match) return;
+    this.diagramVersions.set(id, Number(match[1]));
+    this.contentVersions.set(id, Number(match[1]));
   }
 
   /** Re-read the diagram's current version from the server (its ETag). */
@@ -237,6 +252,7 @@ export class LocalStorageProvider implements StorageProvider {
         signal: timeoutSignal(10000)
       });
       if (!response.ok) throw new Error(`Failed to soft-delete diagram: ${response.status}`);
+      this.rememberVersion(id, response);
     } else {
       const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
         method: 'DELETE',
@@ -438,6 +454,7 @@ export class LocalStorageProvider implements StorageProvider {
         signal: timeoutSignal(10000)
       });
       if (!response.ok) throw new Error(`Failed to restore diagram: ${response.status}`);
+      this.rememberVersion(id, response);
     } else {
       const list = this.sessionListDiagrams();
       const updated = list.map((d) =>
@@ -457,6 +474,7 @@ export class LocalStorageProvider implements StorageProvider {
         signal: timeoutSignal(10000)
       });
       if (!response.ok) throw new Error(`Failed to rename diagram: ${response.status}`);
+      this.rememberVersion(id, response);
     } else {
       // MQA #14: keep the per-diagram blob's `title` in sync with the list-level
       // `name`. The export path reads from the blob (`loadDiagram`), so renaming
