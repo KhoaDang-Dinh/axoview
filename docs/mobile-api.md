@@ -200,8 +200,15 @@ deleted for the web app too.
 
 Each diagram has a version, sent as `ETag: "<n>"` on `GET`, `POST` and `PUT`.
 Save with `If-Match: "<n>"` from the last load or save. On `409`, another
-device saved first. The web app resolves it as "latest save wins": it reloads
-the version (`GET`) and saves again. Do the same, or offer the user the choice.
+device saved first; the body's `currentVersion`, when present, is the version
+to save against. The web app resolves it as "latest save wins": it saves again
+against that version (re-reading it with `GET` only when the 409 does not name
+it). Do the same, or offer the user the choice. A rename, trash or restore
+(`PATCH`) also returns the new version.
+
+Write responses carry the document's `lastModified`, and a `PUT` whose content
+equals what is stored answers `{ "unchanged": true }`: nothing is written and
+no other device is told.
 
 ## 4. Realtime sync
 
@@ -210,7 +217,12 @@ GET /api/sync/events
 Authorization: Bearer <access token>
 Accept: text/event-stream
 Last-Event-ID: <last id received, when reconnecting>
+X-Axoview-Device: <this install's id>
+X-Axoview-Browser: <this install's id>
 ```
+
+The two ids are optional. With both, the stream announces this app as
+present (ADR 0053); use the same id for both on a phone.
 
 A Server-Sent Events stream of every change to the workspace, from any device:
 
@@ -232,6 +244,7 @@ data: {"seq":42,"kind":"diagram","action":"save","id":"diagram_…","version":7,
 | `diagram` `create` / `move` / `delete`, `update` with `name` or `deleted` | refresh the list |
 | `folder` *, `tree` | refresh the folder tree |
 | `resync` | changes were missed: refresh everything shown |
+| `presence` `join` / `renew` / `here` / `leave` | another app has the workspace open (`origin`, `browser`); nothing to refresh |
 
 - Every change arrives, in order. A stream that is a few changes behind (several
   saves inside one poll, a reconnect with `Last-Event-ID`) is sent each of them
@@ -246,6 +259,10 @@ data: {"seq":42,"kind":"diagram","action":"save","id":"diagram_…","version":7,
   Reconnect with `Last-Event-ID`; also after 45 s of silence.
 - Close the stream while the app is in the background, and treat returning to
   the foreground as a `resync`.
+- Presence: while another browser or app is present, the web app uploads each
+  edit within about 2 s; alone, it uploads at most every 30 s (ADR 0054). An app
+  that shows a diagram live should therefore keep its stream open with both ids,
+  so editors know it is watching.
 - React Native's built-in `fetch` cannot read a streaming body. Use
   `expo/fetch` (streaming), or `react-native-sse`, which supports the
   `Authorization` header.
