@@ -27,6 +27,9 @@ function NotificationItem({ notification, index }: NotificationItemProps) {
       <Alert
         severity={notification.severity}
         onClose={() => dismiss(notification.id)}
+        // A stable hook for browser tests (ADR 0008: data-axoview-id).
+        data-axoview-id="notification"
+        data-severity={notification.severity}
         sx={{ minWidth: 300 }}
         action={
           notification.action ? (
