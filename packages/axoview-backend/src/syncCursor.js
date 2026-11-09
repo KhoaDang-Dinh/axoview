@@ -8,28 +8,46 @@
  * Server-Sent Event, so a save on one device shows on the others within about a
  * second.
  *
- * Two stores, one interface:
- *  - DynamoDB (STORAGE_ADAPTER=aws): one item per workspace,
- *    PK `WORKSPACE#<id>`, SK `SYNC`, shared by every API pod. Streams poll it
- *    (eventually consistent reads; a missed intermediate change shows as a gap
- *    in the sequence and is sent as `resync`).
- *  - Memory (fs adapter, self-host): one process, so an in-process counter and
- *    an event emitter that wakes waiting streams at once.
+ * Each change is also kept in a short per-workspace log (the queue), so a
+ * stream that is several changes behind (two saves inside one poll, a tab
+ * reconnecting after a few seconds) replays every one of them in order
+ * instead of being told to `resync`. A delete in a burst therefore still
+ * arrives as a delete.
  *
- * A sequence that goes backwards (a rebuilt table, a restarted self-host
- * server) is reported as `resync` by the stream, never as "no change".
+ * Two stores, one interface:
+ *  - DynamoDB (STORAGE_ADAPTER=aws): the cursor is one item per workspace,
+ *    PK `WORKSPACE#<id>`, SK `SYNC`, shared by every API pod; streams poll it.
+ *    The log is one item per change, SK `SYNC#<seq, 15 digits>`, expiring
+ *    after an hour (the table's `expiresAt` TTL). Only a stream that is more
+ *    than one change behind queries it.
+ *  - Memory (fs adapter, self-host): one process, so an in-process counter,
+ *    the last LOG_LIMIT changes, and an event emitter that wakes waiting
+ *    streams at once.
+ *
+ * Still `resync`: more than MAX_REPLAY changes missed, a log entry that never
+ * appears (older than the log, or its write failed), or a sequence that went
+ * backwards (a rebuilt table, a restarted self-host server).
  */
 import { EventEmitter } from 'events';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 
 /** Workspace for deployments without per-user identity (AUTH_MODE none / shared-token). */
 export const SHARED_WORKSPACE = '_shared';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Changes the memory store keeps per workspace. */
+export const LOG_LIMIT = 200;
+/** A stream further behind than this re-reads everything instead (`resync`). */
+export const MAX_REPLAY = 100;
+/** How long the DynamoDB log keeps a change. */
+const LOG_TTL_SECONDS = 3600;
+const logKey = (seq) => `SYNC#${String(seq).padStart(15, '0')}`;
+
 export function createMemorySyncCursor() {
   const state = new Map();
+  const logs = new Map();
   const emitter = new EventEmitter();
   emitter.setMaxListeners(0);
 
@@ -37,11 +55,21 @@ export function createMemorySyncCursor() {
     async bump(workspaceId, change) {
       const seq = (state.get(workspaceId)?.seq || 0) + 1;
       state.set(workspaceId, { seq, change });
+      const log = logs.get(workspaceId) || [];
+      log.push({ seq, change });
+      if (log.length > LOG_LIMIT) log.splice(0, log.length - LOG_LIMIT);
+      logs.set(workspaceId, log);
       emitter.emit(workspaceId);
       return seq;
     },
     async read(workspaceId) {
       return state.get(workspaceId) || { seq: 0, change: null };
+    },
+    /** The logged changes with afterSeq < seq <= uptoSeq, oldest first. */
+    async since(workspaceId, afterSeq, uptoSeq) {
+      return (logs.get(workspaceId) || [])
+        .filter((entry) => entry.seq > afterSeq && entry.seq <= uptoSeq)
+        .map((entry) => ({ ...entry }));
     },
     /** Resolves after `ms`, or as soon as the workspace changes. */
     wait(workspaceId, ms) {
@@ -75,7 +103,21 @@ export function createDynamoSyncCursor({ tableName, region, ddbClient }) {
         ExpressionAttributeValues: { ':change': change, ':one': 1 },
         ReturnValues: 'UPDATED_NEW'
       }));
-      return Number(result.Attributes?.seq || 0);
+      const seq = Number(result.Attributes?.seq || 0);
+      // The queue entry. Written after the bump, so a stream can see the new
+      // sequence a moment before its entry: it waits for it (collectSyncEvents
+      // callers), and only falls back to resync if it never appears.
+      await ddb.send(new PutCommand({
+        TableName: tableName,
+        Item: {
+          PK: `WORKSPACE#${workspaceId}`,
+          SK: logKey(seq),
+          seq,
+          change,
+          expiresAt: Math.floor(Date.now() / 1000) + LOG_TTL_SECONDS
+        }
+      }));
+      return seq;
     },
     async read(workspaceId) {
       const result = await ddb.send(new GetCommand({
@@ -85,6 +127,21 @@ export function createDynamoSyncCursor({ tableName, region, ddbClient }) {
         ExpressionAttributeNames: { '#seq': 'seq', '#change': 'change' }
       }));
       return { seq: Number(result.Item?.seq || 0), change: result.Item?.change || null };
+    },
+    async since(workspaceId, afterSeq, uptoSeq) {
+      if (uptoSeq <= afterSeq) return [];
+      const result = await ddb.send(new QueryCommand({
+        TableName: tableName,
+        KeyConditionExpression: 'PK = :pk AND SK BETWEEN :from AND :to',
+        ExpressionAttributeValues: {
+          ':pk': `WORKSPACE#${workspaceId}`,
+          ':from': logKey(afterSeq + 1),
+          ':to': logKey(uptoSeq)
+        },
+        ConsistentRead: true,
+        Limit: Math.min(uptoSeq - afterSeq, MAX_REPLAY)
+      }));
+      return (result.Items || []).map((item) => ({ seq: Number(item.seq), change: item.change }));
     },
     wait(_workspaceId, ms) {
       return sleep(ms);
@@ -157,4 +214,38 @@ export function nextSyncEvent(lastSeq, current) {
     return { event: 'change', seq: current.seq, data: { seq: current.seq, ...current.change } };
   }
   return { event: 'change', seq: current.seq, data: { seq: current.seq, kind: 'resync' } };
+}
+
+/**
+ * Everything a stream at `lastSeq` should send now that the cursor is at
+ * `current`, replaying the queue when it is more than one change behind.
+ * Returns the events, the sequence the stream has reached, and whether that
+ * is `current.seq` (complete). Incomplete: a log entry is not readable yet;
+ * the caller retries on its next poll and falls back to `resync` if the gap
+ * outlives a few polls (see server.js).
+ */
+export async function collectSyncEvents(cursor, workspaceId, lastSeq, current, maxReplay = MAX_REPLAY) {
+  const change = (seq, data) => ({ event: 'change', seq, data: { seq, ...data } });
+  const resync = () => ({ events: [change(current.seq, { kind: 'resync' })], lastSeq: current.seq, complete: true });
+  if (lastSeq == null || current.seq === lastSeq) {
+    return { events: [], lastSeq: lastSeq ?? current.seq, complete: true };
+  }
+  if (current.seq < lastSeq || current.seq - lastSeq > maxReplay) return resync();
+  if (current.seq === lastSeq + 1 && current.change) {
+    return { events: [change(current.seq, current.change)], lastSeq: current.seq, complete: true };
+  }
+  const log = cursor.since ? await cursor.since(workspaceId, lastSeq, current.seq) : [];
+  const events = [];
+  let reached = lastSeq;
+  for (const entry of [...log].sort((a, b) => a.seq - b.seq)) {
+    if (entry.seq !== reached + 1 || !entry.change) break;
+    events.push(change(entry.seq, entry.change));
+    reached = entry.seq;
+  }
+  return { events, lastSeq: reached, complete: reached === current.seq };
+}
+
+/** The resync event for a stream that cannot replay what it missed. */
+export function resyncEvent(seq) {
+  return { event: 'change', seq, data: { seq, kind: 'resync' } };
 }
