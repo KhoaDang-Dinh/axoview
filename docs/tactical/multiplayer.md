@@ -169,13 +169,67 @@ CRDTs, multi-region, team workspaces, ownership transfer, binary encoding (after
   - following switches page;
   - a viewer's edit controls are disabled, with the "View only" chip.
 
-### F. Infra (infra repo)
-- [ ] `realtime` Deployment and its target group; CloudFront WebSocket path; the `realtime/*`
-  behaviour with signed URLs
-- [ ] Signing key in Secrets Manager; latency and durability metrics, with alarms
+### F. Infra (infra repo, `infra_website`)
+Kubernetes (`deploy/k8s/base/`):
+- [ ] An `axoview-realtime` Deployment from the same image (`ROLE=realtime`), with a Service, a
+  PodDisruptionBudget and a service account. One replica and no HPA in the MVP: the lease, not
+  replica count, decides ownership.
+- [ ] Draining: a `preStop` hook plus `terminationGracePeriodSeconds` long enough to release leases
+  and close sockets cleanly (the API pods have neither today).
+- [ ] The smoke test (`smoke-test.yaml`) gains a WebSocket handshake to `/api/realtime/` after each
+  deploy.
+
+Edge (`modules/edge/edge.tf`):
+- [ ] A `realtime_pods` target group (IP targets, `/healthz`, a longer deregistration delay than
+  the API's 30 s so sockets can drain) and an ALB listener rule `/api/realtime/*` with priority
+  over `/api/*`.
+- [ ] A CloudFront `ordered_cache_behavior` for `/api/realtime/*` ahead of `/api/*`: caching off,
+  compression off, all viewer headers forwarded (the WebSocket upgrade headers), like today's
+  `/api/sync/*`.
+- [ ] A data-bucket origin with origin access control, plus a `realtime/*` behaviour:
+  - long cache lifetime;
+  - query strings left out of the cache key;
+  - `trusted_key_groups` (signed URLs), with an `aws_cloudfront_public_key` and an
+    `aws_cloudfront_key_group`.
+- [ ] Optional: a WAF rate rule on `/api/realtime/*` upgrades per IP (connection storms).
+
+Data (`modules/data/data_services.tf`):
+- [ ] A data-bucket policy statement letting the CloudFront distribution read `realtime/*` only.
+- [ ] A lifecycle rule on `realtime/`: expire superseded checkpoints, and their noncurrent versions
+  (versioning is on), after N days.
+- [ ] DynamoDB needs no schema change: the journal, lease and membership items live in the existing
+  table, and the TTL on `expiresAt` already expires journal items.
+
+IAM and secrets:
+- [ ] The realtime service account: the same DynamoDB and S3 actions as the API (data module
+  policy), scoped to the same table and bucket.
+- [ ] The API pod role gains `cognito-idp:ListUsers` on the user pool, for adding people by email.
+  Today only the pre sign-up trigger's role has it.
+- [ ] The CloudFront signing key follows the Google client-secret pattern:
+  - the private key lives in GitHub secrets;
+  - the shared-infra apply copies it into Secrets Manager;
+  - on destroy, the secret is kept or erased (your choice);
+  - the public key and key group are in Terraform;
+  - the private key never enters Terraform state.
+
+Observability (`modules/observability/`):
+- [ ] Metrics with counts and latencies only, no content: acknowledgement and broadcast p95,
+  durability lag, open sockets, lease takeovers, refused batches, adds by email.
+- [ ] Alarms:
+  - durability lag p95 above 1 s for 5 minutes;
+  - acknowledgement p95 above 20 ms;
+  - a burst of lease takeovers.
+- [ ] A dashboard section beside "Agents".
+
+Pipeline and reuse:
+- [ ] The deploy workflow rolls the realtime Deployment with the API, plan-guard lists the new
+  protected resources, and `adopt/registry.sh` plus `candidates.jq` gain checks for the new types
+  that can already exist by name (key group, public key, listener rule, target group), so reruns
+  adopt instead of failing.
 - [ ] **Infra checks:**
-  - the plan shows the WebSocket path uncached;
-  - the `realtime/*` behaviour needs a signed URL (unsigned is 403) and is cached on a second fetch;
+  - the plan shows `/api/realtime/*` uncached and before `/api/*`;
+  - an unsigned `realtime/*` fetch is 403, and a signed one is a cache hit on the second fetch;
+  - the post-deploy WebSocket smoke test passes;
   - the alarms fire on a synthetic latency breach.
 
 ## Test conventions

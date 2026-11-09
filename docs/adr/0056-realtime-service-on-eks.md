@@ -95,8 +95,11 @@ Its stated goal is under 1 s of possible loss.
 - **Far-away participants pay their round trip to the region.** Multi-region is out of scope.
 - **The signed-URL key pair has to be created, stored and rotated.**
 
-> TODO: confirm CloudFront's and the ALB's WebSocket idle timeouts in this distribution and set the
-> heartbeat below both.
+**Timeouts (2026-11-09, infra repo `modules/edge/edge.tf`):** the distribution's origin read
+timeout is 30 s and the ALB idle timeout 60 s (the same budget the SSE stream lives within today),
+so a 15 s heartbeat fits under both.
+
+> TODO: confirm in staging that CloudFront holds an idle WebSocket open under those settings.
 
 ## Implementation notes (non-binding)
 
