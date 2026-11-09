@@ -377,7 +377,9 @@ function adapt(handler, { requireStorage = true, sync = null } = {}) {
           : adapter.forWorkspace(req.user.sub)
         : adapter;
       const result = await handler(requestAdapter, makeCtx(req));
-      if (sync && result.status >= 200 && result.status < 300) {
+      // `sync: false`: a write that changed nothing (an unchanged save) has
+      // nothing to tell the other devices.
+      if (sync && result.sync !== false && result.status >= 200 && result.status < 300) {
         await publishChange(req, sync, result);
       }
       for (const [name, value] of Object.entries(result.headers || {})) {
