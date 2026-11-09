@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { apiBaseUrl } from '../utils/apiBaseUrl';
+import { wipeAllDrafts } from './draftStore';
 import { postToTabs } from '../services/sync/tabChannel';
 import { runBeforeSignOut } from '../services/session/beforeSignOut';
 
@@ -217,6 +218,10 @@ export async function signOutCognito(): Promise<void> {
     sessionStorage.removeItem(PROVIDER_KEY);
     sessionStorage.removeItem(LINK_RETRY_KEY);
     useCognitoSessionStore.getState()._clear('signed-out');
+    // Edits saved in this browser but not uploaded (stores/draftStore.ts) go
+    // with the session: the next person at this computer must not find them.
+    // The flush above already uploaded what it could.
+    void wipeAllDrafts();
     // Every other tab of this browser signs out too (CognitoSessionProvider).
     postToTabs({ type: 'account-signed-out' });
   }
@@ -230,4 +235,5 @@ export async function signOutFromOtherTab(): Promise<void> {
   if (useCognitoSessionStore.getState().status !== 'signed-in') return;
   await runBeforeSignOut();
   useCognitoSessionStore.getState()._clear('signed-out');
+  void wipeAllDrafts();
 }

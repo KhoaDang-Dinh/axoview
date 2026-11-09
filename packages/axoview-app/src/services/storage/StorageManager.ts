@@ -81,6 +81,26 @@ export class StorageManager implements StorageProvider {
     return this.getActiveProvider().listDiagrams(folderId);
   }
 
+  // Version tracking: forwarded to the active provider. Without these the app
+  // (which holds the manager, not the provider) never saw a version: realtime
+  // sync reloaded the open diagram on every change event, even one it already
+  // had, and batched-upload drafts recorded no base.
+  knownVersion(id: string): number | undefined {
+    return this.active?.knownVersion?.(id);
+  }
+
+  noteVersion(id: string, version: number): void {
+    this.active?.noteVersion?.(id, version);
+  }
+
+  serverStamp(id: string): string | undefined {
+    return this.active?.serverStamp?.(id);
+  }
+
+  noteStamp(id: string, stamp: string): void {
+    this.active?.noteStamp?.(id, stamp);
+  }
+
   async loadDiagram(id: string): Promise<unknown> {
     return this.getActiveProvider().loadDiagram(id);
   }

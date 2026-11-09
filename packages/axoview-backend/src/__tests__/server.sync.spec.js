@@ -330,7 +330,7 @@ test('a save that changes nothing publishes nothing', async () => {
   // announced to nobody.
   const again = await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n1' }] }));
   expect(again.status).toBe(200);
-  expect(await again.json()).toEqual({ success: true, id, unchanged: true });
+  expect(await again.json()).toEqual({ success: true, id, unchanged: true, lastModified: expect.any(String) });
   // Then a real change is the next sequence number.
   await fetch(`${base}/api/diagrams/${id}`, json('PUT', { name: 'D', items: [{ id: 'n2' }] }));
   await until(() => changesIn(stream.text()).length >= 3);
@@ -418,4 +418,90 @@ test('a closed tab is forgotten: shutdown ends only the streams still open', asy
   child.kill('SIGTERM');
   await exited;
   expect(logs.join('')).toContain('ending 1 sync stream(s)');
+}, T);
+
+// --- Presence: who else has the workspace open (src/syncCursor.js, server.js) ---
+
+const presence = (text) => changesIn(text).filter((c) => c.kind === 'presence');
+const tab = (device, browser) => ({ 'X-Axoview-Device': device, 'X-Axoview-Browser': browser });
+
+test('presence: a new browser joins, the browser already there answers once, a closed tab leaves', async () => {
+  const { port } = await startServer({ SYNC_POLL_MS: '100' });
+  const laptop = openStream(port, tab('laptop-tab-1', 'laptop-browser'));
+  await laptop.ready;
+  await until(() => presence(laptop.text()).some((p) => p.action === 'join'));
+  // Its own join comes back on its own stream; the app drops it as an echo.
+  expect(presence(laptop.text())).toEqual([
+    expect.objectContaining({ action: 'join', origin: 'laptop-tab-1', browser: 'laptop-browser' })
+  ]);
+
+  const phone = openStream(port, tab('phone-tab-1', 'phone-browser'));
+  await phone.ready;
+  // The laptop sees the phone join; the phone learns the laptop is here.
+  await until(() => presence(laptop.text()).some((p) => p.origin === 'phone-tab-1'));
+  await until(() => presence(phone.text()).some((p) => p.action === 'here' && p.origin === 'laptop-tab-1'));
+  expect(presence(phone.text()).find((p) => p.action === 'here')).toEqual(
+    expect.objectContaining({ origin: 'laptop-tab-1', browser: 'laptop-browser' })
+  );
+
+  // A second tab of the laptop's browser joins: the laptop's first tab does not
+  // answer its own browser; the phone does.
+  const laptop2 = openStream(port, tab('laptop-tab-2', 'laptop-browser'));
+  await laptop2.ready;
+  await until(() => presence(laptop2.text()).some((p) => p.action === 'here' && p.origin === 'phone-tab-1'));
+  await new Promise((r) => setTimeout(r, 400));
+  expect(presence(laptop2.text()).filter((p) => p.action === 'here').map((p) => p.origin)).toEqual(['phone-tab-1']);
+
+  // Closing the phone's tab is the phone leaving.
+  phone.stop();
+  await until(() => presence(laptop.text()).some((p) => p.action === 'leave' && p.origin === 'phone-tab-1'));
+  laptop.stop();
+  laptop2.stop();
+}, T);
+
+test('presence: a stream the server ends is no leave; its reconnect is a renewal; the tab closing is', async () => {
+  const { port } = await startServer({ SYNC_MAX_STREAM_MS: '1200', SYNC_POLL_MS: '100' });
+  const short = openStream(port, tab('short-tab-1', 'short-browser'));
+  const res = await short.ready;
+  await new Promise((resolve) => res.on('end', resolve));
+  const lastId = short.text().match(/^id: ([0-9]+)$/gm).pop().slice(4);
+  const again = openStream(port, { ...tab('short-tab-1', 'short-browser'), 'Last-Event-ID': lastId });
+  await again.ready;
+  await until(() => presence(again.text()).some((p) => p.action === 'renew'));
+  again.stop();
+  await new Promise((r) => setTimeout(r, 400));
+
+  // Replay the whole log (no ids: this reader announces nothing itself).
+  const reader = openStream(port, { 'Last-Event-ID': '0' });
+  await reader.ready;
+  await until(() => presence(reader.text()).length >= 3);
+  expect(presence(reader.text()).map((p) => `${p.origin} ${p.action}`)).toEqual([
+    'short-tab-1 join', 'short-tab-1 renew', 'short-tab-1 leave'
+  ]);
+  reader.stop();
+}, T);
+
+test('presence: a stream without both ids announces nothing (older apps, curl)', async () => {
+  const { port } = await startServer({ SYNC_POLL_MS: '100' });
+  const watcher = openStream(port, tab('watcher-tab', 'watcher-browser'));
+  await watcher.ready;
+  const anonymous = openStream(port, { 'X-Axoview-Device': 'only-a-device-id' });
+  await anonymous.ready;
+  await new Promise((r) => setTimeout(r, 600));
+  anonymous.stop();
+  await new Promise((r) => setTimeout(r, 400));
+  expect(presence(watcher.text()).filter((p) => p.origin !== 'watcher-tab')).toEqual([]);
+  watcher.stop();
+}, T);
+
+test('presence is off with SYNC_PRESENCE=off', async () => {
+  const { port } = await startServer({ SYNC_POLL_MS: '100', SYNC_PRESENCE: 'off' });
+  const a = openStream(port, tab('a-tab-0001', 'a-browser'));
+  await a.ready;
+  const b = openStream(port, tab('b-tab-0001', 'b-browser'));
+  await b.ready;
+  await new Promise((r) => setTimeout(r, 600));
+  expect(presence(a.text())).toEqual([]);
+  a.stop();
+  b.stop();
 }, T);
