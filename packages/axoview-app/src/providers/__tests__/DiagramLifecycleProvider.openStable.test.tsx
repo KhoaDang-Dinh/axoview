@@ -190,7 +190,7 @@ describe('a draft in this browser', () => {
     const h = renderLifecycle();
     const draws = mountEditor(h);
     let active: string | undefined;
-    const editor = h.ctx().axoviewRef as { current: { load: (d: Drawn, o?: { view?: string }) => void } };
+    const editor = h.ctx().axoviewRef as unknown as { current: { load: (d: Drawn, o?: { view?: string }) => void } };
     const load = editor.current.load;
     editor.current.load = (d, o) => { load(d, o); active = o?.view; };
     await waitFor(() => expect(h.ctx().currentDiagram?.id).toBe('abc'));
