@@ -208,4 +208,74 @@ test.describe('batched uploads while one browser has the workspace open', () => 
     expect((await uploaded).status()).toBe(200);
     expect(await itemsOnServer(api, id)).toBe(1);
   });
+
+  // Regression (2026-11-09, "the page keeps creating a new id for an unsaved
+  // page"): while edits wait in the browser, the server copy lacks them. A
+  // new diagram is stored without pages there, and a new page is missing, so
+  // each reload used to land on a freshly minted page id.
+  test.describe('a page that has not reached the server keeps its id', () => {
+    const pageId = (page: Page) => new URL(page.url()).searchParams.get('page');
+    const selectedTab = (page: Page) =>
+      page.locator('[data-axoview-id="view-tab"][aria-selected="true"]');
+
+    /** Reload, then the URL and the selected tab both name `expected`. */
+    async function expectPageAfterReload(page: Page, id: string, expected: string): Promise<void> {
+      const loaded = waitForApi(page, 'GET', `/api/diagrams/${id}`);
+      await page.reload();
+      expect((await loaded).status()).toBe(200);
+      await expect(selectedTab(page)).toHaveAttribute('data-view-id', expected, { timeout: 15_000 });
+      expect(pageId(page)).toBe(expected);
+    }
+
+    test('a new diagram, not uploaded yet: the same page id on every reload', async ({ page, api }) => {
+      const id = await createDiagram(page);
+      await expect.poll(() => pageId(page), { timeout: 10_000 }).toBeTruthy();
+      const first = pageId(page) as string;
+      const stored = (await (await api.get(`/api/diagrams/${id}`)).json()) as { views: unknown[] };
+      expect(stored.views, 'the server copy has no page yet').toEqual([]);
+
+      for (let i = 0; i < 3; i += 1) await expectPageAfterReload(page, id, first);
+    });
+
+    test('a new page, not uploaded yet: a reload stays on it', async ({ page }) => {
+      const id = await createDiagram(page);
+      await expect.poll(() => pageId(page), { timeout: 10_000 }).toBeTruthy();
+      const first = pageId(page);
+      await byAxoviewId(page, 'view-tabs-add').click();
+      await expect.poll(() => pageId(page)).not.toBe(first);
+      const added = pageId(page) as string;
+
+      await expectPageAfterReload(page, id, added);
+      await expect(byAxoviewId(page, 'view-tab')).toHaveCount(2);
+    });
+
+    test('a new page whose tab closed before its upload: reopened on that page', async ({ page, context, api }) => {
+      const id = await createDiagram(page);
+      await expect.poll(() => pageId(page), { timeout: 10_000 }).toBeTruthy();
+      const first = pageId(page);
+      await byAxoviewId(page, 'view-tabs-add').click();
+      await expect.poll(() => pageId(page)).not.toBe(first);
+      const added = pageId(page) as string;
+      await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
+      const link = page.url();
+      await closeWithUploadsFailing(page);
+      const stored = (await (await api.get(`/api/diagrams/${id}`)).json()) as { views: { id: string }[] };
+      expect(stored.views.map((v) => v.id), 'the server never got the new page').not.toContain(added);
+
+      const reopened = await context.newPage();
+      await reopened.goto(link);
+      await expect(notice(reopened, /Restored edits from this browser/)).toBeVisible({ timeout: 15_000 });
+      await expect(selectedTab(reopened)).toHaveAttribute('data-view-id', added);
+      expect(pageId(reopened)).toBe(added);
+      await expect(byAxoviewId(reopened, 'view-tab')).toHaveCount(2);
+
+      // Left alone afterwards, the URL holds still.
+      const seen = new Set<string>();
+      for (let i = 0; i < 10; i += 1) {
+        seen.add(reopened.url());
+        await reopened.waitForTimeout(300);
+      }
+      expect([...seen]).toEqual([reopened.url()]);
+    });
+  });
 });
