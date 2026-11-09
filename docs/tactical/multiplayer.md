@@ -78,6 +78,16 @@ CRDTs, multi-region, team workspaces, ownership transfer, binary encoding (after
 - [ ] Pure `applyBatch` plus checks for structural ops, shared with the backend
 - [ ] Fractional `order` on ordered entities, with reading and assigning for old documents
 - [ ] Convergence simulation (seeded; N participants; state hash per sequence number)
+- [ ] **Unit (lib, `src/sync/__tests__/`):**
+  - op schema accepts and refuses the right shapes;
+  - the translator round-trips every mutation family (place, move, connect, style, text, labels,
+    layers, pages, paste, delete);
+  - `applyBatch` is pure and deterministic (same input, same hash);
+  - structural refusals carry reasons; batches are atomic (one refusal, nothing applied);
+  - fractional `order`: inserts between, at both ends, and when two participants insert concurrently;
+  - per-participant undo skips properties someone else changed since.
+- [ ] **Convergence suite in CI:** a fixed seed, 5 and 20 participants, 10k ops, run on every PR
+  that touches the lib
 
 ### B. Realtime service (backend, single region, one replica)
 - [ ] WebSocket endpoint, `hello`/`since` join, broadcast, refusals
@@ -86,26 +96,98 @@ CRDTs, multi-region, team workspaces, ownership transfer, binary encoding (after
 - [ ] Checkpoints to S3, signed URLs, keeping the REST document in step
 - [ ] Self-host: in-process with file journal and checkpoints
 - [ ] Failure tests and the latency bench (ADR 0056 acceptance)
+- [ ] **Unit (backend, `src/__tests__/realtime*.spec.js`):**
+  - sequencer ordering and refusals;
+  - lease taken, renewed, expired and taken over (fake clock);
+  - journal batching and the durability watermark;
+  - a duplicate `opId` is applied once;
+  - checkpoint cadence and signed-URL expiry;
+  - the fs journal round-trips for self-host.
+- [ ] **Server integration (real WebSockets, like `server.sync.spec.js`):**
+  - join from a checkpoint plus the tail;
+  - `since N` catch-up;
+  - an owner killed mid-burst loses nothing a client still holds;
+  - forwarding by a pod that isn't the owner;
+  - heartbeats; draining on shutdown.
+- [ ] **Latency bench (CI artifact):** p50, p95 and p99 for ack and broadcast at 1, 5 and 20
+  participants, plus the durability lag, compared against the ADR 0056 targets
 
 ### C. Client sync (app)
 - [ ] Sync client: optimistic apply, held-back sets, rollback on refusal, offline queue
 - [ ] Per-participant undo in multiplayer sessions
 - [ ] Retire whole-document autosave and the #51 batching in server mode; the live status line
 - [ ] Agent runner (server-side) and the in-browser harness submit batches
+- [ ] **Unit (app):**
+  - the sync client applies optimistically and holds back incoming sets on its own unaccepted paths;
+  - a refusal rolls back;
+  - the offline queue survives a reload (IndexedDB mocked);
+  - the status line shows "Live", "Syncing…" and "Offline: N changes waiting";
+  - an agent batch is refused whole and the agent re-plans.
+- [ ] **E2E, Docker tier (`tests-docker/multiplayer-sync.spec.ts`):**
+  - one user in two browsers plus a scripted agent converge on one diagram;
+  - an edit in one shows in the other within the latency target;
+  - undo in one doesn't revert the other's edit;
+  - going offline queues edits, and reconnecting syncs them.
 
 ### D. Sharing and permissions
 - [ ] Membership items, the "shared with me" index, `canAccess` on every route and socket
 - [ ] Email field under Share: an existing verified account becomes an editor at once. A green pop-up on success; red for no account, already shared, yourself, or an error. A people list with remove; the "Shared with me" explorer root
 - [ ] Live downgrade and removal of open sockets
+- [ ] **Unit (backend):**
+  - the role matrix for every REST route and socket message;
+  - adding by email: an existing verified account becomes an editor; no account, an unverified
+    account, already shared, or yourself is refused and stores nothing;
+  - only the owner may add or remove;
+  - the lookup is rate-limited;
+  - an agent of a viewer is read-only.
+- [ ] **Unit (app):** the Share email field:
+  - a green pop-up and a cleared field on success;
+  - a red pop-up with the email kept for each failure (no account, already shared, yourself,
+    network);
+  - the people list removes.
+- [ ] **E2E, dev tier (`tests/share-people.spec.ts`, scripted API via `helpers/mockApi.ts`):** every
+  pop-up colour and message, and the list updating, without a backend.
+- [ ] **E2E, Docker tier (`tests-docker/sharing.spec.ts`, two signed-in users):**
+  - adding by email is green, and the diagram appears in the second user's "Shared with me";
+  - the second user edits live;
+  - an unknown or repeated email is red;
+  - removal takes the diagram away and closes their socket.
 
 ### E. Presence UI
 - [ ] Awareness messages, the participants store, the participants bar, follow mode
 - [ ] `RemoteParticipantsLayer` (cursors, selections, agent intent), under the perf gate
+- [ ] **Unit (lib and app):**
+  - tile-space cursor positions map to the same model point under rotation and 2D mode;
+  - awareness throttling and the 30 s expiry;
+  - the layer lets pointer events through;
+  - avatar order (people, then agents) and "+N" overflow;
+  - follow mode stops on pan or Escape.
+- [ ] **Perf gate:** 20 simulated participants moving stay inside the perf harness budget
+  (ADR 0020).
+- [ ] **E2E, Docker tier (`tests-docker/presence.spec.ts`):**
+  - two browsers see each other's avatar, cursor and selection;
+  - following switches page;
+  - a viewer's edit controls are disabled, with the "View only" chip.
 
 ### F. Infra (infra repo)
 - [ ] `realtime` Deployment and its target group; CloudFront WebSocket path; the `realtime/*`
   behaviour with signed URLs
 - [ ] Signing key in Secrets Manager; latency and durability metrics, with alarms
+- [ ] **Infra checks:**
+  - the plan shows the WebSocket path uncached;
+  - the `realtime/*` behaviour needs a signed URL (unsigned is 403) and is cached on a second fetch;
+  - the alarms fire on a synthetic latency breach.
+
+## Test conventions
+
+- **Unit tests:** next to the code (`__tests__/`), under each package's Jest config. For the
+  backend: `npm test --workspace=axoview-backend`.
+- **Server-backed browser tests:** Docker tier (`packages/axoview-e2e/tests-docker/`): DOM only, no
+  bridge, `data-axoview-id` hooks. Two-user specs need two signed-in identities: add a test-only
+  sign-in fixture before D's specs.
+- **UI-only browser tests:** dev tier with the scripted API (`helpers/mockApi.ts`).
+- **Before a group is ticked:** its unit tests, the convergence suite and its e2e specs pass in CI,
+  and the Docker smoke and regression runs stay green.
 
 ## Wrap-up
 
