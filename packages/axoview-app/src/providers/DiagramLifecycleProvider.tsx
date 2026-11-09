@@ -272,6 +272,39 @@ function sameContent(a: DiagramData, b: DiagramData): boolean {
   return content(a) === content(b);
 }
 
+/** The first page of a diagram stored without pages: the same id on every load. */
+export const firstPageId = (diagramId: string): string => `${diagramId}-page-1`;
+
+/**
+ * The pages of a stored diagram, with a first page added when it has none (a
+ * blank diagram created and never edited is stored that way). Left to the
+ * editor, every load gave that page a new random id: the URL's ?page= changed
+ * on each open, refresh and sync reload, a bookmark never found its page, the
+ * canvas switched page under the user, and a draft never matched the server
+ * copy.
+ */
+export function withFirstPage(diagramId: string, views: unknown): DiagramData['views'] {
+  if (Array.isArray(views) && views.length > 0) return views as DiagramData['views'];
+  return [{
+    id: firstPageId(diagramId),
+    name: 'Page 1',
+    items: [],
+    connectors: [],
+    rectangles: [],
+    textBoxes: []
+  }];
+}
+
+/**
+ * What opening a diagram does with this browser's draft of it (edits that
+ * never reached the server): `show` is drawn instead of the server copy, and
+ * `afterShown` runs once it is on screen.
+ */
+interface DraftRecovery {
+  show?: DiagramData;
+  afterShown: () => Promise<void>;
+}
+
 export function DiagramLifecycleProvider({
   children
 }: {
@@ -445,7 +478,9 @@ export function DiagramLifecycleProvider({
   // last (its own, or one taken from another tab). See the tab handler.
   const lineageRef = useRef<Map<string, string[]>>(new Map());
   // Set once recoverDraft exists (it needs the loader, defined further down).
-  const recoverDraftRef = useRef<(id: string, loaded: DiagramData) => Promise<void>>(async () => {});
+  const recoverDraftRef = useRef<(id: string, loaded: DiagramData) => Promise<DraftRecovery | null>>(
+    async () => null
+  );
   // Per diagram: the sibling tab whose checkpoint is on screen here. Its upload
   // carries content this tab already shows (see the realtime sync filter).
   const adoptedFromRef = useRef<Map<string, string>>(new Map());
@@ -1348,9 +1383,26 @@ export function DiagramLifecycleProvider({
       // (realtime sync) — keep the viewport, and never write back from here,
       // or two devices would answer each other's saves forever.
       // view: open on this page if the diagram has it (the URL's ?page=).
-      { remote = false, view }: { remote?: boolean; view?: string } = {}
+      // created: just made here, so this browser cannot hold a draft of it.
+      { remote = false, view, created = false }: { remote?: boolean; view?: string; created?: boolean } = {}
     ) => {
-      const data: PersistedDiagramBlob = isPersistedDiagramBlob(rawData) ? rawData : {};
+      let data: PersistedDiagramBlob = isPersistedDiagramBlob(rawData) ? rawData : {};
+
+      // Opening it (not a reload): this browser may hold edits to it that
+      // never reached the server. Decided before anything is drawn, so the
+      // canvas shows one version, not the server copy and then, a moment
+      // later, the draft over it.
+      let recovery: DraftRecovery | null = null;
+      if (!remote && !created) {
+        recovery = await recoverDraftRef.current(id, {
+          title: data.title || '',
+          icons: [],
+          colors: data.colors?.length ? data.colors : defaultColors,
+          items: Array.isArray(data.items) ? data.items : [],
+          views: withFirstPage(id, data.views)
+        });
+        if (recovery?.show) data = recovery.show as unknown as PersistedDiagramBlob;
+      }
 
       const loadedIcons: Icon[] = data.icons || [];
       await iconPackManager.loadPacksForDiagram(data);
@@ -1376,7 +1428,7 @@ export function DiagramLifecycleProvider({
         icons: finalIcons,
         colors: data.colors?.length ? data.colors : defaultColors,
         items: Array.isArray(data.items) ? data.items : [],
-        views: Array.isArray(data.views) ? data.views : [],
+        views: withFirstPage(id, data.views),
         fitToScreen: data.fitToScreen !== false,
         requiredPacks: data.requiredPacks
       };
@@ -1417,9 +1469,8 @@ export function DiagramLifecycleProvider({
       if (!remote && !hasDefaultIcons && storageRef.current && !serverModeRef.current) {
         storageRef.current.saveDiagram(id, mergedData).catch(() => {});
       }
-      // Edits to this diagram that are saved in this browser but never
-      // reached the server (a crash, a tab closed before its upload).
-      if (!remote) void recoverDraftRef.current(id, mergedData);
+      // A restored draft goes up now; an outdated one is offered.
+      if (recovery) void recovery.afterShown();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.resetStatus; whole autoSave churns on every save-status change
     [iconPackManager, autoSave.resetStatus]
@@ -1520,7 +1571,7 @@ export function DiagramLifecycleProvider({
           setFileExplorerOpen(true);
         }
         setFileTreeRefreshToken((n) => n + 1);
-        await handleDiagramManagerLoad(id, blankData, name);
+        await handleDiagramManagerLoad(id, blankData, name, { created: true });
         if (focusAfter === 'elements') {
           // Bridge into the lib store (separate provider tree) the same way the
           // other cross-boundary commands do — a window event the LeftDock
@@ -1889,30 +1940,29 @@ export function DiagramLifecycleProvider({
 
   // Opening a diagram that has a draft in this browser (stores/draftStore.ts):
   // edits that never reached the server. Edited from the version the server
-  // still has: restore and upload them. The server moved on since (another
-  // device saved): offer them instead of overwriting that save unasked.
-  const recoverDraft = useCallback(async (id: string, loaded: DiagramData) => {
-    if (!batchingEnabled) return;
+  // still has: show and upload them. The server moved on since (another device
+  // saved): show the server's and offer them, instead of overwriting that save
+  // unasked. Runs before the diagram is drawn (handleDiagramManagerLoad), so
+  // a restore is one draw, not the server copy and then the draft over it.
+  const recoverDraft = useCallback(async (id: string, loaded: DiagramData): Promise<DraftRecovery | null> => {
+    if (!batchingEnabled) return null;
     const userKey = userKeyRef.current;
     // The server state as this load found it, before anything below can
     // write and move it.
     const serverStamp = serverStampOf(id);
     const serverVersion = knownVersionOfRef.current(id);
     const draft = await useDraftStore.getState().find(userKey, id);
-    if (!draft) return;
-    const open = currentDiagramRef.current;
-    if (open?.id !== id || autoSave.hasUnsavedWork()) return;
+    if (!draft) return null;
     // This tab's own checkpoint, still on its way up: not a leftover.
-    if (lineageRef.current.get(id)?.includes(draft.rev)) return;
+    if (lineageRef.current.get(id)?.includes(draft.rev)) return null;
     // Its edits reached the server after all (an upload sent as the tab
     // closed, delivered late): nothing to restore.
     if (sameContent(draft.model, loaded)) {
       await useDraftStore.getState().discard(userKey, id);
-      return;
+      return null;
     }
-    const restore = async () => {
-      if (currentDiagramRef.current?.id !== id) return;
-      await handleDiagramManagerLoad(id, draft.model, diagramNameRef.current || open.name, { remote: true });
+    // On screen now: upload it, and drop the draft once that landed.
+    const upload = async () => {
       lineageRef.current.set(id, [draft.rev]);
       autoSave.scheduleSave(id, draft.model);
       if ((await autoSave.saveNow()) === 'saved') await useDraftStore.getState().discard(userKey, id);
@@ -1924,23 +1974,38 @@ export function DiagramLifecycleProvider({
       ? draft.baseStamp === serverStamp
       : draft.baseVersion === undefined || serverVersion === undefined || draft.baseVersion === serverVersion;
     if (unchangedSince) {
-      await restore();
-      notificationStore.push({
-        severity: 'info',
-        message: t('sync.draftRestored', 'Restored edits from this browser that had not reached the server yet.')
-      });
-      return;
+      return {
+        show: draft.model,
+        afterShown: async () => {
+          notificationStore.push({
+            severity: 'info',
+            message: t('sync.draftRestored', 'Restored edits from this browser that had not reached the server yet.')
+          });
+          await upload();
+        }
+      };
     }
-    notificationStore.push({
-      severity: 'warning',
-      message: t(
-        'sync.draftOutdated',
-        'This browser has edits to this diagram that never reached the server, and the diagram has changed since.'
-      ),
-      action: { label: t('sync.restoreDraft', 'Restore my edits'), onClick: () => { void restore(); } }
-    });
+    // The user chose to put them back over what another device saved.
+    const restore = async () => {
+      const open = currentDiagramRef.current;
+      if (open?.id !== id) return;
+      await handleDiagramManagerLoad(id, draft.model, diagramNameRef.current || open.name, { remote: true });
+      await upload();
+    };
+    return {
+      afterShown: async () => {
+        notificationStore.push({
+          severity: 'warning',
+          message: t(
+            'sync.draftOutdated',
+            'This browser has edits to this diagram that never reached the server, and the diagram has changed since.'
+          ),
+          action: { label: t('sync.restoreDraft', 'Restore my edits'), onClick: () => { void restore(); } }
+        });
+      }
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- autoSave's methods are stable; t and notificationStore too
-  }, [batchingEnabled, handleDiagramManagerLoad, autoSave.hasUnsavedWork, autoSave.scheduleSave, autoSave.saveNow]);
+  }, [batchingEnabled, handleDiagramManagerLoad, autoSave.scheduleSave, autoSave.saveNow]);
   recoverDraftRef.current = recoverDraft;
 
   // Batched uploads go out at once when it matters: the tab is hidden or the

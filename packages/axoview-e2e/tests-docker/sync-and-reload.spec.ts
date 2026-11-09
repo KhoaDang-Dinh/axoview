@@ -148,6 +148,50 @@ test.describe('server-backed editor: reload, links and live updates', () => {
     await expect(explorer.getRowByName('E2E reload')).toHaveAttribute('aria-current', 'true');
   });
 
+  // Regression (2026-11-09, "page id keeps changing and blinks"): a diagram
+  // stored without pages (created blank, never edited) got a new random page
+  // id on every load, so the URL's ?page= changed on each open and reload.
+  test('a blank diagram keeps its page id across reloads, and the URL holds still', async ({
+    page,
+    api
+  }) => {
+    const res = await api.post('/api/diagrams', {
+      data: { ...diagramBody('E2E blank', []), views: [] }
+    });
+    expect(res.status(), 'POST /api/diagrams (blank)').toBe(201);
+    const id = ((await res.json()) as { id: string }).id;
+
+    // The page in the URL once the diagram is on screen (its one tab shows it).
+    const pageIdAfterLoad = async () => {
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get('page'), { timeout: 15_000 })
+        .toBeTruthy();
+      const viewId = new URL(page.url()).searchParams.get('page');
+      await expect(tabs(page)).toHaveCount(1);
+      await expect(tabs(page).first()).toHaveAttribute('data-view-id', viewId as string);
+      return viewId;
+    };
+
+    const loaded = waitForApi(page, 'GET', `/api/diagrams/${id}`);
+    await page.goto(`/app/d/${id}`);
+    expect((await loaded).status()).toBe(200);
+    const first = await pageIdAfterLoad();
+    expect(first).toBeTruthy();
+
+    const reloaded = waitForApi(page, 'GET', `/api/diagrams/${id}`);
+    await page.reload();
+    expect((await reloaded).status()).toBe(200);
+    expect(await pageIdAfterLoad()).toBe(first);
+
+    // Left open with no one touching it, the URL does not move.
+    const seen = new Set<string>();
+    for (let i = 0; i < 10; i += 1) {
+      seen.add(page.url());
+      await page.waitForTimeout(300);
+    }
+    expect([...seen]).toEqual([page.url()]);
+  });
+
   test('a link to a diagram that cannot be opened returns to /app with a notice', async ({
     page,
     apiLog
