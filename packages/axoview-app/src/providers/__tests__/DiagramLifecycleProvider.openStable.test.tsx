@@ -180,4 +180,24 @@ describe('a draft in this browser', () => {
     expect(toasts).toEqual([]);
     expect(disk.has('draft:workspace:abc')).toBe(false);
   });
+
+  it('holding a page the server never got: the URL\'s ?page= opens on it, in one draw', async () => {
+    mockLocation = { pathname: '/d/abc', search: '?page=p2' };
+    const withNewPage = { ...EDITED, views: [page('p1'), page('p2')] };
+    disk.set('draft:workspace:abc', { userKey: 'workspace', id: 'abc', model: withNewPage, baseStamp: 'v3', rev: 'r1', savedAt: 1 });
+    const double = makeStorage({ loadDiagram: async () => SERVER_COPY, serverStamp: () => 'v3' } as never);
+    appStorage = server(double.storage);
+    const h = renderLifecycle();
+    const draws = mountEditor(h);
+    let active: string | undefined;
+    const editor = h.ctx().axoviewRef as unknown as { current: { load: (d: Drawn, o?: { view?: string }) => void } };
+    const load = editor.current.load;
+    editor.current.load = (d, o) => { load(d, o); active = o?.view; };
+    await waitFor(() => expect(h.ctx().currentDiagram?.id).toBe('abc'));
+    await waitFor(() => expect(double.saveCalls).toHaveLength(1));
+    expect(draws).toHaveLength(1);
+    expect(draws[0].views.map((v) => v.id)).toEqual(['p1', 'p2']);
+    expect(active).toBe('p2');
+    expect(navigations.filter((n) => !n.to.endsWith('?page=p2'))).toEqual([]);
+  });
 });
