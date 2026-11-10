@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Box, Button, CircularProgress, Typography } from '@mui/material';
 import { useAppStorage } from './AppStorageContext';
@@ -45,6 +45,17 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
   const error = useCognitoSessionStore((state) => state.error);
   const config = runtimeConfig?.cognito || null;
 
+  // The session is restored once per page load, and again only when this tab
+  // arrives at /auth/callback. It used to run on every navigation
+  // (location.key): each one swapped the whole app for the spinner below,
+  // unmounting the editor, which then reloaded the diagram and wrote ?page=
+  // back to the URL, which was another navigation. Every diagram open and
+  // page switch blinked, and a diagram whose page id changed on each load
+  // never stopped (dev, 2026-11-09). The access token refreshes on demand
+  // (getCognitoAccessToken), so nothing needs a bootstrap per navigation.
+  const onCallback = location.pathname.endsWith('/auth/callback');
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
   useEffect(() => {
     if (!isInitialized) return;
     if (!config) {
@@ -52,18 +63,17 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
       return;
     }
     let cancelled = false;
-    setReady(false);
     void bootstrapCognitoSession(config).finally(() => {
       if (cancelled) return;
       setReady(true);
       if (window.location.pathname.endsWith('/auth/callback') && useCognitoSessionStore.getState().status === 'signed-in') {
         // Tabs left on the sign-in screen pick up the new session.
         postToTabs({ type: 'account-signed-in' });
-        navigate(takeSignInReturn(), { replace: true });
+        navigateRef.current(takeSignInReturn(), { replace: true });
       }
     });
     return () => { cancelled = true; };
-  }, [config, isInitialized, location.key, navigate]);
+  }, [config, isInitialized, onCallback]);
 
   // Other tabs of this browser: signing out in one signs out all of them, and
   // signing in again brings the ones on the sign-in screen back.
