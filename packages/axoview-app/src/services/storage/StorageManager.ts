@@ -2,7 +2,11 @@ import {
   AddMemberResult,
   DiagramMember,
   DiagramMeta,
+  DiagramRole,
   FolderMeta,
+  MemberRole,
+  Proposal,
+  ProposalDecision,
   SharedState,
   StorageProvider,
   TreeManifest
@@ -177,10 +181,31 @@ export class StorageManager implements StorageProvider {
     return provider.listMembers ? provider.listMembers(id) : [];
   }
 
-  async addMember(id: string, email: string): Promise<AddMemberResult> {
+  sharedRole(id: string): DiagramRole | undefined {
+    return this.active?.sharedRole?.(id);
+  }
+
+  async addMember(id: string, email: string, role?: MemberRole): Promise<AddMemberResult> {
     const provider = this.getActiveProvider();
     if (!provider.addMember) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
-    return provider.addMember(id, email);
+    return provider.addMember(id, email, role);
+  }
+
+  async setMemberRole(id: string, sub: string, role: MemberRole): Promise<AddMemberResult> {
+    const provider = this.getActiveProvider();
+    if (!provider.setMemberRole) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.setMemberRole(id, sub, role);
+  }
+
+  async listProposals(id: string): Promise<Proposal[]> {
+    const provider = this.getActiveProvider();
+    return provider.listProposals ? provider.listProposals(id) : [];
+  }
+
+  async resolveProposal(id: string, proposalId: string, decision: 'approve' | 'reject', force?: boolean): Promise<ProposalDecision> {
+    const provider = this.getActiveProvider();
+    if (!provider.resolveProposal) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.resolveProposal(id, proposalId, decision, force);
   }
 
   async removeMember(id: string, sub: string): Promise<void> {

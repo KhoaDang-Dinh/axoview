@@ -19,6 +19,9 @@ import type { NodeRendererProps } from 'react-arborist';
 import type { FileNode } from '../../hooks/useFileTree';
 import { GoogleGIcon } from '../GoogleGIcon';
 
+// The level a shared diagram was given to this account (ADR 0057).
+const SHARED_LEVEL = { viewer: 'Read only', proposer: 'Change needs approval', admin: 'Full admin' } as const;
+
 interface Props extends NodeRendererProps<FileNode> {
   selectedId?: string | null;
   onContextMenu: (event: React.MouseEvent, node: FileNode) => void;
@@ -298,6 +301,7 @@ export function FileTreeNode({
       data-axoview-id="file-explorer-row"
       data-diagram-name={node.data.name}
       data-shared={node.data.diagramMeta?.shared ? 'with-you' : undefined}
+      data-shared-role={node.data.diagramMeta?.shared?.role}
       data-diagram-type={node.data.type}
       // The open diagram's row: the one fact the highlight below carries only
       // as a colour. Also what the Docker smoke waits on, since nothing else in
@@ -339,9 +343,9 @@ export function FileTreeNode({
         ) : node.data.diagramMeta?.shared ? (
           // Someone else's diagram, shared with this account (ADR 0057).
           <Tooltip
-            title={node.data.diagramMeta.shared.ownerEmail
+            title={`${node.data.diagramMeta.shared.ownerEmail
               ? `Shared with you by ${node.data.diagramMeta.shared.ownerEmail}`
-              : 'Shared with you'}
+              : 'Shared with you'} · ${SHARED_LEVEL[node.data.diagramMeta.shared.role]}`}
           >
             <SharedIcon sx={{ fontSize: 16 }} data-axoview-id="file-explorer-shared-icon" />
           </Tooltip>

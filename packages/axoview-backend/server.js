@@ -287,14 +287,12 @@ const sharing = STORAGE_ENABLED && AUTH_MODE === 'cognito' && routeEnv.COGNITO_U
     })
   : null;
 routeEnv.SHARING_ENABLED = !!sharing;
-// Only the owner may rename, move, trash, delete or publish a shared diagram.
-const OWNER_ONLY_ROUTES = new Set([
-  'PATCH /api/diagrams/:id',
-  'PATCH /api/diagrams/:id/move',
-  'DELETE /api/diagrams/:id',
-  'POST /api/diagrams/:id/share',
-  'DELETE /api/diagrams/:id/share'
-]);
+// What a person may do with someone else's diagram, by permission level
+// (src/sharing.js). The owner and a Full admin may do everything, except that
+// the folder a diagram sits in belongs to the owner's own file tree.
+const OWNER_FOLDER_ROUTES = new Set(['PATCH /api/diagrams/:id/move']);
+const READ_ROUTES = new Set(['GET /api/diagrams/:id']);
+const SAVE_ROUTE = 'PUT /api/diagrams/:id';
 
 // Realtime multi-device sync (src/syncCursor.js): every write bumps the
 // workspace's change cursor; /api/sync/events streams it to the other devices.
@@ -424,21 +422,59 @@ async function publishChange(req, route, result, target) {
 }
 
 /**
- * The storage a request acts on. A signed-in person's own workspace, or, for
- * a diagram shared with them, its owner's (owner-only actions refused there).
+ * The storage a request acts on, and the caller's role there: their own
+ * workspace ('owner'), or for a diagram shared with them its owner's, with
+ * what their permission level allows (src/sharing.js). A save under "Change
+ * needs approval" is marked `propose`: it becomes a proposal, not a write.
  */
 async function requestTarget(req) {
-  if (!req.user?.sub) return { adapter, owner: null, shared: false };
-  const own = { adapter: workspaceAdapter(req.user.sub), owner: req.user.sub, shared: false };
+  if (!req.user?.sub) return { adapter, owner: null, shared: false, role: null };
+  const own = { adapter: workspaceAdapter(req.user.sub), owner: req.user.sub, shared: false, role: 'owner' };
   const route = `${req.method} ${req.route?.path}`;
   const id = req.params?.id;
   if (!sharing || !id || !req.route?.path?.startsWith('/api/diagrams/:id')) return own;
   const access = await sharing.accessTo(req.user.sub, id);
   if (!access) return own;
-  if (OWNER_ONLY_ROUTES.has(route)) {
-    throw new SharingError(403, 'owner-only', 'Only the owner can do that');
+  const target = { adapter: workspaceAdapter(access.owner), owner: access.owner, shared: true, role: access.role };
+  if (READ_ROUTES.has(route)) return target;
+  if (access.role === 'admin') {
+    if (OWNER_FOLDER_ROUTES.has(route)) {
+      throw new SharingError(403, 'owner-folders', "Only the owner can move it between the owner's folders");
+    }
+    return target;
   }
-  return { adapter: workspaceAdapter(access.owner), owner: access.owner, shared: true };
+  if (access.role === 'proposer' && route === SAVE_ROUTE) return { ...target, propose: true };
+  throw new SharingError(403, access.role === 'viewer' ? 'view-only' : 'needs-approval',
+    access.role === 'viewer' ? 'You can only view this diagram' : 'Your changes need the owner\'s approval');
+}
+
+/** Owner and admins of a diagram: who reviews proposals. */
+async function reviewers(owner, id) {
+  const roles = sharing ? await sharing.memberRoles(owner, id).catch(() => []) : [];
+  return [owner, ...roles.filter((m) => m.role === 'admin').map((m) => m.sub)];
+}
+
+async function notify(workspaces, change) {
+  for (const workspace of new Set(workspaces)) {
+    try {
+      await syncCursor.bump(workspace, { ...change, at: new Date().toISOString() });
+    } catch (err) {
+      console.warn('[sharing] could not notify', err?.name || err);
+    }
+  }
+}
+
+/** A save under "Change needs approval": stored as a proposal, reviewers told. */
+async function proposeSave(req, target) {
+  const proposal = await sharing.propose(
+    target.owner,
+    req.params.id,
+    { sub: req.user.sub, email: req.user.email || null, kind: 'person' },
+    req.body,
+    typeof makeCtx(req).ifMatch === 'number' ? `v${makeCtx(req).ifMatch}` : undefined
+  );
+  await notify(await reviewers(target.owner, req.params.id), { kind: 'proposal', action: 'create', id: req.params.id });
+  return { status: 202, body: { pending: true, proposal } };
 }
 
 function adapt(handler, { requireStorage = true, sync = null } = {}) {
@@ -448,10 +484,10 @@ function adapt(handler, { requireStorage = true, sync = null } = {}) {
     }
     try {
       const target = await requestTarget(req);
-      const result = await handler(target.adapter, makeCtx(req));
+      const result = target.propose ? await proposeSave(req, target) : await handler(target.adapter, makeCtx(req));
       // `sync: false`: a write that changed nothing (an unchanged save) has
       // nothing to tell the other devices.
-      if (sync && result.sync !== false && result.status >= 200 && result.status < 300) {
+      if (sync && !target.propose && result.sync !== false && result.status >= 200 && result.status < 300) {
         await publishChange(req, sync, result, target);
       }
       // A diagram other people have: the app uploads its saves at once
@@ -459,6 +495,7 @@ function adapt(handler, { requireStorage = true, sync = null } = {}) {
       if (sharing && req.params?.id && req.route?.path === '/api/diagrams/:id' && result.status < 300 &&
           (target.shared || (target.owner && (await diagramAudience(target.owner, req.params.id)).size > 1))) {
         res.setHeader('X-Axoview-Shared', target.shared ? 'with-you' : 'by-you');
+        res.setHeader('X-Axoview-Role', target.role);
       }
       for (const [name, value] of Object.entries(result.headers || {})) {
         res.setHeader(name, value);
@@ -686,15 +723,20 @@ app.get('/api/sync/events', async (req, res) => {
 });
 
 // Share
-// People a diagram is shared with (ADR 0057 §5): the owner lists, adds by
-// email, and removes. The person added hears about it on their sync stream,
-// so the diagram appears in their explorer at once.
+// People a diagram is shared with and their permission levels (ADR 0057 §5):
+// the owner and Full admins list, add by email, change levels and remove.
+// The person added hears about it on their sync stream, so the diagram
+// appears in their explorer at once.
 const SHARING_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const SUB_RE = /^[A-Za-z0-9-]{1,128}$/;
 function sharingRoute(handler) {
   return async (req, res) => {
     if (!sharing) return res.status(404).json({ error: 'Sharing is not available here' });
     if (!req.user?.sub) return res.status(401).json({ error: 'Unauthorized' });
     if (!SHARING_ID_RE.test(req.params.id || '')) return res.status(400).json({ error: 'Invalid id' });
+    if (req.params.sub !== undefined && !SUB_RE.test(req.params.sub)) {
+      return res.status(400).json({ error: 'Invalid member' });
+    }
     try {
       const { status, body } = await handler(req);
       res.status(status).json(body);
@@ -705,27 +747,58 @@ function sharingRoute(handler) {
     }
   };
 }
-async function tellMember(sub, action, id) {
-  try {
-    await syncCursor.bump(sub, { kind: 'diagram', action, id, at: new Date().toISOString() });
-  } catch (err) {
-    console.warn('[sharing] could not notify', err?.name || err);
-  }
-}
-app.get('/api/diagrams/:id/members', sharingRoute(async (req) => ({
-  status: 200,
-  body: { members: await sharing.listMembers(req.user.sub, req.params.id) }
-})));
+app.get('/api/diagrams/:id/members', sharingRoute(async (req) => {
+  const owner = await sharing.managedBy(req.user.sub, req.params.id);
+  return { status: 200, body: { members: await sharing.listMembers(owner, req.params.id) } };
+}));
 app.post('/api/diagrams/:id/members', sharingRoute(async (req) => {
-  const member = await sharing.addMember(req.user.sub, req.params.id, req.body?.email);
-  await tellMember(member.sub, 'create', req.params.id);
+  const owner = await sharing.managedBy(req.user.sub, req.params.id);
+  const member = await sharing.addMember(owner, req.params.id, req.body?.email, req.body?.role || 'viewer', req.user.sub);
+  await notify([member.sub], { kind: 'diagram', action: 'create', id: req.params.id });
   return { status: 201, body: { member } };
 }));
+app.patch('/api/diagrams/:id/members/:sub', sharingRoute(async (req) => {
+  const owner = await sharing.managedBy(req.user.sub, req.params.id);
+  const member = await sharing.setRole(owner, req.params.id, req.params.sub, req.body?.role);
+  // Their explorer and open tab learn the new level (it changes how it opens).
+  await notify([member.sub], { kind: 'diagram', action: 'update', id: req.params.id });
+  return { status: 200, body: { member } };
+}));
 app.delete('/api/diagrams/:id/members/:sub', sharingRoute(async (req) => {
-  if (!/^[A-Za-z0-9-]{1,128}$/.test(req.params.sub)) return { status: 400, body: { error: 'Invalid member' } };
-  await sharing.removeMember(req.user.sub, req.params.id, req.params.sub);
-  await tellMember(req.params.sub, 'delete', req.params.id);
+  const owner = await sharing.managedBy(req.user.sub, req.params.id);
+  await sharing.removeMember(owner, req.params.id, req.params.sub);
+  await notify([req.params.sub], { kind: 'diagram', action: 'delete', id: req.params.id });
   return { status: 200, body: { removed: req.params.sub } };
+}));
+
+// Proposals: saves made under "Change needs approval" (AI agents). The owner
+// and Full admins see them and approve or reject; approving saves the
+// proposed document like any save, so everyone who has the diagram gets it.
+app.get('/api/diagrams/:id/proposals', sharingRoute(async (req) => {
+  const owner = await sharing.managedBy(req.user.sub, req.params.id);
+  return { status: 200, body: { proposals: await sharing.pendingProposals(owner, req.params.id) } };
+}));
+app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req) => {
+  const id = req.params.id;
+  const owner = await sharing.managedBy(req.user.sub, id);
+  if (!SHARING_ID_RE.test(req.params.pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
+  const { proposal, document } = await sharing.proposalToApply(owner, id, req.params.pid, { force: req.body?.force === true });
+  const ownerAdapter = workspaceAdapter(owner);
+  const version = ownerAdapter.getDiagramVersion ? await ownerAdapter.getDiagramVersion(id) : null;
+  const ctx = { ...makeCtx(req), params: { id }, body: document, ifMatch: version ?? undefined };
+  const saved = await routes.saveDiagram(ownerAdapter, ctx);
+  await publishChange({ ...req, method: 'PUT', params: { id }, body: document, headers: {} }, '/api/diagrams/:id', saved, { owner });
+  const resolved = await sharing.resolveProposal(owner, id, proposal.id, 'approved', req.user.sub);
+  await notify([...await reviewers(owner, id), proposal.by.sub], { kind: 'proposal', action: 'resolve', id });
+  return { status: 200, body: { proposal: resolved } };
+}));
+app.post('/api/diagrams/:id/proposals/:pid/reject', sharingRoute(async (req) => {
+  const id = req.params.id;
+  const owner = await sharing.managedBy(req.user.sub, id);
+  if (!SHARING_ID_RE.test(req.params.pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
+  const resolved = await sharing.resolveProposal(owner, id, req.params.pid, 'rejected', req.user.sub);
+  await notify([...await reviewers(owner, id), resolved.by.sub], { kind: 'proposal', action: 'resolve', id });
+  return { status: 200, body: { proposal: resolved } };
 }));
 
 app.post('/api/diagrams/:id/share', adapt(routes.shareDiagram));

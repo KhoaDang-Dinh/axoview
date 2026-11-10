@@ -1,7 +1,7 @@
 # ADR 0057 — Diagram Sharing and Permissions
 
-**Status:** Accepted: the email field shipped (2026-11-10; see the addendum below). Realtime
-co-editing waits for [ADR 0055](0055-multiplayer-operation-protocol.md)/[0056](0056-realtime-service-on-eks.md).
+**Status:** Accepted: the email field and the three permission levels shipped (2026-11-10; see the
+addenda below). Realtime co-editing waits for [ADR 0055](0055-multiplayer-operation-protocol.md)/[0056](0056-realtime-service-on-eks.md).
 **Date:** 2026-11-09
 **Supersedes:** none
 **Superseded by:** none
@@ -160,8 +160,29 @@ on today's storage and sync, ahead of the realtime service.
 4. **Lookup:** Cognito `ListUsers` with an exact `email` filter, keeping verified, enabled
    accounts. The API role has `cognito-idp:ListUsers` on its own pool only (infra_website,
    `modules/identity/app_user_lookup.tf`).
-5. **Not yet:**
-   - roles other than `editor`;
-   - the agent rule (§4), which applies once agents act on server diagrams;
-   - the realtime socket's access checks (§3), which come with ADR 0056.
+5. **Not yet:** the realtime socket's access checks (§3), which come with ADR 0056. (The roles
+   followed the same day: next addendum.)
+
+## Addendum 2026-11-10 (2): three permission levels
+
+The owner replaced §2's roles the same day:
+
+| Level | Role | What it allows | Who may hold it |
+|---|---|---|---|
+| Read only | `viewer` | Opening it, in the existing read-only viewer (`/display/<id>`, the one the public link uses). Every write is refused. | people and agents |
+| Change needs approval | `proposer` | Reading. Each save is stored as a proposal that the owner or a Full admin approves or rejects. | agents (the data model allows people too; the app offers it to agents only, to avoid a UI redesign for now) |
+| Full admin | `admin` | Everything the owner can do: edit, rename, trash, delete, publish the link, add and remove people and change their levels. Only moving it between the owner's own folders stays with the owner. | people only |
+
+- **Agents:** never Full admin, enforced on add and on every level change (§4's "never above their
+  person" is still the rule for the person behind them).
+- **The owner:** stays the owner. The diagram lives in their workspace and no one can remove them.
+- **Proposals:**
+  - **Storage:** kept in the owner's workspace (`sharing/proposals/<id>` and one document each).
+  - **Approving:** saves the proposed document like any save, so everyone who has the diagram gets
+    it.
+  - **Stale proposals:** one made before the diagram last changed is marked stale. Approving it
+    needs an explicit "Apply anyway" (`force`), because the whole document replaces those changes.
+  - **In the app:** a "N to approve" chip in the toolbar opens Approve and Reject.
+- **Agent accounts don't exist yet.** When they do, they are members with `kind: "agent"`. The API
+  already enforces their levels, and the same proposal flow serves them.
 

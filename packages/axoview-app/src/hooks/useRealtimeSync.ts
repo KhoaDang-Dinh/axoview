@@ -34,6 +34,9 @@ export interface SyncState {
 }
 
 /** What this tab does about one change from another device. Pure. */
+/** Window event: proposals for `detail.id` were made or decided. */
+export const PROPOSALS_CHANGED_EVENT = 'axoview-proposals-changed';
+
 export function planSyncReaction(change: SyncChange, state: SyncState): SyncReaction {
   // Who else is here changes nothing on screen (services/sync/presence.ts).
   if (change.kind === 'presence') return { type: 'ignore' };
@@ -128,6 +131,11 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
     const handle = (change: SyncChange) => {
       if (change.kind === 'presence') {
         usePresenceStore.getState().apply(change);
+        return;
+      }
+      if (change.kind === 'proposal') {
+        // components/ProposalPrompt.tsx re-reads the waiting proposals.
+        window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, { detail: { id: change.id } }));
         return;
       }
       const current = optionsRef.current;

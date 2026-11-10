@@ -41,39 +41,41 @@ beforeEach(() => {
   (global as any).fetch = undefined;
 });
 
-it('remembers from the load and each save whether others have the diagram', async () => {
+it('remembers from the load and each save whether others have the diagram, and this account\'s level', async () => {
   const p = serverProvider();
   script([
-    response(200, { title: 'A' }, { ETag: '"2"', 'X-Axoview-Shared': 'with-you' }),
+    response(200, { title: 'A' }, { ETag: '"2"', 'X-Axoview-Shared': 'with-you', 'X-Axoview-Role': 'viewer' }),
     response(200, { success: true }, { ETag: '"3"' })
   ]);
   await p.loadDiagram('d1');
   expect(p.sharedState('d1')).toBe('with-you');
+  expect(p.sharedRole('d1')).toBe('viewer');
   // The save answered without the header: no longer shared.
   await p.saveDiagram('d1', { title: 'A2' });
   expect(p.sharedState('d1')).toBeUndefined();
+  expect(p.sharedRole('d1')).toBeUndefined();
 });
 
 it('lists a diagram shared with this account with its owner', async () => {
   const p = serverProvider();
   script([response(200, [
     { id: 'mine', name: 'Mine', lastModified: '2026-11-10T00:00:00Z', folderId: null },
-    { id: 'theirs', name: 'Theirs', lastModified: '2026-11-10T00:00:00Z', folderId: null, shared: { role: 'editor', ownerEmail: 'alice@example.com' } }
+    { id: 'theirs', name: 'Theirs', lastModified: '2026-11-10T00:00:00Z', folderId: null, shared: { role: 'admin', ownerEmail: 'alice@example.com' } }
   ])]);
   const list = await p.listDiagrams();
   expect(list.find((d) => d.id === 'mine')?.shared).toBeUndefined();
-  expect(list.find((d) => d.id === 'theirs')?.shared).toEqual({ role: 'editor', ownerEmail: 'alice@example.com' });
+  expect(list.find((d) => d.id === 'theirs')?.shared).toEqual({ role: 'admin', ownerEmail: 'alice@example.com' });
 });
 
 it('adding a person: success marks the diagram shared; a refusal carries the reason', async () => {
   const p = serverProvider();
-  const member = { sub: 'bob', email: 'bob@example.com', role: 'editor', addedAt: '2026-11-10T00:00:00Z' };
+  const member = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'admin', addedAt: '2026-11-10T00:00:00Z' };
   const calls = script([
     response(201, { member }),
     response(404, { error: 'No Axoview account uses that email', reason: 'no-account' })
   ]);
-  expect(await p.addMember('d1', 'bob@example.com')).toEqual({ ok: true, member });
-  expect(calls[0]).toMatchObject({ url: `${BASE}/api/diagrams/d1/members`, method: 'POST', body: { email: 'bob@example.com' } });
+  expect(await p.addMember('d1', 'bob@example.com', 'admin')).toEqual({ ok: true, member });
+  expect(calls[0]).toMatchObject({ url: `${BASE}/api/diagrams/d1/members`, method: 'POST', body: { email: 'bob@example.com', role: 'admin' } });
   expect(p.sharedState('d1')).toBe('by-you');
   expect(await p.addMember('d1', 'nobody@example.com')).toEqual({
     ok: false, reason: 'no-account', message: 'No Axoview account uses that email'
@@ -88,9 +90,36 @@ it('adding a person with the network down: reason "error"', async () => {
 
 it('lists and removes people', async () => {
   const p = serverProvider();
-  const member = { sub: 'bob', email: 'bob@example.com', role: 'editor', addedAt: '2026-11-10T00:00:00Z' };
+  const member = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'viewer', addedAt: '2026-11-10T00:00:00Z' };
   const calls = script([response(200, { members: [member] }), response(200, { removed: 'bob' })]);
   expect(await p.listMembers('d1')).toEqual([member]);
   await p.removeMember('d1', 'bob');
   expect(calls[1]).toMatchObject({ url: `${BASE}/api/diagrams/d1/members/bob`, method: 'DELETE' });
 });
+
+it('changes a level; an agent raised to Full admin is refused with its reason', async () => {
+  const p = serverProvider();
+  const member = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'admin', addedAt: '2026-11-10T00:00:00Z' };
+  const calls = script([
+    response(200, { member }),
+    response(400, { error: 'never Full admin', reason: 'agent-not-admin' })
+  ]);
+  expect(await p.setMemberRole('d1', 'bob', 'admin')).toEqual({ ok: true, member });
+  expect(calls[0]).toMatchObject({ url: `${BASE}/api/diagrams/d1/members/bob`, method: 'PATCH', body: { role: 'admin' } });
+  expect(await p.setMemberRole('d1', 'agent-7', 'admin')).toMatchObject({ ok: false, reason: 'agent-not-admin' });
+});
+
+it('lists proposals and approves one (with force when asked)', async () => {
+  const p = serverProvider();
+  const waiting = [{ id: 'p1', by: { sub: 'a', email: null, kind: 'agent' }, createdAt: 'x', summary: { items: 1, pages: 1, connectors: 0 }, stale: true }];
+  const calls = script([
+    response(200, { proposals: waiting }),
+    response(409, { error: 'changed', reason: 'stale' }),
+    response(200, { proposal: { id: 'p1', status: 'approved' } })
+  ]);
+  expect(await p.listProposals('d1')).toEqual(waiting);
+  expect(await p.resolveProposal('d1', 'p1', 'approve')).toEqual({ ok: false, reason: 'stale', message: 'changed' });
+  expect(await p.resolveProposal('d1', 'p1', 'approve', true)).toEqual({ ok: true });
+  expect(calls[2]).toMatchObject({ url: `${BASE}/api/diagrams/d1/proposals/p1/approve`, method: 'POST', body: { force: true } });
+});
+

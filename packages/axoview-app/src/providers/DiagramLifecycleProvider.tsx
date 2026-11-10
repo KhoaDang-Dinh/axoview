@@ -1510,6 +1510,11 @@ export function DiagramLifecycleProvider({
     void (async () => {
       try {
         const raw: unknown = await storage.loadDiagram(urlDiagramId);
+        if (storage.sharedRole?.(urlDiagramId) === 'viewer') {
+          // A Read only member following an editor link: the read-only viewer.
+          navigate(`/display/${encodeURIComponent(urlDiagramId)}`, { replace: true });
+          return;
+        }
         await handleDiagramManagerLoad(urlDiagramId, raw, '', { view: page });
       } catch (e) {
         console.warn('Could not reopen the diagram in the URL:', e);
@@ -2186,6 +2191,12 @@ export function DiagramLifecycleProvider({
 
         const buffered = scratchBufferRef.current.get(id);
         const rawData: unknown = buffered ?? await storage.loadDiagram(id);
+        // Shared with this account as Read only: it opens in the read-only
+        // viewer, the same one a public link shows (ADR 0057, 2026-11-10).
+        if (storage.sharedRole?.(id) === 'viewer') {
+          navigate(`/display/${encodeURIComponent(id)}`);
+          return;
+        }
         await handleDiagramManagerLoad(id, rawData, name);
       } catch (e) {
         console.error('openDiagramById failed:', e);
@@ -2193,7 +2204,7 @@ export function DiagramLifecycleProvider({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.saveNow/resetStatus; whole autoSave churns on every save-status change
-    [storage, storageManager, setActiveProviderId, remoteStorageActive, autoSave.saveNow, autoSave.resetStatus, handleDiagramManagerLoad]
+    [storage, storageManager, setActiveProviderId, remoteStorageActive, autoSave.saveNow, autoSave.resetStatus, handleDiagramManagerLoad, navigate]
   );
 
   const handlePreviewClick = useCallback(async () => {

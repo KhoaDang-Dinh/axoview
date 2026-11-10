@@ -47,26 +47,53 @@ export interface DiagramMeta {
   thumbnail?: string;      // base64 PNG, generated on save
   lockedBy?: string;       // reserved for P3 collaboration — leave undefined for now
   deletedAt?: string;      // ISO 8601 — soft delete, null = not deleted
-  // Someone else's diagram shared with this account (ADR 0057): the owner's
-  // email when known. Only the owner can rename, move, trash or share it.
-  shared?: { role: 'editor'; ownerEmail: string | null };
-}
-
-/** A person a diagram is shared with, as its owner sees them (ADR 0057). */
-export interface DiagramMember {
-  sub: string;
-  email: string;
-  role: 'editor';
-  addedAt: string;
+  // Someone else's diagram shared with this account (ADR 0057): this
+  // account's permission level, and the owner's email when known.
+  shared?: { role: MemberRole; ownerEmail: string | null };
 }
 
 /**
- * Adding a person by email. reason codes from the server: no-account,
- * already-shared, self, invalid-email, rate-limited, not-found, owner-only;
- * 'error' for a network or server failure.
+ * Permission levels on someone else's diagram (owner decision 2026-11-10):
+ * viewer "Read only" (opens in the read-only viewer), proposer "Change needs
+ * approval" (AI agents: saves become proposals), admin "Full admin" (the
+ * owner's powers). Agents hold viewer or proposer only.
+ */
+export type MemberRole = 'viewer' | 'proposer' | 'admin';
+
+/** This account's role on a diagram it has open: its own, or a member's. */
+export type DiagramRole = 'owner' | MemberRole;
+
+/** A person or agent a diagram is shared with, as its managers see them. */
+export interface DiagramMember {
+  sub: string;
+  email: string | null;
+  kind: 'person' | 'agent';
+  role: MemberRole;
+  addedAt: string;
+}
+
+/** A save made under "Change needs approval", waiting for the owner or an admin. */
+export interface Proposal {
+  id: string;
+  by: { sub: string; email: string | null; kind: 'person' | 'agent' };
+  createdAt: string;
+  summary: { items: number; pages: number; connectors: number };
+  /** The diagram changed since it was proposed: approving overwrites that. */
+  stale: boolean;
+}
+
+/**
+ * Adding a person by email, or changing a level. reason codes from the
+ * server: no-account, already-shared, self, invalid-email, invalid-role,
+ * agent-not-admin, rate-limited, not-found, stale, no-proposal; 'error' for a
+ * network or server failure.
  */
 export type AddMemberResult =
   | { ok: true; member: DiagramMember }
+  | { ok: false; reason: string; message: string };
+
+export type ProposalDecision =
+  | { ok: true }
   | { ok: false; reason: string; message: string };
 
 /** by-you: you own it and shared it; with-you: someone shared it with you. */
@@ -134,9 +161,15 @@ export interface StorageProvider {
   // accounts). sharedState: what the server last said about `id` (the
   // X-Axoview-Shared header); a shared diagram uploads its saves at once.
   sharedState?(id: string): SharedState | undefined;
+  /** This account's role on `id`, from its last load or save (X-Axoview-Role). */
+  sharedRole?(id: string): DiagramRole | undefined;
   listMembers?(id: string): Promise<DiagramMember[]>;
-  addMember?(id: string, email: string): Promise<AddMemberResult>;
+  addMember?(id: string, email: string, role?: MemberRole): Promise<AddMemberResult>;
+  setMemberRole?(id: string, sub: string, role: MemberRole): Promise<AddMemberResult>;
   removeMember?(id: string, sub: string): Promise<void>;
+  // Proposals ("Change needs approval"), for the owner and Full admins.
+  listProposals?(id: string): Promise<Proposal[]>;
+  resolveProposal?(id: string, proposalId: string, decision: 'approve' | 'reject', force?: boolean): Promise<ProposalDecision>;
 
   // Reserved for P3 — no-op stubs for now
   subscribe?(diagramId: string, callback: () => void): () => void;

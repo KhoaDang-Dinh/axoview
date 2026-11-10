@@ -37,6 +37,7 @@ import { AuthControl } from './AuthControl';
 import { CognitoAccountControl } from './CognitoAccountControl';
 import { shareUrlFromUuid } from '../utils/shareUrl';
 import { SharePeople } from './SharePeople';
+import { ProposalPrompt } from './ProposalPrompt';
 import {
   drivePreviewUrl,
   getAccessOverview,
@@ -130,8 +131,11 @@ export function AppToolbar() {
   const currentDiagramId = currentDiagram?.id;
   // Sharing by email (ADR 0057): accounts and server storage, not Drive.
   const peopleSharing = !!runtimeConfig?.sharing && !driveActive && remoteStorageActive;
-  const sharedWithYou =
-    peopleSharing && !!currentDiagramId && storage?.sharedState?.(currentDiagramId) === 'with-you';
+  // This account's level on the open diagram (the server's X-Axoview-Role):
+  // a Full admin shares like the owner; Read only and "needs approval"
+  // members see a note instead of the link and the email field.
+  const myRole = peopleSharing && currentDiagramId ? storage?.sharedRole?.(currentDiagramId) : undefined;
+  const sharedWithYou = myRole === 'viewer' || myRole === 'proposer';
 
   useEffect(() => {
     shareReqRef.current++; // invalidate any in-flight share fetch for the old id
@@ -503,6 +507,9 @@ export function AppToolbar() {
               </Tooltip>
             )}
             <StatusCluster />
+            {peopleSharing && currentDiagramId && storage && (
+              <ProposalPrompt diagramId={currentDiagramId} role={myRole} storage={storage} />
+            )}
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
@@ -640,10 +647,15 @@ export function AppToolbar() {
             </Stack>
             {sharedWithYou ? (
               <Typography variant="body2" color="text.secondary" data-axoview-id="share-shared-with-you">
-                {t(
-                  'share.people.sharedWithYou',
-                  'Someone shared this diagram with you, so you can edit it. Only its owner can share it further.'
-                )}
+                {myRole === 'viewer'
+                  ? t(
+                      'share.people.sharedWithYouViewer',
+                      'Shared with you as Read only. Only its owner or a Full admin can share it.'
+                    )
+                  : t(
+                      'share.people.sharedWithYouProposer',
+                      'Your changes to this diagram wait for the owner\'s approval. Only its owner or a Full admin can share it.'
+                    )}
               </Typography>
             ) : (
             <>

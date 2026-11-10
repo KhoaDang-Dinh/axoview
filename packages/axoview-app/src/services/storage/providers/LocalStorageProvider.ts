@@ -6,7 +6,15 @@ import {
   TreeManifest,
   isPersistedDiagramBlob
 } from '../types';
-import type { AddMemberResult, DiagramMember, SharedState } from '../types';
+import type {
+  AddMemberResult,
+  DiagramMember,
+  DiagramRole,
+  MemberRole,
+  Proposal,
+  ProposalDecision,
+  SharedState
+} from '../types';
 import { leanIfModel } from '../leanModel';
 import { apiBaseUrl } from '../../../utils/apiBaseUrl';
 import { apiFetch } from '../../apiFetch';
@@ -89,9 +97,18 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
 /** Under the browsers' 64 KB keepalive budget, with room for another request. */
 const KEEPALIVE_MAX_BYTES = 48_000;
 
+const MEMBER_ROLES: readonly string[] = ['viewer', 'proposer', 'admin'];
+const DIAGRAM_ROLES: readonly string[] = ['owner', ...MEMBER_ROLES];
+
 /** A listing row's `shared` field (a diagram someone shared with this account). */
-function isSharedRow(value: unknown): value is { ownerEmail?: string | null } {
-  return typeof value === 'object' && value !== null && (value as { role?: unknown }).role === 'editor';
+function isSharedRow(value: unknown): value is { role: MemberRole; ownerEmail?: string | null } {
+  return typeof value === 'object' && value !== null && MEMBER_ROLES.includes((value as { role?: unknown }).role as string);
+}
+
+/** A members/proposals call's answer as a result the share UI can show. */
+async function sharingFailure(response: Response): Promise<{ ok: false; reason: string; message: string }> {
+  const body = (await response.json().catch(() => null)) as { reason?: string; error?: string } | null;
+  return { ok: false, reason: body?.reason || 'error', message: body?.error || `Sharing failed (${response.status})` };
 }
 
 export class LocalStorageProvider implements StorageProvider {
@@ -113,6 +130,7 @@ export class LocalStorageProvider implements StorageProvider {
   private readonly serverModified = new Map<string, string>();
   // What the server last said about who else has each diagram (rememberShared).
   private readonly sharedStates = new Map<string, SharedState>();
+  private readonly sharedRoles = new Map<string, DiagramRole>();
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl ?? apiBaseUrl();
@@ -146,7 +164,7 @@ export class LocalStorageProvider implements StorageProvider {
       folderId: (d.folderId as string | null | undefined) ?? null,
       deletedAt: (d.deletedAt as string | undefined) ?? undefined,
       ...(isSharedRow(d.shared)
-        ? { shared: { role: 'editor' as const, ownerEmail: d.shared.ownerEmail ?? null } }
+        ? { shared: { role: d.shared.role, ownerEmail: d.shared.ownerEmail ?? null } }
         : {})
     }));
   }
@@ -270,12 +288,19 @@ export class LocalStorageProvider implements StorageProvider {
    */
   private rememberShared(id: string, response: Response): void {
     const value = response.headers?.get('X-Axoview-Shared');
+    const role = response.headers?.get('X-Axoview-Role');
     if (value === 'by-you' || value === 'with-you') this.sharedStates.set(id, value);
     else this.sharedStates.delete(id);
+    if (role && DIAGRAM_ROLES.includes(role)) this.sharedRoles.set(id, role as DiagramRole);
+    else this.sharedRoles.delete(id);
   }
 
   sharedState(id: string): SharedState | undefined {
     return this.sharedStates.get(id);
+  }
+
+  sharedRole(id: string): DiagramRole | undefined {
+    return this.sharedRoles.get(id);
   }
 
   /** Re-read the diagram's current version from the server (its ETag). */
@@ -867,23 +892,70 @@ export class LocalStorageProvider implements StorageProvider {
     return Array.isArray(body.members) ? body.members : [];
   }
 
-  async addMember(id: string, email: string): Promise<AddMemberResult> {
+  async addMember(id: string, email: string, role: MemberRole = 'viewer'): Promise<AddMemberResult> {
     if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
     try {
       const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, role }),
         signal: timeoutSignal(10000)
       });
-      const body = (await response.json().catch(() => null)) as
-        | { member?: DiagramMember; reason?: string; error?: string }
-        | null;
-      if (response.ok && body?.member) {
-        this.sharedStates.set(id, 'by-you');
-        return { ok: true, member: body.member };
-      }
-      return { ok: false, reason: body?.reason || 'error', message: body?.error || `Sharing failed (${response.status})` };
+      if (!response.ok) return sharingFailure(response);
+      const body = (await response.json()) as { member: DiagramMember };
+      if (!this.sharedStates.has(id)) this.sharedStates.set(id, 'by-you');
+      // Unshared until now, so the load said nothing: the one sharing it owns it.
+      if (!this.sharedRoles.has(id)) this.sharedRoles.set(id, 'owner');
+      return { ok: true, member: body.member };
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async setMemberRole(id: string, sub: string, role: MemberRole): Promise<AddMemberResult> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members/${encodeURIComponent(sub)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+        signal: timeoutSignal(10000)
+      });
+      if (!response.ok) return sharingFailure(response);
+      return { ok: true, member: ((await response.json()) as { member: DiagramMember }).member };
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async listProposals(id: string): Promise<Proposal[]> {
+    if (!this.usingServer) return [];
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/proposals`, {
+      signal: timeoutSignal(10000)
+    });
+    if (!response.ok) return [];
+    const body = (await response.json()) as { proposals?: Proposal[] };
+    return Array.isArray(body.proposals) ? body.proposals : [];
+  }
+
+  async resolveProposal(
+    id: string,
+    proposalId: string,
+    decision: 'approve' | 'reject',
+    force = false
+  ): Promise<ProposalDecision> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    try {
+      const response = await apiFetch(
+        `${this.baseUrl}/api/diagrams/${id}/proposals/${encodeURIComponent(proposalId)}/${decision}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(force ? { force: true } : {}),
+          signal: timeoutSignal(15000)
+        }
+      );
+      return response.ok ? { ok: true } : sharingFailure(response);
     } catch {
       return { ok: false, reason: 'error', message: 'Network error' };
     }

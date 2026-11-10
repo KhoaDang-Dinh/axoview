@@ -1,9 +1,11 @@
 /**
  * The email field under the share link (ADR 0057 §5, owner decisions
- * 2026-11-09/10): green pop-up and a cleared field on success; red pop-up and
- * the email kept on every failure; the people list with remove.
+ * 2026-11-09/10): a permission level for each person (Read only by default,
+ * or Full admin; agents Read only or Change needs approval), green pop-up and
+ * a cleared field on success; red pop-up and the email kept on every failure;
+ * the people list with level changes and remove.
  */
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -23,18 +25,21 @@ jest.mock('../../stores/notificationStore', () => ({
 }));
 
 import { SharePeople } from '../SharePeople';
-import type { AddMemberResult, DiagramMember } from '../../services/storage/types';
+import type { AddMemberResult, DiagramMember, MemberRole } from '../../services/storage/types';
 
-const BOB: DiagramMember = { sub: 'bob', email: 'bob@example.com', role: 'editor', addedAt: '2026-11-10T00:00:00Z' };
+const BOB: DiagramMember = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'viewer', addedAt: '2026-11-10T00:00:00Z' };
+const AGENT: DiagramMember = { sub: 'agent-7', email: null, kind: 'agent', role: 'proposer', addedAt: '2026-11-10T00:00:00Z' };
 
 function storage(overrides: Partial<{
   listMembers: (id: string) => Promise<DiagramMember[]>;
-  addMember: (id: string, email: string) => Promise<AddMemberResult>;
+  addMember: (id: string, email: string, role?: MemberRole) => Promise<AddMemberResult>;
+  setMemberRole: (id: string, sub: string, role: MemberRole) => Promise<AddMemberResult>;
   removeMember: (id: string, sub: string) => Promise<void>;
 }> = {}) {
   return {
     listMembers: jest.fn(async () => [] as DiagramMember[]),
-    addMember: jest.fn(async (): Promise<AddMemberResult> => ({ ok: true, member: BOB })),
+    addMember: jest.fn(async (_id: string, _email: string, role: MemberRole = 'viewer'): Promise<AddMemberResult> => ({ ok: true, member: { ...BOB, role } })),
+    setMemberRole: jest.fn(async (_id: string, _sub: string, role: MemberRole): Promise<AddMemberResult> => ({ ok: true, member: { ...BOB, role } })),
     removeMember: jest.fn(async () => {}),
     ...overrides
   };
@@ -52,13 +57,20 @@ async function type(value: string) {
   await act(async () => { fireEvent.change(input(), { target: { value } }); });
 }
 
-it('success: a green pop-up, the field clears, and the person is listed', async () => {
+/** Pick an option in an MUI Select by its visible label. */
+async function choose(select: HTMLElement, label: string) {
+  await act(async () => { fireEvent.mouseDown(select); });
+  await act(async () => { fireEvent.click(within(screen.getByRole('listbox')).getByText(label)); });
+}
+const levelPicker = () => screen.getByLabelText('Permission level');
+
+it('success: Read only by default, a green pop-up, the field clears, and the person is listed', async () => {
   const s = storage();
   render(<SharePeople diagramId="d1" storage={s} />);
   await type('Bob@Example.com');
   await act(async () => { fireEvent.click(addButton()); });
-  expect(s.addMember).toHaveBeenCalledWith('d1', 'Bob@Example.com');
-  expect(pushes).toEqual([{ severity: 'success', message: 'Shared with bob@example.com' }]);
+  expect(s.addMember).toHaveBeenCalledWith('d1', 'Bob@Example.com', 'viewer');
+  expect(pushes).toEqual([{ severity: 'success', message: 'Shared with bob@example.com (Read only)' }]);
   expect(input().value).toBe('');
   expect(people()).toEqual(['bob@example.com']);
 });
@@ -66,7 +78,7 @@ it('success: a green pop-up, the field clears, and the person is listed', async 
 it.each([
   ['no-account', 'No Axoview account uses that email'],
   ['already-shared', 'Already shared with bob@example.com'],
-  ['self', "You can't share a diagram with yourself"],
+  ['self', "You can't share a diagram with yourself or its owner"],
   ['invalid-email', 'Enter a valid email address'],
   ['rate-limited', 'Too many attempts: try again in a minute'],
   ['error', "Couldn't share: try again"]
@@ -112,3 +124,35 @@ it('a failed remove: red, and the person stays listed', async () => {
   expect(pushes).toEqual([{ severity: 'error', message: "Couldn't remove bob@example.com: try again" }]);
   expect(people()).toEqual(['bob@example.com']);
 });
+
+it('the level picker offers people Read only and Full admin; Full admin is sent', async () => {
+  const s = storage();
+  render(<SharePeople diagramId="d1" storage={s} />);
+  await act(async () => { fireEvent.mouseDown(levelPicker()); });
+  expect(within(screen.getByRole('listbox')).getAllByRole('option').map((o) => o.textContent)).toEqual(['Read only', 'Full admin']);
+  await act(async () => { fireEvent.click(within(screen.getByRole('listbox')).getByText('Full admin')); });
+  await type('bob@example.com');
+  await act(async () => { fireEvent.click(addButton()); });
+  expect(s.addMember).toHaveBeenCalledWith('d1', 'bob@example.com', 'admin');
+  expect(pushes).toEqual([{ severity: 'success', message: 'Shared with bob@example.com (Full admin)' }]);
+});
+
+it("changing a person's level: green, and the row shows the new level", async () => {
+  const s = storage({ listMembers: jest.fn(async () => [BOB]) });
+  render(<SharePeople diagramId="d1" storage={s} />);
+  await waitFor(() => expect(people()).toEqual(['bob@example.com']));
+  await choose(screen.getByLabelText('Access for bob@example.com'), 'Full admin');
+  expect(s.setMemberRole).toHaveBeenCalledWith('d1', 'bob', 'admin');
+  expect(document.querySelector('[data-axoview-id="share-person"]')?.getAttribute('data-role')).toBe('admin');
+  expect(pushes).toEqual([{ severity: 'success', message: 'bob@example.com is now Full admin' }]);
+});
+
+it('an AI agent row offers Read only and Change needs approval, never Full admin', async () => {
+  const s = storage({ listMembers: jest.fn(async () => [AGENT]) });
+  render(<SharePeople diagramId="d1" storage={s} />);
+  await waitFor(() => expect(document.querySelector('[data-kind="agent"]')).toBeTruthy());
+  await act(async () => { fireEvent.mouseDown(screen.getByLabelText('Access for AI agent')); });
+  expect(within(screen.getByRole('listbox')).getAllByRole('option').map((o) => o.textContent))
+    .toEqual(['Read only', 'Change needs approval']);
+});
+

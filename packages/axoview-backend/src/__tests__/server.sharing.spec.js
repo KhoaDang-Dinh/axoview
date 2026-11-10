@@ -23,6 +23,7 @@ const T = 60000;
 const ACCOUNTS = [
   { sub: 'alice-1', email: 'alice@example.com', email_verified: true },
   { sub: 'bob-2', email: 'bob@example.com', email_verified: true },
+  { sub: 'carol-4', email: 'carol@example.com', email_verified: true },
   { sub: 'mallory-3', email: 'unverified@example.com', email_verified: false }
 ];
 
@@ -139,26 +140,27 @@ async function aliceWithADiagram(base) {
   return { alice, id: created.body.id };
 }
 
-test('alice shares with bob by email: bob sees it, opens it, saves it; alice gets the change', async () => {
+test('Full admin: alice shares with bob by email; bob sees it, opens it, saves it; alice gets the change', async () => {
   const { base } = await startServer();
   const { alice, id } = await aliceWithADiagram(base);
   const bob = as(base, 'bob-2');
 
   expect((await bob.get(`/api/diagrams/${id}`)).status).toBe(404);
   const bobHears = await bob.listen(600);
-  const added = await alice.post(`/api/diagrams/${id}/members`, { email: 'Bob@Example.com' });
+  const added = await alice.post(`/api/diagrams/${id}/members`, { email: 'Bob@Example.com', role: 'admin' });
   expect(added.status).toBe(201);
-  expect(added.body.member).toMatchObject({ sub: 'bob-2', email: 'bob@example.com', role: 'editor' });
+  expect(added.body.member).toMatchObject({ sub: 'bob-2', email: 'bob@example.com', kind: 'person', role: 'admin' });
   // bob's explorer hears about it at once.
   expect((await bobHears.stop()).map((e) => [e.kind, e.action, e.id])).toContainEqual(['diagram', 'create', id]);
 
   const listed = (await bob.get('/api/diagrams')).body;
-  expect(listed).toEqual([expect.objectContaining({ id, name: 'Network', shared: { role: 'editor', ownerEmail: 'alice@example.com' } })]);
+  expect(listed).toEqual([expect.objectContaining({ id, name: 'Network', shared: { role: 'admin', ownerEmail: 'alice@example.com' } })]);
 
   const opened = await bob.get(`/api/diagrams/${id}`);
   expect(opened.status).toBe(200);
   expect(opened.body.name).toBe('Network');
   expect(opened.headers.get('x-axoview-shared')).toBe('with-you');
+  expect(opened.headers.get('x-axoview-role')).toBe('admin');
   expect((await alice.get(`/api/diagrams/${id}`)).headers.get('x-axoview-shared')).toBe('by-you');
 
   const aliceHears = await alice.listen(800);
@@ -171,18 +173,94 @@ test('alice shares with bob by email: bob sees it, opens it, saves it; alice get
   expect((await bob.get('/api/diagrams')).body).toHaveLength(1);
 }, T);
 
-test('owner-only actions are refused for the person it is shared with', async () => {
+test('Read only: bob can open it and nothing else', async () => {
   const { base } = await startServer();
   const { alice, id } = await aliceWithADiagram(base);
   const bob = as(base, 'bob-2');
   await alice.post(`/api/diagrams/${id}/members`, { email: 'bob@example.com' });
 
-  expect((await bob.patch(`/api/diagrams/${id}`, { name: 'Mine now' })).body).toMatchObject({ reason: 'owner-only' });
+  const opened = await bob.get(`/api/diagrams/${id}`);
+  expect(opened.status).toBe(200);
+  expect(opened.headers.get('x-axoview-role')).toBe('viewer');
+  expect((await bob.put(`/api/diagrams/${id}`, { ...opened.body, items: [{ id: 'x' }] })).body).toMatchObject({ reason: 'view-only' });
+  expect((await bob.patch(`/api/diagrams/${id}`, { name: 'Mine now' })).status).toBe(403);
   expect((await bob.del(`/api/diagrams/${id}`)).status).toBe(403);
   expect((await bob.post(`/api/diagrams/${id}/share`)).status).toBe(403);
   expect((await bob.get(`/api/diagrams/${id}/members`)).status).toBe(404);
-  expect((await bob.post(`/api/diagrams/${id}/members`, { email: 'alice@example.com' })).status).toBe(404);
-  expect((await alice.get(`/api/diagrams/${id}`)).body.name).toBe('Network');
+  expect((await bob.post(`/api/diagrams/${id}/members`, { email: 'carol@example.com' })).status).toBe(404);
+  expect((await alice.get(`/api/diagrams/${id}`)).body).toMatchObject({ name: 'Network', items: [] });
+}, T);
+
+test('Full admin has the owner\'s powers: manage people, rename, publish, delete; not the owner\'s folders', async () => {
+  const { base } = await startServer();
+  const { alice, id } = await aliceWithADiagram(base);
+  const bob = as(base, 'bob-2');
+  const carol = as(base, 'carol-4');
+  await alice.post(`/api/diagrams/${id}/members`, { email: 'bob@example.com', role: 'admin' });
+
+  expect((await bob.post(`/api/diagrams/${id}/members`, { email: 'carol@example.com' })).status).toBe(201);
+  expect((await bob.get(`/api/diagrams/${id}/members`)).body.members.map((m) => [m.email, m.role]))
+    .toEqual([['bob@example.com', 'admin'], ['carol@example.com', 'viewer']]);
+  expect((await bob.patch(`/api/diagrams/${id}/members/carol-4`, { role: 'admin' })).body.member.role).toBe('admin');
+  expect((await carol.get(`/api/diagrams/${id}`)).headers.get('x-axoview-role')).toBe('admin');
+  expect((await bob.post(`/api/diagrams/${id}/members`, { email: 'alice@example.com' })).body).toMatchObject({ reason: 'self' });
+
+  expect((await bob.patch(`/api/diagrams/${id}`, { name: 'Renamed by bob' })).status).toBe(200);
+  expect((await alice.get('/api/diagrams')).body[0].name).toBe('Renamed by bob');
+  expect((await bob.post(`/api/diagrams/${id}/share`)).status).toBe(200);
+  expect((await bob.patch(`/api/diagrams/${id}/move`, { targetFolderId: null })).body).toMatchObject({ reason: 'owner-folders' });
+
+  expect((await bob.del(`/api/diagrams/${id}`)).status).toBe(200);
+  expect((await alice.get(`/api/diagrams/${id}`)).status).toBe(404);
+  expect((await carol.get('/api/diagrams')).body).toEqual([]);
+}, T);
+
+test('Change needs approval: a save becomes a proposal; alice approves one and rejects one', async () => {
+  const { base } = await startServer();
+  const { alice, id } = await aliceWithADiagram(base);
+  const bot = as(base, 'bob-2'); // a person at the agents' level: the API allows it
+  await alice.post(`/api/diagrams/${id}/members`, { email: 'bob@example.com', role: 'proposer' });
+  const opened = await bot.get(`/api/diagrams/${id}`);
+  expect(opened.headers.get('x-axoview-role')).toBe('proposer');
+
+  const aliceHears = await alice.listen(700);
+  const proposed = await bot.put(`/api/diagrams/${id}`, { ...opened.body, items: [{ id: 'n1' }, { id: 'n2' }] });
+  expect(proposed.status).toBe(202);
+  expect(proposed.body).toMatchObject({ pending: true, proposal: { status: 'pending', summary: { items: 2 } } });
+  expect((await aliceHears.stop()).map((e) => [e.kind, e.action, e.id])).toContainEqual(['proposal', 'create', id]);
+  // Nothing changed yet.
+  expect((await alice.get(`/api/diagrams/${id}`)).body.items).toEqual([]);
+  expect((await bot.patch(`/api/diagrams/${id}`, { name: 'x' })).body).toMatchObject({ reason: 'needs-approval' });
+  expect((await bot.get(`/api/diagrams/${id}/proposals`)).status).toBe(404);
+
+  const waiting = (await alice.get(`/api/diagrams/${id}/proposals`)).body.proposals;
+  expect(waiting).toEqual([expect.objectContaining({ id: proposed.body.proposal.id, stale: false })]);
+  const approved = await alice.post(`/api/diagrams/${id}/proposals/${waiting[0].id}/approve`, {});
+  expect(approved.body.proposal).toMatchObject({ status: 'approved', resolvedBy: 'alice-1' });
+  expect((await alice.get(`/api/diagrams/${id}`)).body.items).toEqual([{ id: 'n1' }, { id: 'n2' }]);
+
+  const second = await bot.put(`/api/diagrams/${id}`, { ...opened.body, items: [] });
+  expect(second.status).toBe(202);
+  expect((await alice.post(`/api/diagrams/${id}/proposals/${second.body.proposal.id}/reject`, {})).body.proposal.status).toBe('rejected');
+  expect((await alice.get(`/api/diagrams/${id}`)).body.items).toHaveLength(2);
+  expect((await alice.get(`/api/diagrams/${id}/proposals`)).body.proposals).toEqual([]);
+}, T);
+
+test('a proposal made before the diagram changed needs force to approve', async () => {
+  const { base } = await startServer();
+  const { alice, id } = await aliceWithADiagram(base);
+  const bot = as(base, 'bob-2');
+  await alice.post(`/api/diagrams/${id}/members`, { email: 'bob@example.com', role: 'proposer' });
+  const opened = await bot.get(`/api/diagrams/${id}`);
+  const proposed = await bot.put(`/api/diagrams/${id}`, { ...opened.body, items: [{ id: 'from-agent' }] });
+  await new Promise((r) => setTimeout(r, 20));
+  expect((await alice.put(`/api/diagrams/${id}`, { ...opened.body, items: [{ id: 'alice-edit' }] })).status).toBe(200);
+
+  const pid = proposed.body.proposal.id;
+  expect((await alice.get(`/api/diagrams/${id}/proposals`)).body.proposals[0].stale).toBe(true);
+  expect((await alice.post(`/api/diagrams/${id}/proposals/${pid}/approve`, {})).body).toMatchObject({ reason: 'stale' });
+  expect((await alice.post(`/api/diagrams/${id}/proposals/${pid}/approve`, { force: true })).status).toBe(200);
+  expect((await alice.get(`/api/diagrams/${id}`)).body.items).toEqual([{ id: 'from-agent' }]);
 }, T);
 
 test('the red cases: no account, unverified, already shared, yourself', async () => {
@@ -195,6 +273,7 @@ test('the red cases: no account, unverified, already shared, yourself', async ()
   expect((await add('bob@example.com')).status).toBe(201);
   expect((await add('bob@example.com')).body).toMatchObject({ reason: 'already-shared', error: 'Already shared with bob@example.com' });
   expect((await add('alice@example.com')).body).toMatchObject({ reason: 'self' });
+  expect((await alice.post(`/api/diagrams/${id}/members`, { email: 'carol@example.com', role: 'owner' })).body).toMatchObject({ reason: 'invalid-role' });
   expect((await alice.get(`/api/diagrams/${id}/members`)).body.members.map((m) => m.email)).toEqual(['bob@example.com']);
 }, T);
 

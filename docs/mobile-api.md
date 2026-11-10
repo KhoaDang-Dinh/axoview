@@ -189,23 +189,42 @@ Sharing:
 | `GET /api/public/diagrams/{uuid}` | the snapshot (no sign-in) |
 
 People a diagram is shared with ([ADR 0057](adr/0057-diagram-sharing-and-permissions.md); only when
-`/api/config` says `"sharing": true`; the owner only, anyone else gets `404`):
+`/api/config` says `"sharing": true`; for the owner and Full admins, anyone else gets `404`):
 
 | Method and path | Body | Answer |
 |---|---|---|
-| `GET /api/diagrams/{id}/members` | — | `{ members: [{ sub, email, role, addedAt }] }` |
-| `POST /api/diagrams/{id}/members` | `{ "email": "…" }` | `201 { member }`; or an error with a `reason`: `no-account` (404), `already-shared` (409), `self` (422), `invalid-email` (400), `rate-limited` (429, over 20 a minute) |
+| `GET /api/diagrams/{id}/members` | — | `{ members: [{ sub, email, kind, role, addedAt }] }` |
+| `POST /api/diagrams/{id}/members` | `{ "email": "…", "role": "viewer" \| "admin" }` (default `viewer`) | `201 { member }`; or an error with a `reason`: `no-account` (404), `already-shared` (409), `self` (422), `invalid-email` / `invalid-role` (400), `rate-limited` (429, over 20 a minute) |
+| `PATCH /api/diagrams/{id}/members/{sub}` | `{ "role": "…" }` | `{ member }`; `agent-not-admin` (400) for an agent |
 | `DELETE /api/diagrams/{id}/members/{sub}` | — | `{ removed }` |
 
-- **Who can be added:** an account whose email is verified. Everyone added is an `editor`.
+Permission levels (`role`):
+
+| Level | `role` | May | Who |
+|---|---|---|---|
+| Read only | `viewer` | load it (the web app opens it in the read-only viewer); every write is `403 view-only` | people and agents |
+| Change needs approval | `proposer` | load it; a `PUT` becomes a proposal: `202 { pending: true, proposal }`; other writes `403 needs-approval` | agents (people through the API only) |
+| Full admin | `admin` | everything the owner can, except moving it between the owner's folders (`403 owner-folders`) | people only |
+
+- **Who can be added:** by email, an account whose email is verified.
 - **On their side:** a diagram shared with someone appears in their `GET /api/diagrams` with
-  `shared: { role, ownerEmail }`, and loads and saves at its usual `/api/diagrams/{id}`.
-  Renaming, moving, trashing, deleting or publishing it is refused with `403`
-  (`reason: "owner-only"`).
-- **Live:** adding or removing a person sends a `diagram` `create` or `delete` change to their
-  sync stream, and every save goes to everyone who has the diagram.
-- **Header:** `GET`/`PUT /api/diagrams/{id}` answers `X-Axoview-Shared: by-you` or `with-you` for
-  a diagram other people have; the web app then uploads each save at once instead of batching.
+  `shared: { role, ownerEmail }`, and is loaded at its usual `/api/diagrams/{id}`.
+- **Live:**
+  - adding, changing or removing a person sends a `diagram` `create`, `update` or `delete` change to
+    their sync stream;
+  - every save goes to everyone who has the diagram;
+  - a proposal made or decided sends `kind: "proposal"` to the owner and Full admins.
+- **Headers:** `GET`/`PUT /api/diagrams/{id}` on a diagram other people have answers
+  `X-Axoview-Shared: by-you | with-you` and `X-Axoview-Role: owner | viewer | proposer | admin`.
+  The web app then uploads each save at once instead of batching.
+
+Proposals (owner and Full admins):
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /api/diagrams/{id}/proposals` | — | `{ proposals: [{ id, by, createdAt, summary, stale }] }`, waiting ones only |
+| `POST /api/diagrams/{id}/proposals/{pid}/approve` | `{ "force": true }` to approve a stale one | `{ proposal }`: the document is saved like any save; `409 stale` when the diagram changed since |
+| `POST /api/diagrams/{id}/proposals/{pid}/reject` | — | `{ proposal }` |
 
 ### The diagram document
 
