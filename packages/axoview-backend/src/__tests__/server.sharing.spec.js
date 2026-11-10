@@ -229,36 +229,33 @@ test('an agent works on its person\'s account: the person sets its level once, n
   expect((await fetch(`${base}/api/agent`)).status).toBe(401);
 }, T);
 
-test('an agent\'s proposal waits for its own person, not the owner; approving saves it for everyone', async () => {
+test('an agent\'s proposal waits for its own person, not the owner; Read only ends it', async () => {
   const { base } = await startServer();
   const { alice, id } = await aliceWithADiagram(base);
   const bob = as(base, 'bob-2');
   await alice.post(`/api/diagrams/${id}/members`, { email: 'bob@example.com', role: 'admin' });
-  // Made the way an agent signed in through the API will (ADR 0052 MCP sign-in).
+  // Made the way bob's agent does through the workspace MCP server (server.agents.spec.js).
   const store = createSharing({ adapterFor: (ws) => addWorkspaceScope(createFsAdapter(dir)).forWorkspace(ws), findUserByEmail: async () => null });
-  const first = await store.propose('alice-1', id, { sub: 'bob-2', agent: 'claude-code' }, { ...DIAGRAM, items: [{ id: 'from-agent' }] });
-  const second = await store.propose('alice-1', id, { sub: 'bob-2', agent: 'claude-code' }, { ...DIAGRAM, items: [] });
+  const ops = [{ op: 'add_node', name: 'Cache' }];
+  const first = await store.propose('alice-1', id, { sub: 'bob-2', agent: 'Claude Code' }, { operations: ops });
+  const second = await store.propose('alice-1', id, { sub: 'bob-2', agent: 'Claude Code' }, { operations: ops });
 
   expect((await alice.get(`/api/diagrams/${id}/proposals`)).body.proposals).toEqual([]);
   expect((await alice.post(`/api/diagrams/${id}/proposals/${first.id}/approve`, {})).status).toBe(404);
   expect((await bob.get(`/api/diagrams/${id}/proposals`)).body.proposals.map((p) => p.id).sort()).toEqual([first.id, second.id].sort());
 
-  const aliceHears = await alice.listen(700);
-  const approved = await bob.post(`/api/diagrams/${id}/proposals/${first.id}/approve`, {});
-  expect(approved.body.proposal).toMatchObject({ status: 'approved', resolvedBy: 'bob-2', by: { sub: 'bob-2', agent: 'claude-code' } });
-  expect((await aliceHears.stop()).map((e) => [e.kind, e.action, e.id])).toContainEqual(['diagram', 'save', id]);
-  expect((await alice.get(`/api/diagrams/${id}`)).body.items).toEqual([{ id: 'from-agent' }]);
-
-  // The second was made before that save: stale, so bob must insist. Rejecting needs no insisting.
-  expect((await bob.post(`/api/diagrams/${id}/proposals/${second.id}/approve`, {})).body).toMatchObject({ reason: 'stale' });
+  const bobHears = await bob.listen(700);
+  const approved = await bob.post(`/api/diagrams/${id}/proposals/${first.id}/approve`, { applied: 1 });
+  expect(approved.body.proposal).toMatchObject({ status: 'approved', applied: 1, resolvedBy: 'bob-2', by: { sub: 'bob-2', agent: 'Claude Code' } });
+  expect((await bobHears.stop()).map((e) => [e.kind, e.action, e.id])).toContainEqual(['proposal', 'resolve', id]);
   expect((await bob.post(`/api/diagrams/${id}/proposals/${second.id}/reject`, {})).body.proposal.status).toBe('rejected');
   expect((await bob.get(`/api/diagrams/${id}/proposals`)).body.proposals).toEqual([]);
 
   // Read only on the diagram: bob (and so his agent) may no longer change it.
-  const third = await store.propose('alice-1', id, { sub: 'bob-2', agent: 'claude-code' }, DIAGRAM);
+  const third = await store.propose('alice-1', id, { sub: 'bob-2', agent: 'Claude Code' }, { operations: ops });
   await alice.patch(`/api/diagrams/${id}/members/bob-2`, { role: 'viewer' });
   expect((await bob.get(`/api/diagrams/${id}/proposals`)).status).toBe(404);
-  expect((await bob.post(`/api/diagrams/${id}/proposals/${third.id}/approve`, { force: true })).status).toBe(404);
+  expect((await bob.post(`/api/diagrams/${id}/proposals/${third.id}/approve`, {})).status).toBe(404);
 }, T);
 
 test('the red cases: no account, unverified, already shared, yourself', async () => {

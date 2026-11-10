@@ -215,10 +215,10 @@ export class StorageManager implements StorageProvider {
     return provider.listProposals ? provider.listProposals(id) : [];
   }
 
-  async resolveProposal(id: string, proposalId: string, decision: 'approve' | 'reject', force?: boolean): Promise<ProposalDecision> {
+  async resolveProposal(id: string, proposalId: string, decision: 'approve' | 'reject', applied?: number): Promise<ProposalDecision> {
     const provider = this.getActiveProvider();
     if (!provider.resolveProposal) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
-    return provider.resolveProposal(id, proposalId, decision, force);
+    return provider.resolveProposal(id, proposalId, decision, applied);
   }
 
   async removeMember(id: string, sub: string): Promise<void> {

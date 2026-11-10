@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { createSharing, normalizeEmail, assertRole, agentLevelOn, CACHE_MS, LOOKUPS_PER_MINUTE } from '../sharing.js';
+import { createSharing, normalizeEmail, assertRole, agentLevelOn, CACHE_MS, LOOKUPS_PER_MINUTE, MAX_WAITING_PROPOSALS } from '../sharing.js';
 import { createAgentSettings } from '../agentSettings.js';
 import { sharableUser } from '../cognitoDirectory.js';
 
@@ -241,34 +241,33 @@ describe('agents: on their person\'s account, never above them', () => {
 });
 
 describe('proposals (Changes need my approval): only the agent\'s person sees and decides them', () => {
-  const PROPOSED = { title: 'Plan', items: [{ id: 'a' }, { id: 'b' }], views: [{ id: 'p', connectors: [{ id: 'c' }] }] };
-  const BOBS_AGENT = { sub: 'bob', agent: 'claude-code' };
+  const OPS = [{ op: 'add_node', name: 'Cache' }, { op: 'connect', from: { name: 'Web' }, to: { name: 'Cache' } }];
+  const BOBS_AGENT = { sub: 'bob', agent: 'Claude Code' };
 
-  it('a proposal is stored with its summary and waits for its person alone', async () => {
-    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, PROPOSED);
-    expect(proposal).toMatchObject({ status: 'pending', by: BOBS_AGENT, summary: { items: 2, pages: 1, connectors: 1 } });
-    expect(await sharing.pendingProposals('alice', 'd1', 'bob')).toEqual([expect.objectContaining({ id: proposal.id, stale: false })]);
+  it('a proposal holds the operations, waits for its person alone, and is found again by them', async () => {
+    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, { viewId: 'p1', operations: OPS, note: 'Add a cache' });
+    expect(proposal).toMatchObject({ status: 'pending', by: BOBS_AGENT, viewId: 'p1', operations: OPS, note: 'Add a cache' });
+    expect(await sharing.pendingProposals('alice', 'd1', 'bob')).toEqual([proposal]);
     // The owner does not review someone else's agent.
     expect(await sharing.pendingProposals('alice', 'd1', 'alice')).toEqual([]);
-    expect(await failure(sharing.proposalToApply('alice', 'd1', proposal.id, 'alice'))).toMatchObject({ status: 404 });
     expect(await failure(sharing.resolveProposal('alice', 'd1', proposal.id, 'rejected', 'alice'))).toMatchObject({ status: 404 });
-    expect((await sharing.proposalToApply('alice', 'd1', proposal.id, 'bob')).document).toEqual(PROPOSED);
+    expect(await failure(sharing.proposalFor('alice', 'd1', proposal.id, 'alice'))).toMatchObject({ status: 404 });
+    expect(await sharing.proposalFor('alice', 'd1', proposal.id, 'bob')).toEqual(proposal);
   });
 
-  it('the diagram changing since makes it stale: approval needs force', async () => {
-    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, PROPOSED);
-    ws.diagram('alice', 'd1', { lastModified: '2026-11-10T09:00:00.000Z' });
-    expect((await sharing.pendingProposals('alice', 'd1', 'bob'))[0].stale).toBe(true);
-    expect(await failure(sharing.proposalToApply('alice', 'd1', proposal.id, 'bob'))).toMatchObject({ status: 409, reason: 'stale' });
-    await expect(sharing.proposalToApply('alice', 'd1', proposal.id, 'bob', { force: true })).resolves.toMatchObject({ document: PROPOSED });
-  });
-
-  it('resolving takes it off the waiting list and drops its document', async () => {
-    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, PROPOSED);
-    const resolved = await sharing.resolveProposal('alice', 'd1', proposal.id, 'rejected', 'bob');
-    expect(resolved).toMatchObject({ status: 'rejected', resolvedBy: 'bob' });
+  it('approving records how many steps were made; then it is no longer waiting', async () => {
+    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, { operations: OPS });
+    const resolved = await sharing.resolveProposal('alice', 'd1', proposal.id, 'approved', 'bob', { applied: 1 });
+    expect(resolved).toMatchObject({ status: 'approved', resolvedBy: 'bob', applied: 1 });
     expect(await sharing.pendingProposals('alice', 'd1', 'bob')).toEqual([]);
-    expect(ws.json('alice', `sharing/proposal-docs/d1/${proposal.id}`)).toBeNull();
-    expect(await failure(sharing.resolveProposal('alice', 'd1', proposal.id, 'approved', 'bob'))).toMatchObject({ status: 404 });
+    expect((await sharing.proposalFor('alice', 'd1', proposal.id, 'bob')).status).toBe('approved');
+    expect(await failure(sharing.resolveProposal('alice', 'd1', proposal.id, 'rejected', 'bob'))).toMatchObject({ status: 404 });
+  });
+
+  it(`an agent cannot bury its person: at most ${MAX_WAITING_PROPOSALS} waiting per diagram`, async () => {
+    for (let i = 0; i < MAX_WAITING_PROPOSALS; i++) await sharing.propose('alice', 'd1', BOBS_AGENT, { operations: OPS });
+    expect(await failure(sharing.propose('alice', 'd1', BOBS_AGENT, { operations: OPS }))).toMatchObject({ status: 429, reason: 'too-many-proposals' });
+    // Someone else's agent is not held up by it.
+    await expect(sharing.propose('alice', 'd1', { sub: 'alice', agent: 'Codex' }, { operations: OPS })).resolves.toMatchObject({ status: 'pending' });
   });
 });

@@ -970,7 +970,7 @@ export class LocalStorageProvider implements StorageProvider {
     id: string,
     proposalId: string,
     decision: 'approve' | 'reject',
-    force = false
+    applied?: number
   ): Promise<ProposalDecision> {
     if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
     try {
@@ -979,7 +979,7 @@ export class LocalStorageProvider implements StorageProvider {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(force ? { force: true } : {}),
+          body: JSON.stringify(decision === 'approve' && applied !== undefined ? { applied } : {}),
           signal: timeoutSignal(15000)
         }
       );

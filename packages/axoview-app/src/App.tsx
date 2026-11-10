@@ -66,6 +66,13 @@ const AssistantConnectionPage = lazy(() =>
   }))
 );
 
+// An outside agent's sign-in (ADR 0059): the person approves it here.
+const AgentConsentPage = lazy(() =>
+  import('./components/ai/AgentConsentPage').then(({ AgentConsentPage }) => ({
+    default: AgentConsentPage
+  }))
+);
+
 const basename = APP_BASENAME;
 
 const EXPORTER_TAG = `axoview-app@${process.env.REACT_APP_VERSION ?? 'dev'}`;
@@ -84,9 +91,24 @@ function App() {
         <Route
           path="/ai/connect/:clientId"
           element={
-            <Suspense fallback={null}>
-              <AssistantConnectionPage />
-            </Suspense>
+            <AppStorageProvider>
+              <Suspense fallback={null}>
+                <AssistantConnectionPage />
+              </Suspense>
+            </AppStorageProvider>
+          }
+        />
+        {/* Signed in first (the sign-in screen comes back here), then Allow or Deny. */}
+        <Route
+          path="/oauth/consent"
+          element={
+            <AppStorageProvider>
+              <CognitoSessionProvider>
+                <Suspense fallback={null}>
+                  <AgentConsentPage />
+                </Suspense>
+              </CognitoSessionProvider>
+            </AppStorageProvider>
           }
         />
         <Route path="/display/p/:shareUuid" element={<EditorPage />} />

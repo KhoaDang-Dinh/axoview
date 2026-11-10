@@ -12,11 +12,12 @@ import {
 import { onTabMessage, postToTabs } from '../services/sync/tabChannel';
 import { signOutDriveFromOtherTab } from '../stores/authStore';
 
-// Where to return after sign-in: a diagram link (/d/<id>?page=<view>) opened
-// while signed out. Only that shape is kept, so the stored value can never
-// send the user anywhere else.
+// Where to return after sign-in: a diagram link (/d/<id>?page=<view>) or an
+// agent's consent page (/oauth/consent?request=<id>, ADR 0059) opened while
+// signed out. Only those shapes are kept, so the stored value can never send
+// the user anywhere else.
 const RETURN_KEY = 'axoview-sign-in-return';
-const RETURN_PATH = /^\/d\/[A-Za-z0-9_-]{1,64}(\?page=[A-Za-z0-9_%.~!*'()-]{1,200})?$/;
+const RETURN_PATH = /^(\/d\/[A-Za-z0-9_-]{1,64}(\?page=[A-Za-z0-9_%.~!*'()-]{1,200})?|\/oauth\/consent\?request=[A-Za-z0-9_-]{24})$/;
 
 export function rememberSignInReturn(path: string): void {
   try {

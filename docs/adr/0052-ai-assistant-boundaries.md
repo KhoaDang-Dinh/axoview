@@ -68,9 +68,9 @@ account, its person sets once what it may do, and only that person approves its 
     longer applies is not made, and the chat says why.
 - **Never above the person:** on a read-only view (a public link, a Drive file, a diagram shared
   as Read only) there is nothing to approve. The chat says Nova is "Read only here, like you".
-- **Still not wired:** model tool calls that write by themselves, and the MCP write tools. When
-  outside agents get MCP sign-in, their changes go to the person as stored proposals (ADR 0057
-  addendum 3), never straight to the diagram.
+- **Still not wired:** model tool calls that write by themselves. Outside agents sign in the same
+  day ([ADR 0059](0059-agent-sign-in-and-workspace-mcp.md)): their changes go to the person as
+  stored proposals, approved through this same editor path, never straight to the diagram.
 
 **Why.** The vocabulary, the page description and the checks had been proven by recommending
 (the addendum above). Approving one step at a time keeps the person in charge. Applying through

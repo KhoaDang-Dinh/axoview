@@ -31,6 +31,10 @@ import {
 import { releaseInfoFor } from './src/releaseInfo.js';
 import { createSharing, SharingError } from './src/sharing.js';
 import { createAgentSettings } from './src/agentSettings.js';
+import { createOAuthStore } from './src/oauth/store.js';
+import { createClientResolver } from './src/oauth/clientMetadata.js';
+import { createOAuthRouter, ISSUER_PATH, MCP_PATH } from './src/oauth/router.js';
+import { createWorkspaceMcpRouter } from './src/ai/workspaceMcp.js';
 import { createCognitoDirectory } from './src/cognitoDirectory.js';
 
 dotenv.config();
@@ -197,6 +201,17 @@ function constantTimeEquals(a, b) {
   return diff === 0;
 }
 
+const OAUTH_PUBLIC_PATHS = new Set([
+  MCP_PATH,
+  `${MCP_PATH}/.well-known/oauth-protected-resource`,
+  `${ISSUER_PATH}/.well-known/openid-configuration`,
+  `${ISSUER_PATH}/.well-known/oauth-authorization-server`,
+  `${ISSUER_PATH}/register`,
+  `${ISSUER_PATH}/authorize`,
+  `${ISSUER_PATH}/token`,
+  `${ISSUER_PATH}/revoke`
+]);
+
 // Anchored to exactly match the Worker's regex (packages/axoview-worker/src/auth.ts)
 // so both runtimes bypass auth for the identical shape — a bare `startsWith`
 // exempted any path under the prefix, drifting from the Worker.
@@ -209,6 +224,10 @@ function isPublicRoute(req) {
   // The public manual over MCP (src/ai/mcp.js): read-only, public docs only,
   // and a 404 unless AI_MCP_DOCS_ENABLED is true.
   if (req.path === '/api/mcp') return true;
+  // Agents (ADR 0059): the workspace MCP server checks its own OAuth tokens,
+  // and the OAuth endpoints an MCP client calls before it has one. The
+  // consent and connected-apps calls (requests/, grants) stay signed in.
+  if (OAUTH_PUBLIC_PATHS.has(req.path)) return true;
   if (req.method === 'GET' && PUBLIC_SNAPSHOT_RE.test(req.path)) return true;
   if (
     req.method === 'POST' &&
@@ -556,6 +575,34 @@ app.post('/api/auth/logout', adapt(revokeCognitoSession, { requireStorage: false
 
 // Phase 2: server-enforced, authenticated Bedrock chat. No guest access.
 app.use('/api/ai', aiChatRouter);
+// Outside agents on a person's diagrams (ADR 0059): Axoview's OAuth server
+// and the workspace MCP server. Both need accounts, storage and sharing (the
+// proposals live there), and AI_MCP_ENABLED. Mounted before the public
+// manual's /api/mcp, which would otherwise answer /api/mcp/workspace.
+const agentsEnabled = process.env.AI_MCP_ENABLED === 'true' && !!sharing;
+const oauthStore = agentsEnabled ? createOAuthStore({ adapter: workspaceAdapter('_oauth') }) : null;
+app.use(createOAuthRouter({
+  enabled: agentsEnabled,
+  store: oauthStore,
+  resolveClient: oauthStore ? createClientResolver({ registeredClient: oauthStore.registeredClient }) : async () => null,
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || ''
+}));
+app.use(MCP_PATH, createWorkspaceMcpRouter({
+  enabled: agentsEnabled,
+  store: oauthStore,
+  sharing,
+  adapterFor: workspaceAdapter,
+  notify: (sub, change) => notify([sub], change),
+  loadDiagram: async (workspace, id) => {
+    try {
+      return (await routes.getDiagram(workspace, { params: { id } })).body;
+    } catch (err) {
+      if (err?.status === 404) return null;
+      throw err;
+    }
+  },
+  publicBaseUrl: process.env.PUBLIC_BASE_URL || ''
+}));
 app.use('/api/mcp', createMcpRouter());
 
 // Diagrams (`sync`: the route, for the change other devices are told about)
@@ -752,12 +799,12 @@ app.delete('/api/diagrams/:id/members/:sub', sharingRoute(async (req) => {
   return { status: 200, body: { removed: req.params.sub } };
 }));
 
-// Proposals: changes an AI agent made under "Changes need my approval"
-// (ADR 0057 addendum 3). Only the agent's own person sees and decides them,
-// and only while they may change the diagram (its owner or a Full admin);
-// approving saves the proposed document like any save, so everyone who has
-// the diagram gets it. Agents that act through the API (ADR 0052's MCP
-// sign-in) make them; the in-app assistant is approved in the chat instead.
+// Proposals: changes an outside agent proposed through the workspace MCP
+// server (ADR 0059). Only the agent's own person sees and decides them, and
+// only while they may change the diagram (its owner or a Full admin). They
+// hold operations: the person's app carries out the approved ones on the open
+// diagram as one undoable edit and saves it like any edit, then records the
+// decision here. (The in-app assistant is approved in the chat instead.)
 app.get('/api/diagrams/:id/proposals', sharingRoute(async (req) => {
   const owner = await sharing.managedBy(req.user.sub, req.params.id);
   return { status: 200, body: { proposals: await sharing.pendingProposals(owner, req.params.id, req.user.sub) } };
@@ -766,15 +813,10 @@ app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req) =>
   const id = req.params.id;
   const owner = await sharing.managedBy(req.user.sub, id);
   if (!SHARING_ID_RE.test(req.params.pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
-  const { proposal, document } = await sharing.proposalToApply(owner, id, req.params.pid, req.user.sub, {
-    force: req.body?.force === true
-  });
-  const ownerAdapter = workspaceAdapter(owner);
-  const version = ownerAdapter.getDiagramVersion ? await ownerAdapter.getDiagramVersion(id) : null;
-  const ctx = { ...makeCtx(req), params: { id }, body: document, ifMatch: version ?? undefined };
-  const saved = await routes.saveDiagram(ownerAdapter, ctx);
-  await publishChange({ ...req, method: 'PUT', params: { id }, body: document, headers: {} }, '/api/diagrams/:id', saved, { owner });
-  const resolved = await sharing.resolveProposal(owner, id, proposal.id, 'approved', req.user.sub);
+  // The app has carried out the approved steps on the open diagram and saves
+  // them like any edit; this records the decision for the agent.
+  const applied = Number.isInteger(req.body?.applied) && req.body.applied >= 0 ? req.body.applied : null;
+  const resolved = await sharing.resolveProposal(owner, id, req.params.pid, 'approved', req.user.sub, { applied });
   await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id });
   return { status: 200, body: { proposal: resolved } };
 }));

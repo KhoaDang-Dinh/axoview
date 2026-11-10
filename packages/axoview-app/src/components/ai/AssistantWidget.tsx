@@ -10,6 +10,7 @@ import { useCognitoSessionStore } from '../../stores/cognitoSessionStore';
 import { useAssistantPageStore } from '../../stores/assistantPageStore';
 import { SuggestionChecklist } from './SuggestionChecklist';
 import { AgentLevelSwitch } from './AgentLevelSwitch';
+import { ConnectedApps } from './ConnectedApps';
 import { notificationStore } from '../../stores/notificationStore';
 import type { AgentLevel } from '../../services/storage/types';
 import {
@@ -91,6 +92,9 @@ export function AssistantWidget() {
   const [agentLevel, setAgentLevel] = useState<AgentLevel>('viewer');
   const [levelBusy, setLevelBusy] = useState(false);
   const mayChange = levelOption && !!canChangePage?.();
+  // Outside agents (ADR 0059): connected through MCP sign-in, listed in the
+  // "Connect your AI" view.
+  const agentsOption = signedIn && serverStorageAvailable === true && runtimeConfig?.ai?.mcpEnabled === true;
   const approving = levelOption && agentLevel === 'proposer' && mayChange && !!applyToPage;
   const pointer = useRef<{ id: number; x: number; y: number; initialX: number; initialY: number; dragged: boolean } | null>(null);
   const listEndRef = useRef<HTMLDivElement | null>(null);
@@ -343,8 +347,11 @@ export function AssistantWidget() {
             </>
           ) : (
             <Box sx={{ p: 2, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+              {agentsOption && <ConnectedApps />}
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Choose a client. Setup is informational until the remote MCP server and OAuth flow are deployed.
+                {agentsOption
+                  ? 'Choose your AI to see how to connect it. It signs in as you, and every change it proposes waits for your approval.'
+                  : 'Choose a client. Setup is informational until the remote MCP server and OAuth flow are deployed.'}
               </Typography>
               {AI_CONNECTORS.map((family) => (
                 <Box key={family.id} sx={{ border: 1, borderColor: 'divider', borderRadius: 2, mb: 1 }}>

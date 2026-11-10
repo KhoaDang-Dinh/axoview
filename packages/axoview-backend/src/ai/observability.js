@@ -71,10 +71,12 @@ const MCP_OUTCOMES = new Set(['hit', 'empty', 'invalid']);
  *            match words, and "error" must mean a failed request (5xx) only.
  */
 export function emitMcpTelemetry({
-  method, tool, result, outcome, code, results, mode, era, latencyMs = 0
+  method, tool, result, outcome, code, results, mode, era, latencyMs = 0, server
 }, write = (message) => console.log(message)) {
   const record = {
     event: 'mcp.request',
+    // Which MCP server: the public manual (no field) or the signed-in workspace one.
+    ...(server === 'workspace' ? { server: 'workspace' } : {}),
     method: MCP_METHODS.has(method) ? method : 'other',
     result: MCP_RESULTS.has(result) ? result : 'error',
     ...(method === 'tools/call' && result === 'ok' ? {

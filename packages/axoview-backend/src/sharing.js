@@ -6,8 +6,7 @@
  * the storage adapter (S3 objects on AWS, files on fs), record who has it:
  *   - owner's workspace:
  *       sharing/members/<diagramId>              { members: [{ sub, email, role, addedAt }] }
- *       sharing/proposals/<diagramId>            { proposals: [{ id, by, baseStamp, createdAt, status, ... }] }
- *       sharing/proposal-docs/<diagramId>/<pid>  the proposed document
+ *       sharing/proposals/<diagramId>            { proposals: [{ id, by, viewId, operations, note, createdAt, status }] }
  *   - each member's workspace:
  *       sharing/inbox                            { diagrams: [{ id, owner, ownerEmail, role, addedAt }] }
  *
@@ -21,8 +20,12 @@
  * person is its one admin (ADR 0057 addendum 3): it can never do more than
  * its person can on a diagram (agentLevelOn), and the changes it proposes wait
  * for that person alone. Proposals are stored here for agents that act
- * through the API (ADR 0052's MCP sign-in); the in-app assistant's changes are
- * approved in the chat and need no storage.
+ * through the workspace MCP server (ADR 0059); the in-app assistant's changes
+ * are approved in the chat and need no storage. A proposal holds the agent's
+ * operations (the diagramAgent vocabulary), not a document: the person's app
+ * checks them against the page as it is when they look, carries out the ones
+ * they approve as one undoable edit, and saves it like any edit. So approving
+ * never overwrites changes made since.
  *
  * Each object is read, changed and written back. Two writers in the same
  * instant could lose one entry; repeating the action repairs it. Acceptable
@@ -44,7 +47,8 @@ const RESOLVED_KEPT = 50;
 const EMAIL_RE = /^[^\s@"\\]{1,64}@[^\s@"\\]{1,255}\.[^\s@"\\]{1,63}$/;
 const MEMBERS_KEY = (id) => `sharing/members/${id}`;
 const PROPOSALS_KEY = (id) => `sharing/proposals/${id}`;
-const PROPOSAL_DOC_KEY = (id, pid) => `sharing/proposal-docs/${id}/${pid}`;
+// Waiting proposals per diagram and person: an agent cannot bury its person in them.
+export const MAX_WAITING_PROPOSALS = 20;
 const INBOX_KEY = 'sharing/inbox';
 
 export class SharingError extends Error {
@@ -100,8 +104,7 @@ async function diagramMeta(adapter, id) {
     return {
       name: item.name || 'Untitled Diagram',
       lastModified: item.lastModified || new Date(0).toISOString(),
-      deletedAt: item.deletedAt ?? null,
-      stamp: state.version != null ? `v${state.version}` : `t${item.lastModified || ''}`
+      deletedAt: item.deletedAt ?? null
     };
   }
   const data = await readJson(adapter, `diagrams/${id}`, null);
@@ -109,8 +112,7 @@ async function diagramMeta(adapter, id) {
   return {
     name: data.name || data.title || 'Untitled Diagram',
     lastModified: data.lastModified || new Date(0).toISOString(),
-    deletedAt: data.deletedAt ?? null,
-    stamp: `t${data.lastModified || ''}`
+    deletedAt: data.deletedAt ?? null
   };
 }
 
@@ -303,83 +305,61 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
     // -------------------------------------------------------------------------
 
     /**
-     * Store a proposed document. `by`: the person the agent works for (`sub`)
-     * and which agent (`agent`). `baseStamp`: the version the agent edited
-     * (`v<n>`), else the diagram's state now. Returns the proposal record.
+     * Store an agent's proposed operations. `by`: the person the agent works
+     * for (`sub`) and which agent (`agent`, the client's name). `operations`
+     * are already validated (ai/suggestions.js). Returns the proposal record.
      */
-    async propose(owner, id, by, document, baseStamp) {
-      const meta = await liveDiagram(owner, id);
+    async propose(owner, id, by, { viewId = null, operations, note = null }) {
+      await liveDiagram(owner, id);
+      const list = await readProposals(owner, id);
+      const waiting = list.filter((p) => p.status === 'pending' && p.by?.sub === by.sub);
+      if (waiting.length >= MAX_WAITING_PROPOSALS) {
+        throw new SharingError(429, 'too-many-proposals', `${MAX_WAITING_PROPOSALS} changes are already waiting for approval on this diagram`);
+      }
       const proposal = {
         id: randomId(),
         by: { sub: by.sub, agent: by.agent || null },
-        baseStamp: baseStamp || meta.stamp,
+        viewId,
+        operations,
+        note,
         createdAt: iso(),
-        status: 'pending',
-        summary: summarize(document)
+        status: 'pending'
       };
-      await writeJson(adapterFor(owner), PROPOSAL_DOC_KEY(id, proposal.id), document);
-      const list = await readProposals(owner, id);
       await writeJson(adapterFor(owner), PROPOSALS_KEY(id), { proposals: [proposal, ...list] });
       return proposal;
     },
 
-    /**
-     * Proposals waiting for this person (their own agents' only), newest
-     * first, each marked stale or not.
-     */
+    /** Proposals waiting for this person (their own agents' only), newest first. */
     async pendingProposals(owner, id, sub) {
-      const meta = await liveDiagram(owner, id);
-      return (await readProposals(owner, id))
-        .filter((p) => p.status === 'pending' && p.by?.sub === sub)
-        .map((p) => ({ ...p, stale: p.baseStamp !== meta.stamp }));
+      await liveDiagram(owner, id);
+      return (await readProposals(owner, id)).filter((p) => p.status === 'pending' && p.by?.sub === sub);
+    },
+
+    /** One of this person's proposals on a diagram, in any state (for the agent asking after it). */
+    async proposalFor(owner, id, pid, sub) {
+      const proposal = (await readProposals(owner, id)).find((p) => p.id === pid);
+      if (!proposal || proposal.by?.sub !== sub) throw new SharingError(404, 'no-proposal', 'No such proposal');
+      return proposal;
     },
 
     /**
-     * Take a pending proposal for approval by `sub`, the person whose agent
-     * made it: its record and document. Refused when the diagram changed since
-     * it was proposed, unless `force`.
+     * `by` (the agent's person) marks a proposal approved or rejected. When
+     * approved, `applied` is how many of its steps the app carried out.
      */
-    async proposalToApply(owner, id, pid, sub, { force = false } = {}) {
-      const meta = await liveDiagram(owner, id);
-      const proposal = (await readProposals(owner, id)).find((p) => p.id === pid);
-      if (!proposal || proposal.status !== 'pending' || proposal.by?.sub !== sub) {
-        throw new SharingError(404, 'no-proposal', 'That proposal is no longer waiting');
-      }
-      if (!force && proposal.baseStamp !== meta.stamp) {
-        throw new SharingError(409, 'stale', 'The diagram changed since this was proposed');
-      }
-      const document = await readJson(adapterFor(owner), PROPOSAL_DOC_KEY(id, pid), null);
-      if (!document) throw new SharingError(404, 'no-proposal', 'That proposal is no longer waiting');
-      return { proposal, document };
-    },
-
-    /** `by` (the agent's person) marks a proposal approved or rejected; its document goes. */
-    async resolveProposal(owner, id, pid, status, by) {
+    async resolveProposal(owner, id, pid, status, by, { applied = null } = {}) {
       const list = await readProposals(owner, id);
       const proposal = list.find((p) => p.id === pid);
       if (!proposal || proposal.status !== 'pending' || proposal.by?.sub !== by) {
         throw new SharingError(404, 'no-proposal', 'That proposal is no longer waiting');
       }
-      const resolved = { ...proposal, status, resolvedBy: by, resolvedAt: iso() };
+      const resolved = {
+        ...proposal, status, resolvedBy: by, resolvedAt: iso(),
+        ...(status === 'approved' && Number.isInteger(applied) ? { applied } : {})
+      };
       const pending = list.filter((p) => p.status === 'pending' && p.id !== pid);
       const done = [resolved, ...list.filter((p) => p.status !== 'pending')].slice(0, RESOLVED_KEPT);
       await writeJson(adapterFor(owner), PROPOSALS_KEY(id), { proposals: [...pending, ...done] });
-      try {
-        await adapterFor(owner).delete(PROPOSAL_DOC_KEY(id, pid));
-      } catch {
-        /* a left-behind document is harmless: nothing lists it */
-      }
       return resolved;
     }
-  };
-}
-
-/** Counts a reviewer can read at a glance: items and pages in the proposal. */
-function summarize(document) {
-  const views = Array.isArray(document?.views) ? document.views : [];
-  return {
-    items: Array.isArray(document?.items) ? document.items.length : 0,
-    pages: views.length,
-    connectors: views.reduce((n, v) => n + (Array.isArray(v?.connectors) ? v.connectors.length : 0), 0)
   };
 }

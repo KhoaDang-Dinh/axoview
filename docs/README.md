@@ -130,6 +130,7 @@ Deep snapshots cut on a date and left immutable. Read for the comprehensive narr
 | [0056](adr/0056-realtime-service-on-eks.md) | Realtime service on EKS (sequencer per diagram, lease, DynamoDB journal, S3 checkpoints cached at CloudFront, WebSockets) — Proposed |
 | [0057](adr/0057-diagram-sharing-and-permissions.md) | Diagram sharing and permissions (membership list, owner/editor/viewer, agents capped at their person's role; the email field, Read only / Full admin, and agents on their person's account with "Changes need my approval" shipped 2026-11-10) — Accepted |
 | [0058](adr/0058-multiplayer-presence-ui.md) | Multiplayer presence UI (participants bar, follow mode, remote cursors and selections, live status line) — Proposed |
+| [0059](adr/0059-agent-sign-in-and-workspace-mcp.md) | Agent sign-in and the workspace MCP server (Axoview as OAuth server: CIMD/DCR clients, PKCE, resource-bound tokens, a grant per person and client; list/read/propose tools; proposals hold operations the person approves in the app) — Accepted |
 
 ---
 

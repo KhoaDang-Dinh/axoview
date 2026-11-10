@@ -208,11 +208,12 @@ account, and that person is its one admin. This replaces addendum 2's agent rows
   - **In the app (the built-in assistant):** the approval happens in the chat. See
     [ADR 0052's 2026-11-10 addendum](0052-ai-assistant-boundaries.md). Nothing is stored: the
     approved change is an ordinary edit, saved like any edit, and one Undo takes it back.
-  - **Through the API (when outside agents get ADR 0052's MCP sign-in):** a change is stored as a
+  - **Through the API (outside agents, MCP sign-in: [ADR 0059](0059-agent-sign-in-and-workspace-mcp.md)):** a change is stored as a
     proposal with `by: { sub: <its person>, agent: <client> }`. Only that person lists, approves or
     rejects it, and only while they may change the diagram (the owner or a Full admin): the
-    diagram's owner does not review someone else's agent. Addendum 2's stale rule ("Apply anyway")
-    stays. Until that sign-in exists, nothing creates these proposals.
+    diagram's owner does not review someone else's agent. Since ADR 0059 a proposal holds the
+    agent's operations, not a document: the app checks them against the page as it is when the
+    person looks, so addendum 2's stale rule ("Apply anyway") is gone.
 - **Why:** the person answers for their agent, so the agent's reach is the person's reach minus
   the right to act unseen. Admins keep managing people; they don't each review every agent.
 

@@ -165,13 +165,14 @@ test('a Full admin gets the whole dropdown, like the owner', async ({ page, cont
   await expect(byAxoviewId(page, 'share-shared-with-you')).toHaveCount(0);
 });
 
-test('a change your agent made through the API waits for you: the chip opens it, Approve saves it', async ({ page, context, baseURL }) => {
+test('a change your agent proposed through MCP waits for you: the chip opens it, Approve makes it', async ({ page, context, baseURL }) => {
   const proposal = {
     id: 'p1',
-    by: { sub: 'alice-1', agent: 'claude-code' },
-    createdAt: '2026-11-10T07:00:00.000Z',
-    summary: { items: 3, pages: 1, connectors: 1 },
-    stale: false
+    by: { sub: 'alice-1', agent: 'Claude Code' },
+    viewId: 'p1',
+    operations: [{ op: 'add_node', name: 'Cache' }, { op: 'remove_node', node: { name: 'Legacy FTP' } }],
+    note: 'Add a cache',
+    createdAt: '2026-11-10T07:00:00.000Z'
   };
   const mock = await boot(page, context, baseURL!, { state: 'by-you', role: 'owner' });
   mock.set('GET /api/diagrams/d1/proposals', { status: 200, json: { proposals: [proposal] } });
@@ -180,12 +181,15 @@ test('a change your agent made through the API waits for you: the chip opens it,
   const chip = byAxoviewId(page, 'proposals-chip');
   await expect(chip).toHaveText('1 to approve', { timeout: 20_000 });
   await chip.click();
-  await expect(byAxoviewId(page, 'proposal')).toContainText('Your agent (Claude Code)');
-  await expect(byAxoviewId(page, 'proposal')).toContainText('Proposes 3 items, 1 connector on 1 page');
+  await expect(byAxoviewId(page, 'proposal')).toContainText('From Claude Code');
+  await expect(byAxoviewId(page, 'proposal')).toContainText('Add a cache');
+  // Checked against the page as it is: the item it would remove is not there.
+  await expect(page.locator('[data-axoview-id="proposal-step"]')).toHaveCount(2);
+  await expect(page.locator('[data-axoview-id="proposal-step"][data-status="not_applicable"]')).toContainText('Legacy FTP');
   await byAxoviewId(page, 'proposal-approve').click();
-  await expect(toast(page, 'success')).toContainText('Change approved and saved');
+  await expect(toast(page, 'success')).toContainText('Change approved and made');
   await expect(chip).toHaveCount(0);
-  expect(mock.callsTo('POST /api/diagrams/d1/proposals/p1/approve')).toHaveLength(1);
+  expect(mock.callsTo('POST /api/diagrams/d1/proposals/p1/approve').map((c) => c.body)).toEqual([{ applied: 1 }]);
 });
 
 test('shared with you as Read only: an editor link opens the read-only viewer', async ({ page, context, baseURL }) => {

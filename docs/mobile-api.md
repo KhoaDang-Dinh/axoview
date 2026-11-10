@@ -226,17 +226,19 @@ it may do (ADR 0057 addendum 3; any signed-in account, server storage):
 
 On a diagram the person may only view, the agent is Read only whatever the level says.
 
-Changes an agent made through the API under "Changes need my approval" wait for its person alone,
-while they may change the diagram (owner or Full admin; anyone else gets `404`). Nothing makes them
-yet: they arrive with outside agents' MCP sign-in (ADR 0052).
+Changes an outside agent proposed through the workspace MCP server ([ADR 0059](adr/0059-agent-sign-in-and-workspace-mcp.md))
+wait for its person alone, while they may change the diagram (owner or Full admin; anyone else gets
+`404`). A proposal holds operations in the `diagramAgent` vocabulary, not a document: the app checks
+them against the page, makes the approved ones as an ordinary edit, saves it, then records the
+decision here.
 
 | Method and path | Body | Answer |
 |---|---|---|
-| `GET /api/diagrams/{id}/proposals` | — | `{ proposals: [{ id, by: { sub, agent }, createdAt, summary, stale }] }`: this person's agents' waiting ones |
-| `POST /api/diagrams/{id}/proposals/{pid}/approve` | `{ "force": true }` to approve a stale one | `{ proposal }`: the document is saved like any save; `409 stale` when the diagram changed since |
+| `GET /api/diagrams/{id}/proposals` | — | `{ proposals: [{ id, by: { sub, agent }, viewId, operations, note, createdAt }] }`: this person's agents' waiting ones |
+| `POST /api/diagrams/{id}/proposals/{pid}/approve` | `{ "applied": n }`: how many steps were made | `{ proposal }` |
 | `POST /api/diagrams/{id}/proposals/{pid}/reject` | — | `{ proposal }` |
 
-Deciding one sends `kind: "proposal"` to that person's sync stream.
+A new one sends `kind: "proposal"` `create`, and deciding one `resolve`, to that person's sync stream.
 
 ### The diagram document
 

@@ -109,18 +109,18 @@ it('changes a level; an unknown level is refused with its reason', async () => {
   expect(await p.setMemberRole('d1', 'bob', 'owner' as never)).toMatchObject({ ok: false, reason: 'invalid-role' });
 });
 
-it('lists proposals and approves one (with force when asked)', async () => {
+it('lists proposals and records a decision with how many steps were made', async () => {
   const p = serverProvider();
-  const waiting = [{ id: 'p1', by: { sub: 'me', agent: 'claude-code' }, createdAt: 'x', summary: { items: 1, pages: 1, connectors: 0 }, stale: true }];
+  const waiting = [{ id: 'p1', by: { sub: 'me', agent: 'Claude Code' }, viewId: 'v1', operations: [{ op: 'add_node', name: 'X' }], note: null, createdAt: 'x' }];
   const calls = script([
     response(200, { proposals: waiting }),
-    response(409, { error: 'changed', reason: 'stale' }),
-    response(200, { proposal: { id: 'p1', status: 'approved' } })
+    response(200, { proposal: { id: 'p1', status: 'approved' } }),
+    response(404, { error: 'gone', reason: 'no-proposal' })
   ]);
   expect(await p.listProposals('d1')).toEqual(waiting);
-  expect(await p.resolveProposal('d1', 'p1', 'approve')).toEqual({ ok: false, reason: 'stale', message: 'changed' });
-  expect(await p.resolveProposal('d1', 'p1', 'approve', true)).toEqual({ ok: true });
-  expect(calls[2]).toMatchObject({ url: `${BASE}/api/diagrams/d1/proposals/p1/approve`, method: 'POST', body: { force: true } });
+  expect(await p.resolveProposal('d1', 'p1', 'approve', 1)).toEqual({ ok: true });
+  expect(calls[1]).toMatchObject({ url: `${BASE}/api/diagrams/d1/proposals/p1/approve`, method: 'POST', body: { applied: 1 } });
+  expect(await p.resolveProposal('d1', 'p1', 'reject')).toEqual({ ok: false, reason: 'no-proposal', message: 'gone' });
 });
 
 it("reads and sets what this person's agent may do; Read only when unknown or unreachable", async () => {

@@ -79,23 +79,27 @@ export interface DiagramMember {
 }
 
 /**
- * A change an agent made through the API under "Changes need my approval",
- * waiting for its person (the account that lists it).
+ * Changes an outside agent proposed through the workspace MCP server
+ * (ADR 0059), waiting for its person (the account that lists it). They are
+ * operations in the diagramAgent vocabulary: the app checks them against the
+ * page as it is now and carries out the ones the person approves.
  */
 export interface Proposal {
   id: string;
-  /** The person the agent works for (this account), and which agent. */
+  /** The person the agent works for (this account), and which agent (its app's name). */
   by: { sub: string; agent: string | null };
+  /** The page they are for; null for the first page. */
+  viewId: string | null;
+  operations: unknown[];
+  /** What the agent said about them. */
+  note: string | null;
   createdAt: string;
-  summary: { items: number; pages: number; connectors: number };
-  /** The diagram changed since it was proposed: approving overwrites that. */
-  stale: boolean;
 }
 
 /**
  * Adding a person by email, or changing a level. reason codes from the
  * server: no-account, already-shared, self, invalid-email, invalid-role,
- * agent-not-admin, rate-limited, not-found, stale, no-proposal; 'error' for a
+ * rate-limited, not-found, no-proposal; 'error' for a
  * network or server failure.
  */
 export type AddMemberResult =
@@ -184,7 +188,8 @@ export interface StorageProvider {
   setAgentLevel?(level: AgentLevel): Promise<boolean>;
   // Proposals ("Change needs approval"), for the owner and Full admins.
   listProposals?(id: string): Promise<Proposal[]>;
-  resolveProposal?(id: string, proposalId: string, decision: 'approve' | 'reject', force?: boolean): Promise<ProposalDecision>;
+  /** Records the decision; `applied`: how many of its steps were made (approve). */
+  resolveProposal?(id: string, proposalId: string, decision: 'approve' | 'reject', applied?: number): Promise<ProposalDecision>;
 
   // Reserved for P3 — no-op stubs for now
   subscribe?(diagramId: string, callback: () => void): () => void;

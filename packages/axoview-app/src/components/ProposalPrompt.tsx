@@ -1,14 +1,16 @@
 /**
- * Changes waiting for approval (ADR 0057 addendum 3, owner decisions
- * 2026-11-10): an AI agent works on its person's account, and when that
- * person set it to "Changes need my approval", a change it makes through the
- * API (ADR 0052's MCP sign-in) is stored as a proposal for that person alone.
- * They see a small "N to approve" chip in the toolbar of the open diagram; it
- * opens a list where each proposal is approved (saved like any save, so
- * everyone who has the diagram gets it) or rejected. A proposal made before
- * the diagram last changed is marked: approving it replaces those changes, so
- * it takes a second, explicit "Apply anyway". (The in-app assistant's
- * changes are approved in the chat instead: components/ai.)
+ * Changes waiting for approval (ADR 0059, ADR 0057 addendum 3): an outside
+ * agent working as this person proposed changes through the workspace MCP
+ * server. They wait for this person alone: a small "N to approve" chip in the
+ * toolbar of the open diagram opens them.
+ *
+ * Each proposal is a list of operations (the diagramAgent vocabulary). They
+ * are checked against the page as it is now, so a step that no longer applies
+ * says why instead of overwriting anything. Approve carries out the steps that
+ * apply, through the editor, as one undoable change saved like any edit (the
+ * same path as approving the in-app assistant: ADR 0052 addendum 2026-11-10),
+ * then records the decision for the agent. Reject records it and changes
+ * nothing.
  *
  * The list refreshes when the diagram opens and whenever the sync stream says
  * a proposal was made or decided (hooks/useRealtimeSync.ts).
@@ -26,12 +28,13 @@ import {
   Stack,
   Typography
 } from '@mui/material';
+import { diagramAgent } from 'axoview';
 import { notificationStore } from '../stores/notificationStore';
+import { useAssistantPageStore } from '../stores/assistantPageStore';
 import { PROPOSALS_CHANGED_EVENT } from '../hooks/useRealtimeSync';
-import { findAiConnector } from '../stores/assistantStore';
 import type { DiagramRole, Proposal, StorageProvider } from '../services/storage/types';
 
-const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+type PlanStep = diagramAgent.PlanStep;
 
 export type ProposalStorage = Pick<StorageProvider, 'listProposals' | 'resolveProposal'>;
 
@@ -48,11 +51,12 @@ export function ProposalPrompt({
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  // Those who may change the diagram check on open. Anyone not known to be
-  // Read only (an owner whose diagram was unshared when it opened has no role
-  // yet) checks when the sync stream announces a proposal: the server only
-  // announces one to the person whose agent made it.
-  const reviews = role === 'owner' || role === 'admin';
+  const readPage = useAssistantPageStore((state) => state.readPage);
+  const applyToPage = useAssistantPageStore((state) => state.applyToPage);
+  const canChangePage = useAssistantPageStore((state) => state.canChangePage);
+  // Anyone who may change the diagram checks when it opens and whenever the
+  // sync stream announces a proposal (the server announces one only to the
+  // person whose agent made it). No role means their own diagram, unshared.
   const mayReview = role !== 'viewer';
   // Proposals already announced with a pop-up, so each arrives once.
   const announcedRef = useRef<Set<string>>(new Set());
@@ -61,8 +65,8 @@ export function ProposalPrompt({
   const tRef = useRef(t);
   tRef.current = t;
 
-  const refresh = useCallback(async (announced = false) => {
-    if (!(reviews || (announced && mayReview)) || !storage.listProposals) {
+  const refresh = useCallback(async () => {
+    if (!mayReview || !storage.listProposals) {
       setProposals([]);
       return;
     }
@@ -81,7 +85,7 @@ export function ProposalPrompt({
       });
     }
     setProposals(waiting);
-  }, [diagramId, reviews, mayReview, storage]);
+  }, [diagramId, mayReview, storage]);
 
   useEffect(() => {
     setProposals([]);
@@ -91,51 +95,74 @@ export function ProposalPrompt({
 
   useEffect(() => {
     const onChanged = (event: Event) => {
-      if ((event as CustomEvent<{ id?: string }>).detail?.id === diagramId) void refresh(true);
+      if ((event as CustomEvent<{ id?: string }>).detail?.id === diagramId) void refresh();
     };
     window.addEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
   }, [diagramId, refresh]);
 
-  const decide = useCallback(async (proposal: Proposal, decision: 'approve' | 'reject', force = false) => {
-    if (!storage.resolveProposal) return;
+  /** The proposal's steps checked against the page as it is now. */
+  const planOf = useCallback((proposal: Proposal): PlanStep[] => {
+    const page = readPage?.();
+    if (!page) return [];
+    return diagramAgent.planOperations(page.model, proposal.viewId ?? undefined, proposal.operations);
+  }, [readPage]);
+
+  const record = useCallback(async (proposal: Proposal, decision: 'approve' | 'reject', applied?: number) => {
+    const result = storage.resolveProposal
+      ? await storage.resolveProposal(diagramId, proposal.id, decision, applied)
+      : { ok: false as const, reason: 'error', message: '' };
+    setProposals((current) => current.filter((p) => p.id !== proposal.id));
+    return result.ok;
+  }, [diagramId, storage]);
+
+  const approve = useCallback(async (proposal: Proposal) => {
+    if (!applyToPage || !canChangePage?.()) {
+      notificationStore.push({ severity: 'error', message: t('proposals.cannotChange', 'You can only view this diagram, so nothing was changed') });
+      return;
+    }
     setBusy(proposal.id);
     try {
-      const result = await storage.resolveProposal(diagramId, proposal.id, decision, force);
-      if (result.ok) {
-        notificationStore.push({
-          severity: 'success',
-          message: decision === 'approve'
-            ? t('proposals.approved', 'Change approved and saved')
-            : t('proposals.rejected', 'Change rejected')
-        });
-        setProposals((current) => current.filter((p) => p.id !== proposal.id));
-      } else if (result.reason === 'stale') {
-        setProposals((current) => current.map((p) => (p.id === proposal.id ? { ...p, stale: true } : p)));
+      const ready = planOf(proposal).filter((step) => step.status === 'ready');
+      if (ready.length === 0) {
         notificationStore.push({
           severity: 'error',
-          message: t('proposals.stale', 'The diagram changed since this was proposed: approving would replace those changes')
+          message: t('proposals.nothingApplies', 'None of these changes fit the page as it is now: nothing was changed')
         });
-      } else {
-        notificationStore.push({
-          severity: 'error',
-          message: t('proposals.failed', "Couldn't record your decision: try again")
-        });
-        void refresh();
+        return;
       }
+      const outcomes = applyToPage(ready.map((step) => proposal.operations[step.index]), proposal.viewId ?? undefined);
+      const made = outcomes.filter((step) => step.status === 'ready').length;
+      const saved = await record(proposal, 'approve', made);
+      notificationStore.push({
+        severity: saved ? 'success' : 'warning',
+        message: saved
+          ? t('proposals.made', { count: made, defaultValue: made === 1 ? 'Change approved and made' : `${made} changes approved and made` })
+          : t('proposals.madeNotRecorded', "Made the changes, but couldn't tell the agent: it may ask again")
+      });
     } finally {
       setBusy(null);
     }
-  }, [diagramId, refresh, storage, t]);
+  }, [applyToPage, canChangePage, planOf, record, t]);
+
+  const reject = useCallback(async (proposal: Proposal) => {
+    setBusy(proposal.id);
+    try {
+      const ok = await record(proposal, 'reject');
+      notificationStore.push(ok
+        ? { severity: 'success', message: t('proposals.rejected', 'Change rejected') }
+        : { severity: 'error', message: t('proposals.failed', "Couldn't record your decision: try again") });
+      if (!ok) void refresh();
+    } finally {
+      setBusy(null);
+    }
+  }, [record, refresh, t]);
 
   if (!mayReview || proposals.length === 0) return null;
 
-  const who = (p: Proposal) => {
-    const client = findAiConnector(p.by.agent ?? undefined);
-    return client
-      ? t('proposals.yourAgentNamed', { name: client.label, defaultValue: `Your agent (${client.label})` })
-      : t('proposals.yourAgent', 'Your AI agent');
-  };
+  const who = (p: Proposal) => p.by.agent
+    ? t('proposals.fromAgent', { name: p.by.agent, defaultValue: `From ${p.by.agent}` })
+    : t('proposals.fromYourAgent', 'From your AI agent');
 
   return (
     <>
@@ -147,64 +174,57 @@ export function ProposalPrompt({
         data-axoview-id="proposals-chip"
         sx={{ ml: 0.5 }}
       />
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="xs" fullWidth data-axoview-id="proposals-dialog">
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth data-axoview-id="proposals-dialog">
         <DialogTitle>{t('proposals.title', 'Changes waiting for approval')}</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5}>
-            {proposals.map((p) => (
-              <Box
-                key={p.id}
-                data-axoview-id="proposal"
-                data-stale={p.stale ? 'true' : undefined}
-                sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.25 }}
-              >
-                <Typography variant="body2">
-                  {t('proposals.by', {
-                    who: who(p),
-                    when: new Date(p.createdAt).toLocaleString(),
-                    defaultValue: `${who(p)}, ${new Date(p.createdAt).toLocaleString()}`
-                  })}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {t('proposals.summary', {
-                    items: p.summary.items,
-                    pages: p.summary.pages,
-                    connectors: p.summary.connectors,
-                    defaultValue: `Proposes ${count(p.summary.items, 'item')}, ${count(p.summary.connectors, 'connector')} on ${count(p.summary.pages, 'page')}`
-                  })}
-                </Typography>
-                {p.stale && (
-                  <Typography variant="caption" color="warning.main" display="block">
-                    {t('proposals.staleNote', 'The diagram changed since: approving replaces those changes.')}
+            {proposals.map((p) => {
+              const steps = open ? planOf(p) : [];
+              const ready = steps.filter((step) => step.status === 'ready').length;
+              return (
+                <Box key={p.id} data-axoview-id="proposal" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.25 }}>
+                  <Typography variant="body2" fontWeight={600}>
+                    {who(p)}, {new Date(p.createdAt).toLocaleString()}
                   </Typography>
-                )}
-                <Stack direction="row" spacing={1} sx={{ mt: 1 }} justifyContent="flex-end">
-                  <Button
-                    size="small"
-                    onClick={() => void decide(p, 'reject')}
-                    disabled={busy !== null}
-                    data-axoview-id="proposal-reject"
-                    sx={{ textTransform: 'none' }}
-                  >
-                    {t('proposals.reject', 'Reject')}
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    color={p.stale ? 'warning' : 'primary'}
-                    onClick={() => void decide(p, 'approve', p.stale)}
-                    disabled={busy !== null}
-                    data-axoview-id="proposal-approve"
-                    sx={{ textTransform: 'none' }}
-                  >
-                    {p.stale ? t('proposals.applyAnyway', 'Apply anyway') : t('proposals.approve', 'Approve')}
-                  </Button>
-                </Stack>
-              </Box>
-            ))}
+                  {p.note && (
+                    <Typography variant="body2" sx={{ fontStyle: 'italic', overflowWrap: 'anywhere' }} data-axoview-id="proposal-note">
+                      {p.note}
+                    </Typography>
+                  )}
+                  <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2.5 }}>
+                    {steps.filter((step) => step.status !== 'invalid').map((step) => (
+                      <Typography component="li" variant="body2" key={step.index} data-axoview-id="proposal-step"
+                        data-status={step.status} sx={{ color: step.status === 'ready' ? 'text.primary' : 'text.disabled', overflowWrap: 'anywhere' }}>
+                        {step.summary}
+                        {step.status !== 'ready' && step.problem && (
+                          <Typography component="span" variant="caption" color="warning.main" display="block">
+                            {t('proposals.notApplicable', { problem: step.problem, defaultValue: `Not applicable: ${step.problem}` })}
+                          </Typography>
+                        )}
+                      </Typography>
+                    ))}
+                  </Box>
+                  <Stack direction="row" spacing={1} sx={{ mt: 1 }} justifyContent="flex-end">
+                    <Button size="small" onClick={() => void reject(p)} disabled={busy !== null}
+                      data-axoview-id="proposal-reject" sx={{ textTransform: 'none' }}>
+                      {t('proposals.reject', 'Reject')}
+                    </Button>
+                    <Button size="small" variant="contained" onClick={() => void approve(p)}
+                      disabled={busy !== null || ready === 0} data-axoview-id="proposal-approve" sx={{ textTransform: 'none' }}>
+                      {ready === steps.length
+                        ? t('proposals.approve', 'Approve')
+                        : t('proposals.approveSome', { count: ready, defaultValue: `Approve the ${ready} that fit` })}
+                    </Button>
+                  </Stack>
+                </Box>
+              );
+            })}
           </Stack>
         </DialogContent>
         <DialogActions>
+          <Typography variant="caption" color="text.secondary" sx={{ flex: 1, pl: 2 }}>
+            {t('proposals.undoHint', 'An approval is one change: Undo takes it back.')}
+          </Typography>
           <Button onClick={() => setOpen(false)} sx={{ textTransform: 'none' }}>
             {t('proposals.close', 'Close')}
           </Button>
