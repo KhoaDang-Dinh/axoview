@@ -57,12 +57,25 @@ const LINK_RETRY_KEY = 'axoview.cognito.linkRetry';
 const LINKED_ACCOUNT_ERROR = /already found an entry for username/i;
 
 let assignLocation = (url: string): void => window.location.assign(url);
-/** Test seam: jsdom cannot navigate, so tests capture the authorize URL instead. */
+/** Test seam: jsdom cannot navigate, so tests capture the URLs instead. */
 export function setCognitoNavigatorForTests(fn: (url: string) => void): void {
   assignLocation = fn;
 }
 let activeConfig: CognitoAuthConfig | null = null;
 let refreshPromise: Promise<string | null> | null = null;
+
+// The public landing page at the site root, outside the app's basename.
+// Every app tab of this browser goes there when the session ends: signed out
+// here, in another tab, or expired (owner decision, 2026-11-10).
+const LANDING_URL = '/';
+function goToLanding(): void {
+  assignLocation(LANDING_URL);
+}
+
+/** Drafts belong to the session that made them; wiping never blocks leaving. */
+async function wipeDrafts(): Promise<void> {
+  try { await wipeAllDrafts(); } catch { /* IndexedDB unavailable: nothing stored */ }
+}
 
 function randomBase64Url(size = 32): string {
   const bytes = new Uint8Array(size);
@@ -98,8 +111,24 @@ async function refreshSession(): Promise<string | null> {
         headers: { 'Content-Type': 'application/json' },
         body: '{}'
       });
+      // 401: the session is over (refresh token expired, revoked, or none).
+      // Anything else (502: Cognito unreachable) says nothing about the
+      // session, so it must not send every tab to the landing page.
+      if (response.status !== 401 && !response.ok) {
+        useCognitoSessionStore.getState()._clear('error', 'Could not refresh the sign-in session');
+        return null;
+      }
       if (!response.ok) {
+        const wasSignedIn = useCognitoSessionStore.getState().status === 'signed-in';
         useCognitoSessionStore.getState()._clear('signed-out');
+        if (wasSignedIn) {
+          // The session ended by itself (refresh token expired or revoked).
+          // Every app tab goes to the landing page. Drafts stay: their edits
+          // never reached the server, and the same person signing in again
+          // gets them back (DiagramLifecycleProvider's draft recovery).
+          postToTabs({ type: 'account-session-ended' });
+          goToLanding();
+        }
         return null;
       }
       const body = await response.json();
@@ -218,22 +247,39 @@ export async function signOutCognito(): Promise<void> {
     sessionStorage.removeItem(PROVIDER_KEY);
     sessionStorage.removeItem(LINK_RETRY_KEY);
     useCognitoSessionStore.getState()._clear('signed-out');
-    // Edits saved in this browser but not uploaded (stores/draftStore.ts) go
-    // with the session: the next person at this computer must not find them.
-    // The flush above already uploaded what it could.
-    void wipeAllDrafts();
     // Every other tab of this browser signs out too (CognitoSessionProvider).
     postToTabs({ type: 'account-signed-out' });
+    // Edits saved in this browser but not uploaded (stores/draftStore.ts) go
+    // with the session: the next person at this computer must not find them.
+    // The flush above already uploaded what it could. Wiped before leaving,
+    // so the navigation cannot cut the deletion short.
+    await wipeDrafts();
+    goToLanding();
   }
 }
 
 /**
  * Another tab signed out: the session (its refresh cookie) is gone, so this
- * tab saves what it can and drops its in-memory session too. No server call.
+ * tab saves what it can, drops its in-memory session too and goes to the
+ * landing page, like the tab that signed out. No server call. A tab still
+ * finishing its own sign-in (booting) is left to it.
  */
 export async function signOutFromOtherTab(): Promise<void> {
-  if (useCognitoSessionStore.getState().status !== 'signed-in') return;
-  await runBeforeSignOut();
+  const { status } = useCognitoSessionStore.getState();
+  if (status === 'booting') return;
+  if (status === 'signed-in') await runBeforeSignOut();
   useCognitoSessionStore.getState()._clear('signed-out');
-  void wipeAllDrafts();
+  await wipeDrafts();
+  goToLanding();
+}
+
+/**
+ * Another tab found the session expired: this one leaves for the landing page
+ * too. Nothing to save (the session cannot upload any more) and nothing wiped
+ * (see refreshSession).
+ */
+export function sessionEndedInOtherTab(): void {
+  if (useCognitoSessionStore.getState().status === 'booting') return;
+  useCognitoSessionStore.getState()._clear('signed-out');
+  goToLanding();
 }

@@ -6,6 +6,7 @@ import { dismissBootScreens } from '../utils/bootScreen';
 import {
   beginCognitoSignIn,
   bootstrapCognitoSession,
+  sessionEndedInOtherTab,
   signOutFromOtherTab,
   useCognitoSessionStore
 } from '../stores/cognitoSessionStore';
@@ -65,19 +66,29 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
     return () => { cancelled = true; };
   }, [config, isInitialized, location.key, navigate]);
 
-  // Other tabs of this browser: signing out in one signs out all of them, and
-  // signing in again brings the ones on the sign-in screen back.
+  // Other tabs of this browser (owner decision, 2026-11-10):
+  // - signed in: every tab on the sign-in screen takes the session and goes
+  //   to the app's home (/app), whatever link it was on;
+  // - signed out, or the session expired: every tab goes to the landing page
+  //   (cognitoSessionStore's signOutFromOtherTab / sessionEndedInOtherTab).
   useEffect(() => onTabMessage((message) => {
     if (message.type === 'account-signed-out') {
       void signOutFromOtherTab();
+    } else if (message.type === 'account-session-ended') {
+      sessionEndedInOtherTab();
     } else if (message.type === 'account-signed-in') {
-      if (config && useCognitoSessionStore.getState().status !== 'signed-in') {
-        void bootstrapCognitoSession(config);
-      }
+      const { status } = useCognitoSessionStore.getState();
+      // booting: this tab is finishing a sign-in of its own.
+      if (!config || status === 'signed-in' || status === 'booting') return;
+      void bootstrapCognitoSession(config).then(() => {
+        if (useCognitoSessionStore.getState().status !== 'signed-in') return;
+        rememberSignInReturn('');
+        navigate('/', { replace: true });
+      });
     } else if (message.type === 'drive-signed-out') {
       signOutDriveFromOtherTab();
     }
-  }), [config]);
+  }), [config, navigate]);
 
   const isPublicShare = location.pathname.startsWith('/display/p/');
   const showSignIn =

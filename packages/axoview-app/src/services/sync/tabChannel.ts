@@ -10,6 +10,8 @@
 export type TabMessage =
   | { type: 'account-signed-out' }
   | { type: 'account-signed-in' }
+  // The session expired (refresh refused) in another tab.
+  | { type: 'account-session-ended' }
   | { type: 'drive-signed-out' }
   | { type: 'diagram-deleted'; id: string }
   /**
@@ -51,6 +53,7 @@ function isTabMessage(value: unknown): value is TabMessage {
   switch (m.type) {
     case 'account-signed-out':
     case 'account-signed-in':
+    case 'account-session-ended':
     case 'drive-signed-out':
       return true;
     case 'diagram-deleted':
