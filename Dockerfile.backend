@@ -16,6 +16,17 @@ RUN mkdir -p /data/diagrams && chown -R node:node /app /data/diagrams
 
 USER node
 
+# The release this image was built from (push-images.yml passes them; src/
+# releaseInfo.js serves them to in-cluster callers of /healthz). Last, so a
+# new commit's title does not invalidate the cached layers above. Unset in
+# any other build: /healthz then reports no release.
+ARG AXOVIEW_RELEASE_COMMIT=""
+ARG AXOVIEW_RELEASE_PR=""
+ARG AXOVIEW_RELEASE_TITLE=""
+ENV AXOVIEW_RELEASE_COMMIT=$AXOVIEW_RELEASE_COMMIT \
+    AXOVIEW_RELEASE_PR=$AXOVIEW_RELEASE_PR \
+    AXOVIEW_RELEASE_TITLE=$AXOVIEW_RELEASE_TITLE
+
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

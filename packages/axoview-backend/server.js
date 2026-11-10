@@ -28,6 +28,7 @@ import {
   refreshCognitoSession,
   revokeCognitoSession
 } from './src/cognitoSession.js';
+import { releaseInfoFor } from './src/releaseInfo.js';
 
 dotenv.config();
 
@@ -437,17 +438,21 @@ async function probeStorage() {
   }
 }
 
-app.get('/healthz', async (_req, res) => {
+app.get('/healthz', async (req, res) => {
   const now = Date.now();
   if (now - healthCache.ts > HEALTH_TTL_MS) {
     const probe = await probeStorage();
     healthCache = { ts: now, ...probe };
   }
   if (healthCache.ok) {
+    // The release this image was built from, for the in-cluster release
+    // reporter only (src/releaseInfo.js).
+    const release = releaseInfoFor(req);
     return res.status(200).json({
       ok: true,
       adapter: STORAGE_ADAPTER,
-      storage_writable: STORAGE_ENABLED
+      storage_writable: STORAGE_ENABLED,
+      ...(release ? { release } : {})
     });
   }
   return res.status(503).json({ ok: false, reason: healthCache.reason });
