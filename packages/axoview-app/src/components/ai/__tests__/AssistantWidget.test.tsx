@@ -6,7 +6,7 @@ import { useCognitoSessionStore } from '../../../stores/cognitoSessionStore';
 
 // One storage value per test, the same object on every render (a fresh object
 // per render re-runs the widget's effects).
-let storage: { isInitialized: boolean; runtimeConfig: unknown };
+let storage: { isInitialized: boolean; runtimeConfig: unknown; storage?: unknown; serverStorageAvailable?: boolean };
 jest.mock('../../../providers/AppStorageContext', () => ({
   useAppStorage: () => storage
 }));
@@ -25,6 +25,11 @@ jest.mock('../../../services/apiFetch', () => ({
   apiFetch: (...args: unknown[]) => mockApiFetch(...args)
 }));
 
+const mockPush = jest.fn();
+jest.mock('../../../stores/notificationStore', () => ({
+  notificationStore: { push: (n: unknown) => mockPush(n) }
+}));
+
 const mockDescribe = jest.fn();
 const mockPlan = jest.fn();
 jest.mock('axoview', () => ({
@@ -34,7 +39,9 @@ jest.mock('axoview', () => ({
   }
 }));
 
-type Ai = Partial<{ chatEnabled: boolean; liveChat: boolean; guestEnabled: boolean; diagramContextEnabled: boolean }>;
+type Ai = Partial<{
+  chatEnabled: boolean; liveChat: boolean; guestEnabled: boolean; diagramContextEnabled: boolean; agentWriteEnabled: boolean;
+}>;
 
 function setConfig(ai: Ai) {
   storage = { isInitialized: true, runtimeConfig: { ai: { chatEnabled: true, ...ai } } };
@@ -71,7 +78,8 @@ beforeEach(() => {
   mockPlan.mockReset();
   useCognitoSessionStore.setState({ status: 'signed-out', user: null, accessToken: null, expiresAt: 0, error: null });
   useAssistantStore.setState({ open: false, view: 'chat', messages: [], nextId: 1 });
-  useAssistantPageStore.setState({ readPage: null });
+  useAssistantPageStore.setState({ readPage: null, applyToPage: null, canChangePage: null });
+  mockPush.mockReset();
 });
 
 describe('AssistantWidget', () => {
@@ -211,6 +219,105 @@ describe('AssistantWidget', () => {
       await send('anything');
       expect((await screen.findByRole('alert')).textContent).toMatch(/Open a diagram first/);
       expect(mockApiFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('what Nova may do (an agent on its person\'s account)', () => {
+    const page = { model: { title: 'D', items: [], views: [] }, viewId: 'v1' };
+    const step = (index: number, summary: string, status = 'ready', problem?: string) =>
+      ({ index, status, summary, howTo: 'by hand', manualSection: 'x', nodeIds: [] as string[], ...(problem ? { problem } : {}) });
+
+    function setup({ level = 'proposer', canChange = true } = {}) {
+      setConfig({ liveChat: true, diagramContextEnabled: true, agentWriteEnabled: true });
+      const agent = {
+        agentLevel: jest.fn(async () => level),
+        setAgentLevel: jest.fn(async () => true)
+      };
+      storage = { ...storage, storage: agent, serverStorageAvailable: true };
+      signIn();
+      const applyToPage = jest.fn((ops: unknown[]) => ops.map((_, k) => step(k, `done ${k}`)));
+      useAssistantPageStore.setState({ readPage: () => page as never, applyToPage: applyToPage as never, canChangePage: () => canChange });
+      mockDescribe.mockReturnValue({ page: { id: 'v1', name: 'Page 1' }, nodes: [] });
+      return { agent, applyToPage };
+    }
+
+    async function askForSuggestions(suggestions: unknown[], plan: unknown[]) {
+      mockPlan.mockReturnValue(plan);
+      mockApiFetch.mockResolvedValue(jsonResponse(200, { reply: 'Here.', conversationId: 'c1', sources: [], suggestions }));
+      fireEvent.click(screen.getByLabelText(/Include this page/));
+      await send('improve it');
+      await screen.findByText('Here.');
+    }
+
+    test('off unless the deployment allows agent writes and keeps accounts on the server', () => {
+      setConfig({ liveChat: true, diagramContextEnabled: true });
+      storage = { ...storage, storage: { agentLevel: jest.fn(async () => 'proposer') }, serverStorageAvailable: true };
+      signIn();
+      useAssistantPageStore.setState({ readPage: () => page as never, canChangePage: () => true });
+      const { unmount } = renderOpen();
+      expect(document.querySelector('[data-axoview-id="ai-agent-level"]')).toBeNull();
+      unmount();
+
+      setConfig({ liveChat: true, diagramContextEnabled: true, agentWriteEnabled: true });
+      storage = { ...storage, storage: { agentLevel: jest.fn(async () => 'proposer') }, serverStorageAvailable: false };
+      renderOpen();
+      expect(document.querySelector('[data-axoview-id="ai-agent-level"]')).toBeNull();
+    });
+
+    test('Read only (the default): suggestions stay a checklist to do by hand', async () => {
+      const { applyToPage } = setup({ level: 'viewer' });
+      renderOpen();
+      await askForSuggestions([{ op: 'add_node', name: 'Web' }], [step(0, 'Add “Web”')]);
+      expect(screen.getByText(/make them yourself/)).toBeTruthy();
+      expect(screen.queryByLabelText('Approve: Add “Web”')).toBeNull();
+      expect(applyToPage).not.toHaveBeenCalled();
+    });
+
+    test('"Changes need my approval": approving a step makes it on the page, once, and it shows as done', async () => {
+      const { agent, applyToPage } = setup();
+      renderOpen();
+      await waitFor(() => expect(agent.agentLevel).toHaveBeenCalled());
+      const suggestions = [{ op: 'add_node', name: 'Web' }, { op: 'add_node', name: 'Db' }];
+      await askForSuggestions(suggestions, [step(0, 'Add “Web”'), step(1, 'Add “Db”')]);
+      // After the approval, the rest is re-checked against the changed page.
+      mockPlan.mockReturnValue([step(0, 'Add “Db”')]);
+      fireEvent.click(await screen.findByLabelText('Approve: Add “Web”'));
+      expect(applyToPage).toHaveBeenCalledWith([suggestions[0]], 'v1');
+      expect(mockPlan).toHaveBeenLastCalledWith(page.model, 'v1', [suggestions[1]]);
+      expect(mockPush).toHaveBeenCalledWith({ severity: 'success', message: 'Change approved and made' });
+      expect(document.querySelector('[data-axoview-id="ai-suggestion-0"]')?.getAttribute('data-status')).toBe('applied');
+      expect(screen.getByLabelText('Approve: Add “Db”')).toBeTruthy();
+    });
+
+    test('a step that no longer applies is not made, and says why', async () => {
+      const { applyToPage } = setup();
+      applyToPage.mockReturnValueOnce([step(0, 'Connect', 'not_applicable', 'No item named “Cache”')]);
+      renderOpen();
+      await askForSuggestions([{ op: 'connect', from: { name: 'Web' }, to: { name: 'Cache' } }], [step(0, 'Connect')]);
+      fireEvent.click(await screen.findByLabelText('Approve: Connect'));
+      expect(mockPush).toHaveBeenCalledWith({ severity: 'error', message: 'Not changed: No item named “Cache”' });
+      expect(document.querySelector('[data-axoview-id="ai-suggestion-0"]')?.getAttribute('data-status')).toBe('ready');
+    });
+
+    test('on a diagram the person may only view, Nova is Read only too', async () => {
+      const { applyToPage } = setup({ canChange: false });
+      renderOpen();
+      expect(await screen.findByText(/Read only here, like you/)).toBeTruthy();
+      await askForSuggestions([{ op: 'add_node', name: 'Web' }], [step(0, 'Add “Web”')]);
+      expect(screen.queryByLabelText('Approve: Add “Web”')).toBeNull();
+      expect(applyToPage).not.toHaveBeenCalled();
+    });
+
+    test('changing the level saves it for the account; a failed save goes back, in red', async () => {
+      const { agent } = setup({ level: 'viewer' });
+      agent.setAgentLevel.mockResolvedValueOnce(false);
+      renderOpen();
+      await waitFor(() => expect(agent.agentLevel).toHaveBeenCalled());
+      fireEvent.mouseDown(screen.getByLabelText('What Nova may do'));
+      fireEvent.click(await screen.findByText('Changes need my approval'));
+      await waitFor(() => expect(agent.setAgentLevel).toHaveBeenCalledWith('proposer'));
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith({ severity: 'error', message: "Couldn't change what Nova may do: try again" }));
+      expect(screen.getByLabelText('What Nova may do').textContent).toContain('Read only');
     });
   });
 });

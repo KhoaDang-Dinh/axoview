@@ -69,7 +69,7 @@ it('lists a diagram shared with this account with its owner', async () => {
 
 it('adding a person: success marks the diagram shared; a refusal carries the reason', async () => {
   const p = serverProvider();
-  const member = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'admin', addedAt: '2026-11-10T00:00:00Z' };
+  const member = { sub: 'bob', email: 'bob@example.com', role: 'admin', addedAt: '2026-11-10T00:00:00Z' };
   const calls = script([
     response(201, { member }),
     response(404, { error: 'No Axoview account uses that email', reason: 'no-account' })
@@ -90,28 +90,28 @@ it('adding a person with the network down: reason "error"', async () => {
 
 it('lists and removes people', async () => {
   const p = serverProvider();
-  const member = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'viewer', addedAt: '2026-11-10T00:00:00Z' };
+  const member = { sub: 'bob', email: 'bob@example.com', role: 'viewer', addedAt: '2026-11-10T00:00:00Z' };
   const calls = script([response(200, { members: [member] }), response(200, { removed: 'bob' })]);
   expect(await p.listMembers('d1')).toEqual([member]);
   await p.removeMember('d1', 'bob');
   expect(calls[1]).toMatchObject({ url: `${BASE}/api/diagrams/d1/members/bob`, method: 'DELETE' });
 });
 
-it('changes a level; an agent raised to Full admin is refused with its reason', async () => {
+it('changes a level; an unknown level is refused with its reason', async () => {
   const p = serverProvider();
-  const member = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'admin', addedAt: '2026-11-10T00:00:00Z' };
+  const member = { sub: 'bob', email: 'bob@example.com', role: 'admin', addedAt: '2026-11-10T00:00:00Z' };
   const calls = script([
     response(200, { member }),
-    response(400, { error: 'never Full admin', reason: 'agent-not-admin' })
+    response(400, { error: 'Unknown permission level', reason: 'invalid-role' })
   ]);
   expect(await p.setMemberRole('d1', 'bob', 'admin')).toEqual({ ok: true, member });
   expect(calls[0]).toMatchObject({ url: `${BASE}/api/diagrams/d1/members/bob`, method: 'PATCH', body: { role: 'admin' } });
-  expect(await p.setMemberRole('d1', 'agent-7', 'admin')).toMatchObject({ ok: false, reason: 'agent-not-admin' });
+  expect(await p.setMemberRole('d1', 'bob', 'owner' as never)).toMatchObject({ ok: false, reason: 'invalid-role' });
 });
 
 it('lists proposals and approves one (with force when asked)', async () => {
   const p = serverProvider();
-  const waiting = [{ id: 'p1', by: { sub: 'a', email: null, kind: 'agent' }, createdAt: 'x', summary: { items: 1, pages: 1, connectors: 0 }, stale: true }];
+  const waiting = [{ id: 'p1', by: { sub: 'me', agent: 'claude-code' }, createdAt: 'x', summary: { items: 1, pages: 1, connectors: 0 }, stale: true }];
   const calls = script([
     response(200, { proposals: waiting }),
     response(409, { error: 'changed', reason: 'stale' }),
@@ -123,3 +123,18 @@ it('lists proposals and approves one (with force when asked)', async () => {
   expect(calls[2]).toMatchObject({ url: `${BASE}/api/diagrams/d1/proposals/p1/approve`, method: 'POST', body: { force: true } });
 });
 
+it("reads and sets what this person's agent may do; Read only when unknown or unreachable", async () => {
+  const p = serverProvider();
+  const calls = script([
+    response(200, { level: 'proposer' }),
+    response(200, { level: 'viewer' }),
+    response(400, { reason: 'invalid-level' }),
+    response(500, {})
+  ]);
+  expect(await p.agentLevel()).toBe('proposer');
+  expect(await p.setAgentLevel('viewer')).toBe(true);
+  expect(calls[1]).toMatchObject({ url: `${BASE}/api/agent`, method: 'PUT', body: { level: 'viewer' } });
+  expect(await p.setAgentLevel('admin' as never)).toBe(false);
+  expect(await p.agentLevel()).toBe('viewer');
+  expect(await p.agentLevel()).toBe('viewer'); // network down
+});

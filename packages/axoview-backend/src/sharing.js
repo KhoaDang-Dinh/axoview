@@ -5,29 +5,33 @@
  * The diagram stays in its owner's workspace. Small JSON objects, kept through
  * the storage adapter (S3 objects on AWS, files on fs), record who has it:
  *   - owner's workspace:
- *       sharing/members/<diagramId>              { members: [{ sub, email, kind, role, addedAt }] }
+ *       sharing/members/<diagramId>              { members: [{ sub, email, role, addedAt }] }
  *       sharing/proposals/<diagramId>            { proposals: [{ id, by, baseStamp, createdAt, status, ... }] }
  *       sharing/proposal-docs/<diagramId>/<pid>  the proposed document
  *   - each member's workspace:
  *       sharing/inbox                            { diagrams: [{ id, owner, ownerEmail, role, addedAt }] }
  *
- * Permission levels (owner decision 2026-11-10):
+ * Permission levels for people (owner decisions 2026-11-10):
  *   viewer   "Read only": opens the diagram in the read-only viewer (the same
  *            one a public link uses); every write is refused.
- *   proposer "Change needs approval": for AI agents. A save becomes a
- *            proposal that the owner or an admin approves or rejects.
  *   admin    "Full admin": everything the owner can do, including adding
  *            people and trashing or deleting the diagram.
- * An agent may hold viewer or proposer, never admin. People may hold any level
- * (the app offers them viewer and admin only, for now).
+ *
+ * AI agents are not members. An agent works on its person's account, and that
+ * person is its one admin (ADR 0057 addendum 3): it can never do more than
+ * its person can on a diagram (agentLevelOn), and the changes it proposes wait
+ * for that person alone. Proposals are stored here for agents that act
+ * through the API (ADR 0052's MCP sign-in); the in-app assistant's changes are
+ * approved in the chat and need no storage.
  *
  * Each object is read, changed and written back. Two writers in the same
  * instant could lose one entry; repeating the action repairs it. Acceptable
  * for this project; the conditional-write version is ADR 0057's DynamoDB layout.
  */
 
-export const ROLES = Object.freeze(['viewer', 'proposer', 'admin']);
-export const KINDS = Object.freeze(['person', 'agent']);
+export const ROLES = Object.freeze(['viewer', 'admin']);
+/** What a person lets their agent do: "Read only" or "Changes need my approval". */
+export const AGENT_LEVELS = Object.freeze(['viewer', 'proposer']);
 // Lookups a manager may make per minute (ADR 0057: "no account" reveals
 // whether an address has one, so it is rate-limited).
 export const LOOKUPS_PER_MINUTE = 20;
@@ -57,14 +61,20 @@ export function normalizeEmail(email) {
   return EMAIL_RE.test(value) ? value : null;
 }
 
-/** A role this kind of member may hold; throws a 400 otherwise. */
-export function assertRole(role, kind = 'person') {
+/** A permission level a person may hold; throws a 400 otherwise. */
+export function assertRole(role) {
   if (!ROLES.includes(role)) throw new SharingError(400, 'invalid-role', 'Unknown permission level');
-  if (!KINDS.includes(kind)) throw new SharingError(400, 'invalid-kind', 'Unknown kind of member');
-  if (kind === 'agent' && role === 'admin') {
-    throw new SharingError(400, 'agent-not-admin', 'An AI agent can be Read only or Change needs approval, never Full admin');
-  }
   return role;
+}
+
+/**
+ * What an agent may do on a diagram: its person's setting, never above the
+ * person. `personRole` is 'owner', 'admin', 'viewer', or null (no access).
+ * Returns 'proposer' (changes wait for the person), 'viewer', or null.
+ */
+export function agentLevelOn(personRole, setting) {
+  if (personRole !== 'owner' && personRole !== 'admin') return personRole === 'viewer' ? 'viewer' : null;
+  return setting === 'proposer' ? 'proposer' : 'viewer';
 }
 
 async function readJson(adapter, key, fallback) {
@@ -205,12 +215,10 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
       throw new SharingError(404, 'not-found', 'Diagram not found');
     },
 
-    /** The people and agents a diagram is shared with. */
+    /** The people a diagram is shared with. */
     async listMembers(owner, id) {
       await liveDiagram(owner, id);
-      return (await readMembers(owner, id)).map(({ sub, email, kind, role, addedAt }) => ({
-        sub, email, kind: kind || 'person', role, addedAt
-      }));
+      return (await readMembers(owner, id)).map(({ sub, email, role, addedAt }) => ({ sub, email, role, addedAt }));
     },
 
     /** Members to tell about a change, with their roles (for fan-out and notices). */
@@ -227,7 +235,7 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
     async addMember(owner, id, rawEmail, role = 'viewer', manager = owner) {
       const email = normalizeEmail(rawEmail);
       if (!email) throw new SharingError(400, 'invalid-email', 'Enter a valid email address');
-      assertRole(role, 'person');
+      assertRole(role);
       await liveDiagram(owner, id);
       countLookup(manager);
       const user = await findUserByEmail(email);
@@ -238,7 +246,7 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
       if (list.some((m) => m.sub === user.sub)) {
         throw new SharingError(409, 'already-shared', `Already shared with ${email}`);
       }
-      const member = { sub: user.sub, email, kind: 'person', role, addedAt: iso() };
+      const member = { sub: user.sub, email, role, addedAt: iso() };
       await writeMembers(owner, id, [...list, member]);
       const ownerUser = await findUserBySub(owner).catch(() => null);
       await updateInbox(user.sub, (theirs) => [
@@ -254,7 +262,7 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
       const list = await readMembers(owner, id);
       const member = list.find((m) => m.sub === sub);
       if (!member) throw new SharingError(404, 'not-a-member', 'Not shared with that person');
-      assertRole(role, member.kind || 'person');
+      assertRole(role);
       const updated = { ...member, role };
       await writeMembers(owner, id, list.map((m) => (m.sub === sub ? updated : m)));
       await updateInbox(sub, (theirs) => theirs.map((d) => (d.id === id && d.owner === owner ? { ...d, role } : d)));
@@ -291,18 +299,19 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
     },
 
     // -------------------------------------------------------------------------
-    // Proposals: saves made under "Change needs approval"
+    // Proposals: changes an agent made under "Changes need my approval"
     // -------------------------------------------------------------------------
 
     /**
-     * Store a proposed document. `baseStamp`: the version the proposer edited
+     * Store a proposed document. `by`: the person the agent works for (`sub`)
+     * and which agent (`agent`). `baseStamp`: the version the agent edited
      * (`v<n>`), else the diagram's state now. Returns the proposal record.
      */
     async propose(owner, id, by, document, baseStamp) {
       const meta = await liveDiagram(owner, id);
       const proposal = {
         id: randomId(),
-        by: { sub: by.sub, email: by.email || null, kind: by.kind || 'person' },
+        by: { sub: by.sub, agent: by.agent || null },
         baseStamp: baseStamp || meta.stamp,
         createdAt: iso(),
         status: 'pending',
@@ -314,22 +323,26 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
       return proposal;
     },
 
-    /** Proposals waiting for a decision, newest first, each marked stale or not. */
-    async pendingProposals(owner, id) {
+    /**
+     * Proposals waiting for this person (their own agents' only), newest
+     * first, each marked stale or not.
+     */
+    async pendingProposals(owner, id, sub) {
       const meta = await liveDiagram(owner, id);
       return (await readProposals(owner, id))
-        .filter((p) => p.status === 'pending')
+        .filter((p) => p.status === 'pending' && p.by?.sub === sub)
         .map((p) => ({ ...p, stale: p.baseStamp !== meta.stamp }));
     },
 
     /**
-     * Take a pending proposal for approval: its record and document. Refused
-     * when the diagram changed since it was proposed, unless `force`.
+     * Take a pending proposal for approval by `sub`, the person whose agent
+     * made it: its record and document. Refused when the diagram changed since
+     * it was proposed, unless `force`.
      */
-    async proposalToApply(owner, id, pid, { force = false } = {}) {
+    async proposalToApply(owner, id, pid, sub, { force = false } = {}) {
       const meta = await liveDiagram(owner, id);
       const proposal = (await readProposals(owner, id)).find((p) => p.id === pid);
-      if (!proposal || proposal.status !== 'pending') {
+      if (!proposal || proposal.status !== 'pending' || proposal.by?.sub !== sub) {
         throw new SharingError(404, 'no-proposal', 'That proposal is no longer waiting');
       }
       if (!force && proposal.baseStamp !== meta.stamp) {
@@ -340,11 +353,11 @@ export function createSharing({ adapterFor, findUserByEmail, findUserBySub = asy
       return { proposal, document };
     },
 
-    /** Mark a proposal approved or rejected, and drop its document. */
+    /** `by` (the agent's person) marks a proposal approved or rejected; its document goes. */
     async resolveProposal(owner, id, pid, status, by) {
       const list = await readProposals(owner, id);
       const proposal = list.find((p) => p.id === pid);
-      if (!proposal || proposal.status !== 'pending') {
+      if (!proposal || proposal.status !== 'pending' || proposal.by?.sub !== by) {
         throw new SharingError(404, 'no-proposal', 'That proposal is no longer waiting');
       }
       const resolved = { ...proposal, status, resolvedBy: by, resolvedAt: iso() };

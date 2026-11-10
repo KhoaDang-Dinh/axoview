@@ -9,6 +9,7 @@ export type {
   AxoviewProps,
   InitialData,
   AxoviewRef,
+  AgentStepOutcome,
   LoadOptions,
   IconUsageReport,
   IconUsageScan

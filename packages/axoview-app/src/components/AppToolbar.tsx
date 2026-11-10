@@ -132,10 +132,10 @@ export function AppToolbar() {
   // Sharing by email (ADR 0057): accounts and server storage, not Drive.
   const peopleSharing = !!runtimeConfig?.sharing && !driveActive && remoteStorageActive;
   // This account's level on the open diagram (the server's X-Axoview-Role):
-  // a Full admin shares like the owner; Read only and "needs approval"
-  // members see a note instead of the link and the email field.
+  // a Full admin shares like the owner; a Read only member sees a note
+  // instead of the link and the email field.
   const myRole = peopleSharing && currentDiagramId ? storage?.sharedRole?.(currentDiagramId) : undefined;
-  const sharedWithYou = myRole === 'viewer' || myRole === 'proposer';
+  const sharedWithYou = myRole === 'viewer';
 
   useEffect(() => {
     shareReqRef.current++; // invalidate any in-flight share fetch for the old id
@@ -647,15 +647,10 @@ export function AppToolbar() {
             </Stack>
             {sharedWithYou ? (
               <Typography variant="body2" color="text.secondary" data-axoview-id="share-shared-with-you">
-                {myRole === 'viewer'
-                  ? t(
-                      'share.people.sharedWithYouViewer',
-                      'Shared with you as Read only. Only its owner or a Full admin can share it.'
-                    )
-                  : t(
-                      'share.people.sharedWithYouProposer',
-                      'Your changes to this diagram wait for the owner\'s approval. Only its owner or a Full admin can share it.'
-                    )}
+                {t(
+                  'share.people.sharedWithYouViewer',
+                  'Shared with you as Read only. Only its owner or a Full admin can share it.'
+                )}
               </Typography>
             ) : (
             <>

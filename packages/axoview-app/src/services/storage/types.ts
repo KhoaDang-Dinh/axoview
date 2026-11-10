@@ -53,29 +53,39 @@ export interface DiagramMeta {
 }
 
 /**
- * Permission levels on someone else's diagram (owner decision 2026-11-10):
- * viewer "Read only" (opens in the read-only viewer), proposer "Change needs
- * approval" (AI agents: saves become proposals), admin "Full admin" (the
- * owner's powers). Agents hold viewer or proposer only.
+ * Permission levels on someone else's diagram (owner decisions 2026-11-10):
+ * viewer "Read only" (opens in the read-only viewer), admin "Full admin" (the
+ * owner's powers). Only people are members: an AI agent works on its
+ * person's account (AgentLevel).
  */
-export type MemberRole = 'viewer' | 'proposer' | 'admin';
+export type MemberRole = 'viewer' | 'admin';
+
+/**
+ * What a person lets their AI agent do, set once for the account: viewer
+ * "Read only" (it suggests, never changes), proposer "Changes need my
+ * approval". Never above the person on any diagram.
+ */
+export type AgentLevel = 'viewer' | 'proposer';
 
 /** This account's role on a diagram it has open: its own, or a member's. */
 export type DiagramRole = 'owner' | MemberRole;
 
-/** A person or agent a diagram is shared with, as its managers see them. */
+/** A person a diagram is shared with, as its managers see them. */
 export interface DiagramMember {
   sub: string;
   email: string | null;
-  kind: 'person' | 'agent';
   role: MemberRole;
   addedAt: string;
 }
 
-/** A save made under "Change needs approval", waiting for the owner or an admin. */
+/**
+ * A change an agent made through the API under "Changes need my approval",
+ * waiting for its person (the account that lists it).
+ */
 export interface Proposal {
   id: string;
-  by: { sub: string; email: string | null; kind: 'person' | 'agent' };
+  /** The person the agent works for (this account), and which agent. */
+  by: { sub: string; agent: string | null };
   createdAt: string;
   summary: { items: number; pages: number; connectors: number };
   /** The diagram changed since it was proposed: approving overwrites that. */
@@ -167,6 +177,11 @@ export interface StorageProvider {
   addMember?(id: string, email: string, role?: MemberRole): Promise<AddMemberResult>;
   setMemberRole?(id: string, sub: string, role: MemberRole): Promise<AddMemberResult>;
   removeMember?(id: string, sub: string): Promise<void>;
+  // What this person lets their AI agent do, set once for the account
+  // (ADR 0057 addendum 3). Read only when unknown or unreachable.
+  agentLevel?(): Promise<AgentLevel>;
+  /** Saves the level; false when the server refused or could not be reached. */
+  setAgentLevel?(level: AgentLevel): Promise<boolean>;
   // Proposals ("Change needs approval"), for the owner and Full admins.
   listProposals?(id: string): Promise<Proposal[]>;
   resolveProposal?(id: string, proposalId: string, decision: 'approve' | 'reject', force?: boolean): Promise<ProposalDecision>;

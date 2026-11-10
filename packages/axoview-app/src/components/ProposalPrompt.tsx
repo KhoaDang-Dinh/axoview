@@ -1,11 +1,14 @@
 /**
- * Changes waiting for approval (ADR 0057; owner decision 2026-11-10): a save
- * made under "Change needs approval" (AI agents) is stored as a proposal. The
- * owner and Full admins of the open diagram see a small "N to approve" chip
- * in the toolbar; it opens a list where each proposal is approved (saved like
- * any save, so everyone who has the diagram gets it) or rejected. A proposal
- * made before the diagram last changed is marked: approving it replaces those
- * changes, so it takes a second, explicit "Apply anyway".
+ * Changes waiting for approval (ADR 0057 addendum 3, owner decisions
+ * 2026-11-10): an AI agent works on its person's account, and when that
+ * person set it to "Changes need my approval", a change it makes through the
+ * API (ADR 0052's MCP sign-in) is stored as a proposal for that person alone.
+ * They see a small "N to approve" chip in the toolbar of the open diagram; it
+ * opens a list where each proposal is approved (saved like any save, so
+ * everyone who has the diagram gets it) or rejected. A proposal made before
+ * the diagram last changed is marked: approving it replaces those changes, so
+ * it takes a second, explicit "Apply anyway". (The in-app assistant's
+ * changes are approved in the chat instead: components/ai.)
  *
  * The list refreshes when the diagram opens and whenever the sync stream says
  * a proposal was made or decided (hooks/useRealtimeSync.ts).
@@ -25,6 +28,7 @@ import {
 } from '@mui/material';
 import { notificationStore } from '../stores/notificationStore';
 import { PROPOSALS_CHANGED_EVENT } from '../hooks/useRealtimeSync';
+import { findAiConnector } from '../stores/assistantStore';
 import type { DiagramRole, Proposal, StorageProvider } from '../services/storage/types';
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -44,12 +48,12 @@ export function ProposalPrompt({
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  // Known reviewers check on open. Anyone not known to be Read only or
-  // "needs approval" (an owner whose diagram was unshared when it opened has
-  // no role yet) checks when the sync stream announces a proposal: the
-  // server only announces them to the owner and Full admins.
+  // Those who may change the diagram check on open. Anyone not known to be
+  // Read only (an owner whose diagram was unshared when it opened has no role
+  // yet) checks when the sync stream announces a proposal: the server only
+  // announces one to the person whose agent made it.
   const reviews = role === 'owner' || role === 'admin';
-  const mayReview = role !== 'viewer' && role !== 'proposer';
+  const mayReview = role !== 'viewer';
   // Proposals already announced with a pop-up, so each arrives once.
   const announcedRef = useRef<Set<string>>(new Set());
   // Read through a ref: the list refreshes on diagram and sync changes only,
@@ -126,8 +130,12 @@ export function ProposalPrompt({
 
   if (!mayReview || proposals.length === 0) return null;
 
-  const who = (p: Proposal) =>
-    p.by.email || (p.by.kind === 'agent' ? t('proposals.agent', 'An AI agent') : t('proposals.someone', 'Someone'));
+  const who = (p: Proposal) => {
+    const client = findAiConnector(p.by.agent ?? undefined);
+    return client
+      ? t('proposals.yourAgentNamed', { name: client.label, defaultValue: `Your agent (${client.label})` })
+      : t('proposals.yourAgent', 'Your AI agent');
+  };
 
   return (
     <>

@@ -4,7 +4,9 @@
  * level (Read only by default, or Full admin), a green pop-up on success
  * (field cleared, person listed), a red one on every failure (email kept),
  * changing a level, removing a person, the note on a diagram shared with you
- * as Read only, and approving a change made under "Change needs approval".
+ * as Read only, and approving a change your own agent made through the API
+ * under "Changes need my approval" (agents are not members: ADR 0057
+ * addendum 3; the in-app assistant's approvals are agent-approval.spec.ts).
  *
  * The API is scripted (helpers/mockApi.ts) as a signed-in server-storage
  * deployment with sharing on. The two-person flow against the real backend
@@ -22,9 +24,9 @@ const DIAGRAM = {
   views: [{ id: 'p1', name: 'Page 1', items: [], connectors: [], rectangles: [], textBoxes: [] }],
   lastModified: '2026-11-10T00:00:00.000Z'
 };
-const BOB = { sub: 'bob-2', email: 'bob@example.com', kind: 'person', role: 'viewer', addedAt: '2026-11-10T00:00:00.000Z' };
+const BOB = { sub: 'bob-2', email: 'bob@example.com', role: 'viewer', addedAt: '2026-11-10T00:00:00.000Z' };
 
-type Shared = { state: 'by-you' | 'with-you'; role: 'owner' | 'viewer' | 'proposer' | 'admin' } | null;
+type Shared = { state: 'by-you' | 'with-you'; role: 'owner' | 'viewer' | 'admin' } | null;
 
 async function boot(page: Page, context: BrowserContext, baseURL: string, shared: Shared) {
   const origin = new URL(baseURL).origin;
@@ -163,10 +165,10 @@ test('a Full admin gets the whole dropdown, like the owner', async ({ page, cont
   await expect(byAxoviewId(page, 'share-shared-with-you')).toHaveCount(0);
 });
 
-test('a change waiting for approval: the chip opens it, Approve saves it', async ({ page, context, baseURL }) => {
+test('a change your agent made through the API waits for you: the chip opens it, Approve saves it', async ({ page, context, baseURL }) => {
   const proposal = {
     id: 'p1',
-    by: { sub: 'agent-7', email: null, kind: 'agent' },
+    by: { sub: 'alice-1', agent: 'claude-code' },
     createdAt: '2026-11-10T07:00:00.000Z',
     summary: { items: 3, pages: 1, connectors: 1 },
     stale: false
@@ -178,7 +180,7 @@ test('a change waiting for approval: the chip opens it, Approve saves it', async
   const chip = byAxoviewId(page, 'proposals-chip');
   await expect(chip).toHaveText('1 to approve', { timeout: 20_000 });
   await chip.click();
-  await expect(byAxoviewId(page, 'proposal')).toContainText('An AI agent');
+  await expect(byAxoviewId(page, 'proposal')).toContainText('Your agent (Claude Code)');
   await expect(byAxoviewId(page, 'proposal')).toContainText('Proposes 3 items, 1 connector on 1 page');
   await byAxoviewId(page, 'proposal-approve').click();
   await expect(toast(page, 'success')).toContainText('Change approved and saved');
@@ -231,12 +233,4 @@ test('shared with you as Read only: an editor link opens the read-only viewer', 
   await page.goto('/app/d/d1');
   await expect.poll(() => new URL(page.url()).pathname, { timeout: 20_000 }).toBe('/app/display/d1');
   await expect(byAxoviewId(page, 'toolbar-share')).toHaveCount(0);
-});
-
-test('shared with you under "Change needs approval": the dropdown says so, with no link and no email field', async ({ page, context, baseURL }) => {
-  const mock = await boot(page, context, baseURL!, { state: 'with-you', role: 'proposer' });
-  await byAxoviewId(page, 'toolbar-share').click();
-  await expect(byAxoviewId(page, 'share-shared-with-you')).toContainText("wait for the owner's approval");
-  await expect(byAxoviewId(page, 'share-email-input')).toHaveCount(0);
-  expect(mock.callsTo('POST /api/diagrams/d1/share')).toHaveLength(0);
 });

@@ -9,6 +9,7 @@ import {
 import type {
   AddMemberResult,
   DiagramMember,
+  AgentLevel,
   DiagramRole,
   MemberRole,
   Proposal,
@@ -97,7 +98,7 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
 /** Under the browsers' 64 KB keepalive budget, with room for another request. */
 const KEEPALIVE_MAX_BYTES = 48_000;
 
-const MEMBER_ROLES: readonly string[] = ['viewer', 'proposer', 'admin'];
+const MEMBER_ROLES: readonly string[] = ['viewer', 'admin'];
 const DIAGRAM_ROLES: readonly string[] = ['owner', ...MEMBER_ROLES];
 
 /** A listing row's `shared` field (a diagram someone shared with this account). */
@@ -925,6 +926,33 @@ export class LocalStorageProvider implements StorageProvider {
       return { ok: true, member: ((await response.json()) as { member: DiagramMember }).member };
     } catch {
       return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async agentLevel(): Promise<AgentLevel> {
+    if (!this.usingServer) return 'viewer';
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/agent`, { signal: timeoutSignal(10000) });
+      if (!response.ok) return 'viewer';
+      const { level } = (await response.json()) as { level?: unknown };
+      return level === 'proposer' ? 'proposer' : 'viewer';
+    } catch {
+      return 'viewer';
+    }
+  }
+
+  async setAgentLevel(level: AgentLevel): Promise<boolean> {
+    if (!this.usingServer) return false;
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/agent`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level }),
+        signal: timeoutSignal(10000)
+      });
+      return response.ok;
+    } catch {
+      return false;
     }
   }
 

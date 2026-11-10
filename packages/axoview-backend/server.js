@@ -30,6 +30,7 @@ import {
 } from './src/cognitoSession.js';
 import { releaseInfoFor } from './src/releaseInfo.js';
 import { createSharing, SharingError } from './src/sharing.js';
+import { createAgentSettings } from './src/agentSettings.js';
 import { createCognitoDirectory } from './src/cognitoDirectory.js';
 
 dotenv.config();
@@ -292,7 +293,9 @@ routeEnv.SHARING_ENABLED = !!sharing;
 // the folder a diagram sits in belongs to the owner's own file tree.
 const OWNER_FOLDER_ROUTES = new Set(['PATCH /api/diagrams/:id/move']);
 const READ_ROUTES = new Set(['GET /api/diagrams/:id']);
-const SAVE_ROUTE = 'PUT /api/diagrams/:id';
+// What each person lets their AI agents do (src/agentSettings.js): needs a
+// signed-in person's workspace, with or without sharing.
+const agentSettings = STORAGE_ENABLED ? createAgentSettings({ adapterFor: workspaceAdapter }) : null;
 
 // Realtime multi-device sync (src/syncCursor.js): every write bumps the
 // workspace's change cursor; /api/sync/events streams it to the other devices.
@@ -424,8 +427,7 @@ async function publishChange(req, route, result, target) {
 /**
  * The storage a request acts on, and the caller's role there: their own
  * workspace ('owner'), or for a diagram shared with them its owner's, with
- * what their permission level allows (src/sharing.js). A save under "Change
- * needs approval" is marked `propose`: it becomes a proposal, not a write.
+ * what their permission level allows (src/sharing.js).
  */
 async function requestTarget(req) {
   if (!req.user?.sub) return { adapter, owner: null, shared: false, role: null };
@@ -443,15 +445,7 @@ async function requestTarget(req) {
     }
     return target;
   }
-  if (access.role === 'proposer' && route === SAVE_ROUTE) return { ...target, propose: true };
-  throw new SharingError(403, access.role === 'viewer' ? 'view-only' : 'needs-approval',
-    access.role === 'viewer' ? 'You can only view this diagram' : 'Your changes need the owner\'s approval');
-}
-
-/** Owner and admins of a diagram: who reviews proposals. */
-async function reviewers(owner, id) {
-  const roles = sharing ? await sharing.memberRoles(owner, id).catch(() => []) : [];
-  return [owner, ...roles.filter((m) => m.role === 'admin').map((m) => m.sub)];
+  throw new SharingError(403, 'view-only', 'You can only view this diagram');
 }
 
 async function notify(workspaces, change) {
@@ -464,19 +458,6 @@ async function notify(workspaces, change) {
   }
 }
 
-/** A save under "Change needs approval": stored as a proposal, reviewers told. */
-async function proposeSave(req, target) {
-  const proposal = await sharing.propose(
-    target.owner,
-    req.params.id,
-    { sub: req.user.sub, email: req.user.email || null, kind: 'person' },
-    req.body,
-    typeof makeCtx(req).ifMatch === 'number' ? `v${makeCtx(req).ifMatch}` : undefined
-  );
-  await notify(await reviewers(target.owner, req.params.id), { kind: 'proposal', action: 'create', id: req.params.id });
-  return { status: 202, body: { pending: true, proposal } };
-}
-
 function adapt(handler, { requireStorage = true, sync = null } = {}) {
   return async (req, res) => {
     if (requireStorage && !STORAGE_ENABLED) {
@@ -484,10 +465,10 @@ function adapt(handler, { requireStorage = true, sync = null } = {}) {
     }
     try {
       const target = await requestTarget(req);
-      const result = target.propose ? await proposeSave(req, target) : await handler(target.adapter, makeCtx(req));
+      const result = await handler(target.adapter, makeCtx(req));
       // `sync: false`: a write that changed nothing (an unchanged save) has
       // nothing to tell the other devices.
-      if (sync && !target.propose && result.sync !== false && result.status >= 200 && result.status < 300) {
+      if (sync && result.sync !== false && result.status >= 200 && result.status < 300) {
         await publishChange(req, sync, result, target);
       }
       // A diagram other people have: the app uploads its saves at once
@@ -771,25 +752,30 @@ app.delete('/api/diagrams/:id/members/:sub', sharingRoute(async (req) => {
   return { status: 200, body: { removed: req.params.sub } };
 }));
 
-// Proposals: saves made under "Change needs approval" (AI agents). The owner
-// and Full admins see them and approve or reject; approving saves the
-// proposed document like any save, so everyone who has the diagram gets it.
+// Proposals: changes an AI agent made under "Changes need my approval"
+// (ADR 0057 addendum 3). Only the agent's own person sees and decides them,
+// and only while they may change the diagram (its owner or a Full admin);
+// approving saves the proposed document like any save, so everyone who has
+// the diagram gets it. Agents that act through the API (ADR 0052's MCP
+// sign-in) make them; the in-app assistant is approved in the chat instead.
 app.get('/api/diagrams/:id/proposals', sharingRoute(async (req) => {
   const owner = await sharing.managedBy(req.user.sub, req.params.id);
-  return { status: 200, body: { proposals: await sharing.pendingProposals(owner, req.params.id) } };
+  return { status: 200, body: { proposals: await sharing.pendingProposals(owner, req.params.id, req.user.sub) } };
 }));
 app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req) => {
   const id = req.params.id;
   const owner = await sharing.managedBy(req.user.sub, id);
   if (!SHARING_ID_RE.test(req.params.pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
-  const { proposal, document } = await sharing.proposalToApply(owner, id, req.params.pid, { force: req.body?.force === true });
+  const { proposal, document } = await sharing.proposalToApply(owner, id, req.params.pid, req.user.sub, {
+    force: req.body?.force === true
+  });
   const ownerAdapter = workspaceAdapter(owner);
   const version = ownerAdapter.getDiagramVersion ? await ownerAdapter.getDiagramVersion(id) : null;
   const ctx = { ...makeCtx(req), params: { id }, body: document, ifMatch: version ?? undefined };
   const saved = await routes.saveDiagram(ownerAdapter, ctx);
   await publishChange({ ...req, method: 'PUT', params: { id }, body: document, headers: {} }, '/api/diagrams/:id', saved, { owner });
   const resolved = await sharing.resolveProposal(owner, id, proposal.id, 'approved', req.user.sub);
-  await notify([...await reviewers(owner, id), proposal.by.sub], { kind: 'proposal', action: 'resolve', id });
+  await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id });
   return { status: 200, body: { proposal: resolved } };
 }));
 app.post('/api/diagrams/:id/proposals/:pid/reject', sharingRoute(async (req) => {
@@ -797,9 +783,24 @@ app.post('/api/diagrams/:id/proposals/:pid/reject', sharingRoute(async (req) => 
   const owner = await sharing.managedBy(req.user.sub, id);
   if (!SHARING_ID_RE.test(req.params.pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
   const resolved = await sharing.resolveProposal(owner, id, req.params.pid, 'rejected', req.user.sub);
-  await notify([...await reviewers(owner, id), resolved.by.sub], { kind: 'proposal', action: 'resolve', id });
+  await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id });
   return { status: 200, body: { proposal: resolved } };
 }));
+
+// What this person lets their AI agents do (src/agentSettings.js).
+async function agentRoute(req, res, work) {
+  if (!agentSettings) return res.status(503).json({ error: 'Server storage is disabled' });
+  if (!req.user?.sub) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    res.status(200).json(await work(req.user.sub));
+  } catch (err) {
+    if (err instanceof SharingError) return res.status(err.status).json(err.body);
+    console.error('[agent settings %s]', req.method, err);
+    res.status(500).json({ error: 'Internal error', reason: 'error' });
+  }
+}
+app.get('/api/agent', (req, res) => agentRoute(req, res, (sub) => agentSettings.get(sub)));
+app.put('/api/agent', (req, res) => agentRoute(req, res, (sub) => agentSettings.set(sub, req.body?.level)));
 
 app.post('/api/diagrams/:id/share', adapt(routes.shareDiagram));
 // SHARE-10 (owner ruling 2026-07-30): the read stays exempt from

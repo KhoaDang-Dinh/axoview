@@ -1,7 +1,9 @@
 /**
- * Changes waiting for approval ("Change needs approval", ADR 0057): the owner
- * and Full admins get a chip and a pop-up when one arrives, approve or reject
- * it, and a proposal made before the diagram changed needs "Apply anyway".
+ * Changes waiting for approval (ADR 0057 addendum 3): a change an AI agent made
+ * through the API under "Changes need my approval" waits for its own person
+ * (the server lists only theirs). They get a chip and a pop-up when one
+ * arrives, approve or reject it, and a proposal made before the diagram
+ * changed needs "Apply anyway". Someone Read only on the diagram never sees it.
  */
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
@@ -27,7 +29,7 @@ import type { DiagramRole, Proposal, ProposalDecision } from '../../services/sto
 
 const proposal = (id: string, stale = false): Proposal => ({
   id,
-  by: { sub: 'agent-7', email: null, kind: 'agent' },
+  by: { sub: 'me', agent: 'claude-code' },
   createdAt: '2026-11-10T07:00:00.000Z',
   summary: { items: 3, pages: 1, connectors: 2 },
   stale
@@ -57,9 +59,12 @@ it('a reviewer sees a chip and a pop-up for waiting changes', async () => {
   expect(pushes).toEqual([{ severity: 'info', message: 'A change to this diagram is waiting for your approval' }]);
 });
 
-it.each(['viewer', 'proposer'] as DiagramRole[])('a %s never sees it, nor asks', async (role) => {
+it('a Read only person never sees it, nor asks, even when the stream announces one', async () => {
   const s = storage([[proposal('p1')]]);
-  await show(role, s);
+  await show('viewer', s);
+  await act(async () => {
+    window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, { detail: { id: 'd1' } }));
+  });
   expect(chip()).toBeNull();
   expect(s.listProposals).not.toHaveBeenCalled();
 });
@@ -68,7 +73,7 @@ it('approve: saved, green, the chip goes away', async () => {
   const s = storage([[proposal('p1')]]);
   await show('admin', s);
   await act(async () => { fireEvent.click(chip()!); });
-  expect(screen.getByText('An AI agent, ' + new Date('2026-11-10T07:00:00.000Z').toLocaleString())).toBeTruthy();
+  expect(screen.getByText('Your agent (Claude Code), ' + new Date('2026-11-10T07:00:00.000Z').toLocaleString())).toBeTruthy();
   await act(async () => { fireEvent.click(document.querySelector('[data-axoview-id="proposal-approve"]')!); });
   expect(s.resolveProposal).toHaveBeenCalledWith('d1', 'p1', 'approve', false);
   expect(pushes.at(-1)).toEqual({ severity: 'success', message: 'Change approved and saved' });

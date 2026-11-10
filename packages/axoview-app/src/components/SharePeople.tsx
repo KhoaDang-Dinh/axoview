@@ -4,12 +4,12 @@
  * (or Enter). If an Axoview account with that verified email exists, the
  * diagram appears on their side.
  *
- * Levels (owner decision 2026-11-10):
+ * Levels (owner decisions 2026-11-10):
  *   - Read only: they open it in the read-only viewer, the same one a public
  *     link shows;
- *   - Full admin: everything the owner can do;
- *   - Change needs approval: for AI agents, whose saves wait for the owner's
- *     or an admin's approval. Offered on agent rows only, for now.
+ *   - Full admin: everything the owner can do.
+ * Only people are listed: an AI agent works on its person's account, and its
+ * level is set in the assistant (components/ai/AgentLevelSwitch.tsx).
  *
  * Feedback is a pop-up message: green on success, red on any failure (no
  * account, already shared, yourself, a network error). The field keeps the
@@ -31,7 +31,7 @@ import {
   Tooltip,
   Typography
 } from '@mui/material';
-import { Close as RemoveIcon, SmartToyOutlined as AgentIcon } from '@mui/icons-material';
+import { Close as RemoveIcon } from '@mui/icons-material';
 import { notificationStore } from '../stores/notificationStore';
 import type { DiagramMember, MemberRole, StorageProvider } from '../services/storage/types';
 
@@ -40,24 +40,11 @@ export type SharePeopleStorage = Pick<StorageProvider, 'listMembers' | 'addMembe
 
 type T = ReturnType<typeof useTranslation>['t'];
 
+const LEVELS: MemberRole[] = ['viewer', 'admin'];
+
 /** A level's name as the dropdown shows it. */
 export function roleLabel(role: MemberRole, t: T): string {
-  switch (role) {
-    case 'viewer':
-      return t('share.people.roleViewer', 'Read only');
-    case 'proposer':
-      return t('share.people.roleProposer', 'Change needs approval');
-    default:
-      return t('share.people.roleAdmin', 'Full admin');
-  }
-}
-
-/** The levels a member of this kind can be given (agents: never Full admin). */
-export function rolesFor(member: Pick<DiagramMember, 'kind' | 'role'>): MemberRole[] {
-  if (member.kind === 'agent') return ['viewer', 'proposer'];
-  // People get Read only or Full admin; "needs approval" stays visible on the
-  // rare person who was given it through the API.
-  return member.role === 'proposer' ? ['viewer', 'proposer', 'admin'] : ['viewer', 'admin'];
+  return role === 'viewer' ? t('share.people.roleViewer', 'Read only') : t('share.people.roleAdmin', 'Full admin');
 }
 
 /** The red message for a failed add or change (reason codes from the server). */
@@ -71,8 +58,6 @@ export function addFailureMessage(reason: string, email: string, t: T): string {
       return t('share.people.self', "You can't share a diagram with yourself or its owner");
     case 'invalid-email':
       return t('share.people.invalidEmail', 'Enter a valid email address');
-    case 'agent-not-admin':
-      return t('share.people.agentNotAdmin', 'An AI agent can be Read only or Change needs approval, never Full admin');
     case 'rate-limited':
       return t('share.people.rateLimited', 'Too many attempts: try again in a minute');
     default:
@@ -80,8 +65,7 @@ export function addFailureMessage(reason: string, email: string, t: T): string {
   }
 }
 
-const memberName = (person: DiagramMember, t: T): string =>
-  person.email || (person.kind === 'agent' ? t('share.people.agent', 'AI agent') : person.sub);
+const memberName = (person: DiagramMember): string => person.email || person.sub;
 
 export function SharePeople({ diagramId, storage }: { diagramId: string; storage: SharePeopleStorage }) {
   const { t } = useTranslation('app');
@@ -132,7 +116,7 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
     const result = storage.setMemberRole
       ? await storage.setMemberRole(diagramId, person.sub, next)
       : { ok: false as const, reason: 'error', message: '' };
-    const name = memberName(person, t);
+    const name = memberName(person);
     if (result.ok) {
       setPeople((current) => current.map((p) => (p.sub === person.sub ? result.member : p)));
       notificationStore.push({
@@ -154,7 +138,7 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
   }, [diagramId, storage, t]);
 
   const remove = useCallback(async (person: DiagramMember) => {
-    const name = memberName(person, t);
+    const name = memberName(person);
     try {
       if (!storage.removeMember) throw new Error('Sharing is not available here');
       await storage.removeMember(diagramId, person.sub);
@@ -206,7 +190,7 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
           }}
           sx={{ minWidth: 118, fontSize: 13 }}
         >
-          {(['viewer', 'admin'] as MemberRole[]).map((level) => (
+          {LEVELS.map((level) => (
             <MenuItem key={level} value={level} data-axoview-id={`share-role-${level}`} sx={{ fontSize: 13 }}>
               {roleLabel(level, t)}
             </MenuItem>
@@ -226,7 +210,7 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
       {people.length > 0 && (
         <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0 }}>
           {people.map((person) => {
-            const name = memberName(person, t);
+            const name = memberName(person);
             return (
               <Box
                 component="li"
@@ -234,10 +218,8 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
                 data-axoview-id="share-person"
                 data-email={person.email ?? undefined}
                 data-role={person.role}
-                data-kind={person.kind}
                 sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.25 }}
               >
-                {person.kind === 'agent' && <AgentIcon sx={{ fontSize: 16, color: 'text.secondary' }} />}
                 <Typography variant="body2" noWrap title={name} sx={{ flex: 1, minWidth: 0 }}>
                   {name}
                 </Typography>
@@ -253,7 +235,7 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
                   }}
                   sx={{ fontSize: 13 }}
                 >
-                  {rolesFor(person).map((level) => (
+                  {LEVELS.map((level) => (
                     <MenuItem key={level} value={level} sx={{ fontSize: 13 }}>
                       {roleLabel(level, t)}
                     </MenuItem>

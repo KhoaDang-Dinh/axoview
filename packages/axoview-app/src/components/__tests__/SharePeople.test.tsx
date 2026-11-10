@@ -1,7 +1,7 @@
 /**
  * The email field under the share link (ADR 0057 §5, owner decisions
  * 2026-11-09/10): a permission level for each person (Read only by default,
- * or Full admin; agents Read only or Change needs approval), green pop-up and
+ * or Full admin; agents are not members), green pop-up and
  * a cleared field on success; red pop-up and the email kept on every failure;
  * the people list with level changes and remove.
  */
@@ -27,8 +27,7 @@ jest.mock('../../stores/notificationStore', () => ({
 import { SharePeople } from '../SharePeople';
 import type { AddMemberResult, DiagramMember, MemberRole } from '../../services/storage/types';
 
-const BOB: DiagramMember = { sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'viewer', addedAt: '2026-11-10T00:00:00Z' };
-const AGENT: DiagramMember = { sub: 'agent-7', email: null, kind: 'agent', role: 'proposer', addedAt: '2026-11-10T00:00:00Z' };
+const BOB: DiagramMember = { sub: 'bob', email: 'bob@example.com', role: 'viewer', addedAt: '2026-11-10T00:00:00Z' };
 
 function storage(overrides: Partial<{
   listMembers: (id: string) => Promise<DiagramMember[]>;
@@ -137,22 +136,15 @@ it('the level picker offers people Read only and Full admin; Full admin is sent'
   expect(pushes).toEqual([{ severity: 'success', message: 'Shared with bob@example.com (Full admin)' }]);
 });
 
-it("changing a person's level: green, and the row shows the new level", async () => {
+it("changing a person's level: green, and the row shows the new level (people only: Read only or Full admin)", async () => {
   const s = storage({ listMembers: jest.fn(async () => [BOB]) });
   render(<SharePeople diagramId="d1" storage={s} />);
   await waitFor(() => expect(people()).toEqual(['bob@example.com']));
+  await act(async () => { fireEvent.mouseDown(screen.getByLabelText('Access for bob@example.com')); });
+  expect(within(screen.getByRole('listbox')).getAllByRole('option').map((o) => o.textContent)).toEqual(['Read only', 'Full admin']);
+  await act(async () => { fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' }); });
   await choose(screen.getByLabelText('Access for bob@example.com'), 'Full admin');
   expect(s.setMemberRole).toHaveBeenCalledWith('d1', 'bob', 'admin');
   expect(document.querySelector('[data-axoview-id="share-person"]')?.getAttribute('data-role')).toBe('admin');
   expect(pushes).toEqual([{ severity: 'success', message: 'bob@example.com is now Full admin' }]);
 });
-
-it('an AI agent row offers Read only and Change needs approval, never Full admin', async () => {
-  const s = storage({ listMembers: jest.fn(async () => [AGENT]) });
-  render(<SharePeople diagramId="d1" storage={s} />);
-  await waitFor(() => expect(document.querySelector('[data-kind="agent"]')).toBeTruthy());
-  await act(async () => { fireEvent.mouseDown(screen.getByLabelText('Access for AI agent')); });
-  expect(within(screen.getByRole('listbox')).getAllByRole('option').map((o) => o.textContent))
-    .toEqual(['Read only', 'Change needs approval']);
-});
-

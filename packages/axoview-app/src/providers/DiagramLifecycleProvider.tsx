@@ -646,13 +646,29 @@ export function DiagramLifecycleProvider({
   const currentModelRef = useRef<DiagramData | null>(null);
   useEffect(() => { currentModelRef.current = currentModel; }, [currentModel]);
   // The AI assistant reads the open page only when the user asks it to
-  // ("Include this page"), at that moment; nothing is pushed to it.
+  // ("Include this page"), at that moment; nothing is pushed to it. Changes
+  // it suggests are carried out only when the person approves them, through
+  // the editor, as one undoable change saved like any edit (ADR 0052
+  // addendum 2026-11-10).
+  const isReadonlyUrlRef = useRef(isReadonlyUrl);
+  isReadonlyUrlRef.current = isReadonlyUrl;
   useEffect(() => {
-    const { setReadPage } = useAssistantPageStore.getState();
+    const { setReadPage, setPageAccess } = useAssistantPageStore.getState();
     setReadPage(() => (currentModelRef.current
       ? { model: currentModelRef.current as unknown as Model, viewId: axoviewRef.current?.getActiveViewId() }
       : null));
-    return () => setReadPage(null);
+    setPageAccess(
+      (operations, viewId) => axoviewRef.current?.applyAgentOperations(operations, { viewId }) ?? [],
+      () => {
+        const id = currentDiagramRef.current?.id;
+        if (!id || !currentModelRef.current || isReadonlyUrlRef.current) return false;
+        return storageRef.current?.sharedRole?.(id) !== 'viewer';
+      }
+    );
+    return () => {
+      setReadPage(null);
+      setPageAccess(null, null);
+    };
   }, []);
 
   const currentDiagramRef = useRef<SavedDiagram | null>(null);

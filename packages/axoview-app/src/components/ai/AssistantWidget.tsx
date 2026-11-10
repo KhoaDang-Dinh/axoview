@@ -9,6 +9,9 @@ import { apiFetch } from '../../services/apiFetch';
 import { useCognitoSessionStore } from '../../stores/cognitoSessionStore';
 import { useAssistantPageStore } from '../../stores/assistantPageStore';
 import { SuggestionChecklist } from './SuggestionChecklist';
+import { AgentLevelSwitch } from './AgentLevelSwitch';
+import { notificationStore } from '../../stores/notificationStore';
+import type { AgentLevel } from '../../services/storage/types';
 import {
   AI_CONNECTORS, BUBBLE_SIZE, clampBubblePosition,
   persistBubblePosition, useAssistantStore
@@ -24,6 +27,20 @@ interface LiveMessage {
   suggestions?: unknown[];
   viewId?: string;
   plan?: PlanStep[];
+  /** Steps the person approved and the editor carried out. */
+  applied?: PlanStep[];
+}
+
+/**
+ * Plans the suggestions not yet carried out against the page as it is now,
+ * keeping each step's index in the original list.
+ */
+function planRemaining(page: { model: Parameters<typeof diagramAgent.planOperations>[0] }, entry: LiveMessage): PlanStep[] {
+  const done = new Set((entry.applied ?? []).map((step) => step.index));
+  const pending = (entry.suggestions ?? []).map((operation, index) => ({ operation, index }))
+    .filter(({ index }) => !done.has(index));
+  return diagramAgent.planOperations(page.model, entry.viewId, pending.map((p) => p.operation))
+    .map((step, k) => ({ ...step, index: pending[k].index }));
 }
 
 const isSource = (value: unknown): value is { id: string; title: string } =>
@@ -31,7 +48,7 @@ const isSource = (value: unknown): value is { id: string; title: string } =>
   typeof (value as { id?: unknown }).id === 'string' && typeof (value as { title?: unknown }).title === 'string';
 
 export function AssistantWidget() {
-  const { runtimeConfig, isInitialized } = useAppStorage();
+  const { runtimeConfig, isInitialized, storage, serverStorageAvailable } = useAppStorage();
   const signedIn = useCognitoSessionStore((state) => !!state.user);
   const location = useLocation();
   const navigate = useNavigate();
@@ -58,12 +75,23 @@ export function AssistantWidget() {
   const [liveMessages, setLiveMessages] = useState<LiveMessage[]>([]);
   const [includePage, setIncludePage] = useState(false);
   const readPage = useAssistantPageStore((state) => state.readPage);
+  const applyToPage = useAssistantPageStore((state) => state.applyToPage);
+  const canChangePage = useAssistantPageStore((state) => state.canChangePage);
   // Real replies only when the server says live chat is fully configured;
   // otherwise the preview keeps its mock replies instead of failing every send.
   const liveEnabled = runtimeConfig?.ai?.liveChat === true && signedIn;
   // "Include this page": only where the deployment allows diagram context and
   // there is an editable diagram open (never on a shared, view-only link).
   const pageOption = liveEnabled && runtimeConfig?.ai?.diagramContextEnabled === true && !isShared && !!readPage;
+  // What this person lets Nova do (ADR 0057 addendum 3): only where the
+  // deployment allows agent writes (AI_AGENT_WRITE_ENABLED) and the account's
+  // storage keeps the setting. Read only until the server says otherwise.
+  const levelOption = pageOption && runtimeConfig?.ai?.agentWriteEnabled === true &&
+    serverStorageAvailable === true && !!storage?.agentLevel;
+  const [agentLevel, setAgentLevel] = useState<AgentLevel>('viewer');
+  const [levelBusy, setLevelBusy] = useState(false);
+  const mayChange = levelOption && !!canChangePage?.();
+  const approving = levelOption && agentLevel === 'proposer' && mayChange && !!applyToPage;
   const pointer = useRef<{ id: number; x: number; y: number; initialX: number; initialY: number; dragged: boolean } | null>(null);
   const listEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -76,6 +104,12 @@ export function AssistantWidget() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   useEffect(() => { listEndRef.current?.scrollIntoView({ block: 'nearest' }); }, [messages.length, liveMessages.length]);
+  useEffect(() => {
+    if (!levelOption || !open || !storage?.agentLevel) return;
+    let live = true;
+    void storage.agentLevel().then((level) => { if (live) setAgentLevel(level); });
+    return () => { live = false; };
+  }, [levelOption, open, storage, signedIn]);
 
   // Never let a feature flag or shared route leak a former user's mock draft.
   useEffect(() => {
@@ -168,8 +202,53 @@ export function AssistantWidget() {
   const recheck = (index: number) => {
     const page = readPage?.();
     setLiveMessages((current) => current.map((entry, i) => (i === index && entry.suggestions && page
-      ? { ...entry, plan: diagramAgent.planOperations(page.model, entry.viewId, entry.suggestions) }
+      ? { ...entry, plan: planRemaining(page, entry) }
       : entry)));
+  };
+  const changeLevel = async (level: AgentLevel) => {
+    if (!storage?.setAgentLevel || level === agentLevel) return;
+    const before = agentLevel;
+    setAgentLevel(level);
+    setLevelBusy(true);
+    const saved = await storage.setAgentLevel(level).catch(() => false);
+    setLevelBusy(false);
+    if (!saved) {
+      setAgentLevel(before);
+      notificationStore.push({ severity: 'error', message: "Couldn't change what Nova may do: try again" });
+    }
+  };
+  // The person approved these steps of message `index`: carry them out on the
+  // open page as one undoable change, then re-check the rest against it.
+  const approve = (index: number, stepIndexes: number[]) => {
+    const page = readPage?.();
+    const entry = liveMessages[index];
+    if (!entry?.suggestions || !applyToPage || !page || !canChangePage?.() || agentLevel !== 'proposer') {
+      notificationStore.push({ severity: 'error', message: 'Nova can only suggest here: nothing was changed' });
+      return;
+    }
+    const ordered = [...stepIndexes].sort((a, b) => a - b);
+    const outcomes = applyToPage(ordered.map((i) => entry.suggestions![i]), entry.viewId);
+    // Shown as done with the wording the person approved.
+    const carried = ordered
+      .filter((_, k) => outcomes[k]?.status === 'ready')
+      .map((i) => entry.plan?.find((step) => step.index === i))
+      .filter((step): step is PlanStep => !!step);
+    const failed = outcomes.find((step) => step.status !== 'ready');
+    if (carried.length > 0) {
+      notificationStore.push({
+        severity: 'success',
+        message: carried.length === 1 ? 'Change approved and made' : `${carried.length} changes approved and made`
+      });
+    }
+    if (failed) {
+      notificationStore.push({ severity: 'error', message: `Not changed: ${failed.problem ?? failed.summary}` });
+    }
+    const after = readPage?.();
+    setLiveMessages((current) => current.map((item, i) => {
+      if (i !== index) return item;
+      const next = { ...item, applied: [...(item.applied ?? []), ...carried] };
+      return after ? { ...next, plan: planRemaining(after, next) } : next;
+    }));
   };
   const chat = (
     <Box data-axoview-id="ai-assistant-root" sx={{ position: 'fixed', zIndex: 1400, pointerEvents: 'none', inset: 0 }}>
@@ -226,7 +305,11 @@ export function AssistantWidget() {
                         bgcolor: message.role === 'user' ? 'primary.main' : 'action.hover',
                         color: message.role === 'user' ? 'primary.contrastText' : 'text.primary' }}>
                         <Typography variant="body2" data-axoview-id="ai-message-text" sx={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>{message.text}</Typography>
-                        {live.plan && <SuggestionChecklist steps={live.plan} onRecheck={readPage ? () => recheck(live.id) : undefined} />}
+                        {live.plan && (
+                          <SuggestionChecklist steps={live.plan} applied={live.applied}
+                            onRecheck={readPage ? () => recheck(live.id) : undefined}
+                            onApprove={approving ? (indexes) => approve(live.id, indexes) : undefined} />
+                        )}
                         {live.sources && live.sources.length > 0 && (
                           <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}
                             data-axoview-id="ai-sources">
@@ -242,6 +325,10 @@ export function AssistantWidget() {
                 <div ref={listEndRef} />
               </Box>
               <Box component="form" onSubmit={submit} sx={{ p: 1.5, borderTop: 1, borderColor: 'divider' }}>
+                {levelOption && (
+                  <AgentLevelSwitch level={agentLevel} onChange={(level) => void changeLevel(level)}
+                    busy={levelBusy} canChange={mayChange} />
+                )}
                 {pageOption && (
                   <FormControlLabel sx={{ ml: 0, mb: 0.5 }} data-axoview-id="ai-include-page"
                     control={<Checkbox size="small" checked={includePage} onChange={(e) => setIncludePage(e.target.checked)} />}

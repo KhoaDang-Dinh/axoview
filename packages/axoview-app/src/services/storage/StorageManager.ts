@@ -2,6 +2,7 @@ import {
   AddMemberResult,
   DiagramMember,
   DiagramMeta,
+  AgentLevel,
   DiagramRole,
   FolderMeta,
   MemberRole,
@@ -195,6 +196,18 @@ export class StorageManager implements StorageProvider {
     const provider = this.getActiveProvider();
     if (!provider.setMemberRole) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
     return provider.setMemberRole(id, sub, role);
+  }
+
+  // The account's setting, kept by the server whichever place the open
+  // diagram is in (a Drive diagram's agent is the same person's agent).
+  async agentLevel(): Promise<AgentLevel> {
+    const provider = this.registry.get('local');
+    return provider?.agentLevel ? provider.agentLevel() : 'viewer';
+  }
+
+  async setAgentLevel(level: AgentLevel): Promise<boolean> {
+    const provider = this.registry.get('local');
+    return provider?.setAgentLevel ? provider.setAgentLevel(level) : false;
   }
 
   async listProposals(id: string): Promise<Proposal[]> {

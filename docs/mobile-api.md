@@ -193,18 +193,17 @@ People a diagram is shared with ([ADR 0057](adr/0057-diagram-sharing-and-permiss
 
 | Method and path | Body | Answer |
 |---|---|---|
-| `GET /api/diagrams/{id}/members` | — | `{ members: [{ sub, email, kind, role, addedAt }] }` |
+| `GET /api/diagrams/{id}/members` | — | `{ members: [{ sub, email, role, addedAt }] }` |
 | `POST /api/diagrams/{id}/members` | `{ "email": "…", "role": "viewer" \| "admin" }` (default `viewer`) | `201 { member }`; or an error with a `reason`: `no-account` (404), `already-shared` (409), `self` (422), `invalid-email` / `invalid-role` (400), `rate-limited` (429, over 20 a minute) |
-| `PATCH /api/diagrams/{id}/members/{sub}` | `{ "role": "…" }` | `{ member }`; `agent-not-admin` (400) for an agent |
+| `PATCH /api/diagrams/{id}/members/{sub}` | `{ "role": "viewer" \| "admin" }` | `{ member }` |
 | `DELETE /api/diagrams/{id}/members/{sub}` | — | `{ removed }` |
 
-Permission levels (`role`):
+Permission levels (`role`), for people only:
 
-| Level | `role` | May | Who |
-|---|---|---|---|
-| Read only | `viewer` | load it (the web app opens it in the read-only viewer); every write is `403 view-only` | people and agents |
-| Change needs approval | `proposer` | load it; a `PUT` becomes a proposal: `202 { pending: true, proposal }`; other writes `403 needs-approval` | agents (people through the API only) |
-| Full admin | `admin` | everything the owner can, except moving it between the owner's folders (`403 owner-folders`) | people only |
+| Level | `role` | May |
+|---|---|---|
+| Read only | `viewer` | load it (the web app opens it in the read-only viewer); every write is `403 view-only` |
+| Full admin | `admin` | everything the owner can, except moving it between the owner's folders (`403 owner-folders`) |
 
 - **Who can be added:** by email, an account whose email is verified.
 - **On their side:** a diagram shared with someone appears in their `GET /api/diagrams` with
@@ -212,19 +211,32 @@ Permission levels (`role`):
 - **Live:**
   - adding, changing or removing a person sends a `diagram` `create`, `update` or `delete` change to
     their sync stream;
-  - every save goes to everyone who has the diagram;
-  - a proposal made or decided sends `kind: "proposal"` to the owner and Full admins.
+  - every save goes to everyone who has the diagram.
 - **Headers:** `GET`/`PUT /api/diagrams/{id}` on a diagram other people have answers
-  `X-Axoview-Shared: by-you | with-you` and `X-Axoview-Role: owner | viewer | proposer | admin`.
+  `X-Axoview-Shared: by-you | with-you` and `X-Axoview-Role: owner | viewer | admin`.
   The web app then uploads each save at once instead of batching.
 
-Proposals (owner and Full admins):
+AI agents are not members: an agent works on its person's account, and that person sets once what
+it may do (ADR 0057 addendum 3; any signed-in account, server storage):
 
 | Method and path | Body | Answer |
 |---|---|---|
-| `GET /api/diagrams/{id}/proposals` | — | `{ proposals: [{ id, by, createdAt, summary, stale }] }`, waiting ones only |
+| `GET /api/agent` | — | `{ level: "viewer" \| "proposer" }`; `viewer` (Read only) until set |
+| `PUT /api/agent` | `{ "level": "viewer" \| "proposer" }` | `{ level }`; `invalid-level` (400) for anything else |
+
+On a diagram the person may only view, the agent is Read only whatever the level says.
+
+Changes an agent made through the API under "Changes need my approval" wait for its person alone,
+while they may change the diagram (owner or Full admin; anyone else gets `404`). Nothing makes them
+yet: they arrive with outside agents' MCP sign-in (ADR 0052).
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /api/diagrams/{id}/proposals` | — | `{ proposals: [{ id, by: { sub, agent }, createdAt, summary, stale }] }`: this person's agents' waiting ones |
 | `POST /api/diagrams/{id}/proposals/{pid}/approve` | `{ "force": true }` to approve a stale one | `{ proposal }`: the document is saved like any save; `409 stale` when the diagram changed since |
 | `POST /api/diagrams/{id}/proposals/{pid}/reject` | — | `{ proposal }` |
+
+Deciding one sends `kind: "proposal"` to that person's sync stream.
 
 ### The diagram document
 

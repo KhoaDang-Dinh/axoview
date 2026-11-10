@@ -765,6 +765,18 @@ export interface LoadOptions {
   view?: string;
 }
 
+/**
+ * What `applyAgentOperations` did with each operation, in order: the fields of
+ * `diagramAgent.PlanStep` a host needs to report it (declared here so the
+ * types do not import the agent module).
+ */
+export interface AgentStepOutcome {
+  index: number;
+  status: 'ready' | 'not_applicable' | 'invalid';
+  summary: string;
+  problem?: string;
+}
+
 export interface AxoviewRef {
   load: (data: InitialData, options?: LoadOptions) => void;
   /**
@@ -780,4 +792,11 @@ export interface AxoviewRef {
    * the editor's stores.
    */
   getActiveViewId: () => string | undefined;
+  /**
+   * Carries out an AI agent's operations (the `diagramAgent` vocabulary) that
+   * its person approved, on `viewId` or the page on screen, as ONE undoable
+   * change. Returns the steps: only `ready` ones changed anything. ADR 0052
+   * addendum 2026-11-10.
+   */
+  applyAgentOperations: (operations: unknown[], options?: { viewId?: string }) => AgentStepOutcome[];
 }

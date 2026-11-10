@@ -20,7 +20,7 @@ import type { FileNode } from '../../hooks/useFileTree';
 import { GoogleGIcon } from '../GoogleGIcon';
 
 // The level a shared diagram was given to this account (ADR 0057).
-const SHARED_LEVEL = { viewer: 'Read only', proposer: 'Change needs approval', admin: 'Full admin' } as const;
+const SHARED_LEVEL = { viewer: 'Read only', admin: 'Full admin' } as const;
 
 interface Props extends NodeRendererProps<FileNode> {
   selectedId?: string | null;

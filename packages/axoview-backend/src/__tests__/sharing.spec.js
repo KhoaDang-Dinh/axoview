@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { createSharing, normalizeEmail, assertRole, CACHE_MS, LOOKUPS_PER_MINUTE } from '../sharing.js';
+import { createSharing, normalizeEmail, assertRole, agentLevelOn, CACHE_MS, LOOKUPS_PER_MINUTE } from '../sharing.js';
+import { createAgentSettings } from '../agentSettings.js';
 import { sharableUser } from '../cognitoDirectory.js';
 
 /** Workspaces as in-memory key/value stores, with one diagram per owner. */
@@ -65,7 +66,7 @@ const failure = (promise) => promise.then(() => { throw new Error('expected a fa
 describe('adding a person by email', () => {
   it('an account with that verified email is added at the level chosen, and the diagram shows on their side', async () => {
     const member = await sharing.addMember('alice', 'd1', '  Bob@Example.com ', 'admin');
-    expect(member).toEqual({ sub: 'bob', email: 'bob@example.com', kind: 'person', role: 'admin', addedAt: expect.any(String) });
+    expect(member).toEqual({ sub: 'bob', email: 'bob@example.com', role: 'admin', addedAt: expect.any(String) });
     expect(ws.json('alice', 'sharing/members/d1').members).toHaveLength(1);
     expect(await sharing.sharedWithMe('bob')).toEqual([{
       id: 'd1',
@@ -185,12 +186,11 @@ describe('who can be found', () => {
 });
 
 describe('permission levels', () => {
-  it('people may hold any level; agents never Full admin', () => {
-    for (const role of ['viewer', 'proposer', 'admin']) expect(assertRole(role, 'person')).toBe(role);
-    expect(assertRole('viewer', 'agent')).toBe('viewer');
-    expect(assertRole('proposer', 'agent')).toBe('proposer');
-    expect(() => assertRole('admin', 'agent')).toThrow(expect.objectContaining({ status: 400, body: expect.objectContaining({ reason: 'agent-not-admin' }) }));
-    expect(() => assertRole('owner', 'person')).toThrow(expect.objectContaining({ status: 400 }));
+  it('people are Read only or Full admin; nothing else', () => {
+    for (const role of ['viewer', 'admin']) expect(assertRole(role)).toBe(role);
+    for (const role of ['proposer', 'owner']) {
+      expect(() => assertRole(role)).toThrow(expect.objectContaining({ status: 400, body: expect.objectContaining({ reason: 'invalid-role' }) }));
+    }
   });
 
   it('an unknown level is refused when adding', async () => {
@@ -202,12 +202,6 @@ describe('permission levels', () => {
     await sharing.setRole('alice', 'd1', 'bob', 'admin');
     expect((await sharing.listMembers('alice', 'd1'))[0].role).toBe('admin');
     expect(await sharing.accessTo('bob', 'd1')).toEqual({ owner: 'alice', role: 'admin' });
-  });
-
-  it('an agent member cannot be raised to Full admin', async () => {
-    ws.put('alice', 'sharing/members/d1', { members: [{ sub: 'agent-7', email: null, kind: 'agent', role: 'proposer', addedAt: 'x' }] });
-    expect(await failure(sharing.setRole('alice', 'd1', 'agent-7', 'admin'))).toMatchObject({ status: 400, reason: 'agent-not-admin' });
-    await expect(sharing.setRole('alice', 'd1', 'agent-7', 'viewer')).resolves.toMatchObject({ role: 'viewer' });
   });
 
   it('a Full admin manages the diagram for its owner; others cannot', async () => {
@@ -225,31 +219,56 @@ describe('permission levels', () => {
   });
 });
 
-describe('proposals (Change needs approval)', () => {
-  const PROPOSED = { title: 'Plan', items: [{ id: 'a' }, { id: 'b' }], views: [{ id: 'p', connectors: [{ id: 'c' }] }] };
-
-  it('a proposal is stored with its summary and waits', async () => {
-    const proposal = await sharing.propose('alice', 'd1', { sub: 'agent-7', kind: 'agent' }, PROPOSED);
-    expect(proposal).toMatchObject({ status: 'pending', by: { sub: 'agent-7', kind: 'agent', email: null }, summary: { items: 2, pages: 1, connectors: 1 } });
-    expect(await sharing.pendingProposals('alice', 'd1')).toEqual([expect.objectContaining({ id: proposal.id, stale: false })]);
-    expect((await sharing.proposalToApply('alice', 'd1', proposal.id)).document).toEqual(PROPOSED);
+describe('agents: on their person\'s account, never above them', () => {
+  it('the person\'s setting applies where they may change the diagram; Read only where they may not', () => {
+    expect(agentLevelOn('owner', 'proposer')).toBe('proposer');
+    expect(agentLevelOn('admin', 'proposer')).toBe('proposer');
+    expect(agentLevelOn('owner', 'viewer')).toBe('viewer');
+    expect(agentLevelOn('viewer', 'proposer')).toBe('viewer');
+    expect(agentLevelOn(null, 'proposer')).toBeNull();
   });
 
-  it('the diagram changing since makes it stale: approval needs force', async () => {
-    const proposal = await sharing.propose('alice', 'd1', { sub: 'agent-7', kind: 'agent' }, PROPOSED);
-    ws.diagram('alice', 'd1', { lastModified: '2026-11-10T09:00:00.000Z' });
-    expect((await sharing.pendingProposals('alice', 'd1'))[0].stale).toBe(true);
-    expect(await failure(sharing.proposalToApply('alice', 'd1', proposal.id))).toMatchObject({ status: 409, reason: 'stale' });
-    await expect(sharing.proposalToApply('alice', 'd1', proposal.id, { force: true })).resolves.toMatchObject({ document: PROPOSED });
-  });
-
-  it('resolving takes it off the waiting list and drops its document', async () => {
-    const proposal = await sharing.propose('alice', 'd1', { sub: 'agent-7', kind: 'agent' }, PROPOSED);
-    const resolved = await sharing.resolveProposal('alice', 'd1', proposal.id, 'rejected', 'alice');
-    expect(resolved).toMatchObject({ status: 'rejected', resolvedBy: 'alice' });
-    expect(await sharing.pendingProposals('alice', 'd1')).toEqual([]);
-    expect(ws.json('alice', `sharing/proposal-docs/d1/${proposal.id}`)).toBeNull();
-    expect(await failure(sharing.resolveProposal('alice', 'd1', proposal.id, 'approved', 'alice'))).toMatchObject({ status: 404 });
+  it('the setting: Read only by default, kept in the person\'s workspace, and nothing above approval', async () => {
+    const settings = createAgentSettings({ adapterFor: ws.adapterFor });
+    expect(await settings.get('alice')).toEqual({ level: 'viewer' });
+    expect(await settings.set('alice', 'proposer')).toEqual({ level: 'proposer' });
+    expect(await settings.get('alice')).toEqual({ level: 'proposer' });
+    expect(await settings.get('bob')).toEqual({ level: 'viewer' });
+    expect(await failure(settings.set('alice', 'admin'))).toMatchObject({ status: 400, reason: 'invalid-level' });
+    ws.put('alice', 'agents/settings', { level: 'admin' });
+    expect(await settings.get('alice')).toEqual({ level: 'viewer' });
   });
 });
 
+describe('proposals (Changes need my approval): only the agent\'s person sees and decides them', () => {
+  const PROPOSED = { title: 'Plan', items: [{ id: 'a' }, { id: 'b' }], views: [{ id: 'p', connectors: [{ id: 'c' }] }] };
+  const BOBS_AGENT = { sub: 'bob', agent: 'claude-code' };
+
+  it('a proposal is stored with its summary and waits for its person alone', async () => {
+    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, PROPOSED);
+    expect(proposal).toMatchObject({ status: 'pending', by: BOBS_AGENT, summary: { items: 2, pages: 1, connectors: 1 } });
+    expect(await sharing.pendingProposals('alice', 'd1', 'bob')).toEqual([expect.objectContaining({ id: proposal.id, stale: false })]);
+    // The owner does not review someone else's agent.
+    expect(await sharing.pendingProposals('alice', 'd1', 'alice')).toEqual([]);
+    expect(await failure(sharing.proposalToApply('alice', 'd1', proposal.id, 'alice'))).toMatchObject({ status: 404 });
+    expect(await failure(sharing.resolveProposal('alice', 'd1', proposal.id, 'rejected', 'alice'))).toMatchObject({ status: 404 });
+    expect((await sharing.proposalToApply('alice', 'd1', proposal.id, 'bob')).document).toEqual(PROPOSED);
+  });
+
+  it('the diagram changing since makes it stale: approval needs force', async () => {
+    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, PROPOSED);
+    ws.diagram('alice', 'd1', { lastModified: '2026-11-10T09:00:00.000Z' });
+    expect((await sharing.pendingProposals('alice', 'd1', 'bob'))[0].stale).toBe(true);
+    expect(await failure(sharing.proposalToApply('alice', 'd1', proposal.id, 'bob'))).toMatchObject({ status: 409, reason: 'stale' });
+    await expect(sharing.proposalToApply('alice', 'd1', proposal.id, 'bob', { force: true })).resolves.toMatchObject({ document: PROPOSED });
+  });
+
+  it('resolving takes it off the waiting list and drops its document', async () => {
+    const proposal = await sharing.propose('alice', 'd1', BOBS_AGENT, PROPOSED);
+    const resolved = await sharing.resolveProposal('alice', 'd1', proposal.id, 'rejected', 'bob');
+    expect(resolved).toMatchObject({ status: 'rejected', resolvedBy: 'bob' });
+    expect(await sharing.pendingProposals('alice', 'd1', 'bob')).toEqual([]);
+    expect(ws.json('alice', `sharing/proposal-docs/d1/${proposal.id}`)).toBeNull();
+    expect(await failure(sharing.resolveProposal('alice', 'd1', proposal.id, 'approved', 'bob'))).toMatchObject({ status: 404 });
+  });
+});

@@ -1,7 +1,7 @@
 # ADR 0057 — Diagram Sharing and Permissions
 
-**Status:** Accepted: the email field and the three permission levels shipped (2026-11-10; see the
-addenda below). Realtime co-editing waits for [ADR 0055](0055-multiplayer-operation-protocol.md)/[0056](0056-realtime-service-on-eks.md).
+**Status:** Accepted: the email field, the permission levels and agents on their person's account
+shipped (2026-11-10; see the addenda below). Realtime co-editing waits for [ADR 0055](0055-multiplayer-operation-protocol.md)/[0056](0056-realtime-service-on-eks.md).
 **Date:** 2026-11-09
 **Supersedes:** none
 **Superseded by:** none
@@ -184,5 +184,35 @@ The owner replaced §2's roles the same day:
     needs an explicit "Apply anyway" (`force`), because the whole document replaces those changes.
   - **In the app:** a "N to approve" chip in the toolbar opens Approve and Reject.
 - **Agent accounts don't exist yet.** When they do, they are members with `kind: "agent"`. The API
-  already enforces their levels, and the same proposal flow serves them.
+  already enforces their levels, and the same proposal flow serves them. (Replaced the same day:
+  agents are not members, next addendum.)
+
+## Addendum 2026-11-10 (3): an agent works on its person's account
+
+The owner decided the same day that an agent has no account of its own. It works on its person's
+account, and that person is its one admin. This replaces addendum 2's agent rows and refines §4.
+
+- **Members are people only:** Read only (`viewer`) or Full admin (`admin`). `proposer`, `kind` and
+  `agent-not-admin` are gone from the members API; `invalid-role` refuses anything else.
+- **The person sets their agent's level once, for the account** (`GET`/`PUT /api/agent`, kept at
+  `agents/settings` in their workspace):
+
+  | Level | `level` | What the agent may do |
+  |---|---|---|
+  | Read only (the default) | `viewer` | Read and suggest. The person makes each change. |
+  | Changes need my approval | `proposer` | Each change it suggests is made only once its person approves it. |
+
+- **Never above its person** (`sharing.agentLevelOn`): on a diagram the person may only view, the
+  agent is Read only whatever the setting says. Nothing above "approval" exists for an agent.
+- **Its person approves, no one else:**
+  - **In the app (the built-in assistant):** the approval happens in the chat. See
+    [ADR 0052's 2026-11-10 addendum](0052-ai-assistant-boundaries.md). Nothing is stored: the
+    approved change is an ordinary edit, saved like any edit, and one Undo takes it back.
+  - **Through the API (when outside agents get ADR 0052's MCP sign-in):** a change is stored as a
+    proposal with `by: { sub: <its person>, agent: <client> }`. Only that person lists, approves or
+    rejects it, and only while they may change the diagram (the owner or a Full admin): the
+    diagram's owner does not review someone else's agent. Addendum 2's stale rule ("Apply anyway")
+    stays. Until that sign-in exists, nothing creates these proposals.
+- **Why:** the person answers for their agent, so the agent's reach is the person's reach minus
+  the right to act unseen. Admins keep managing people; they don't each review every agent.
 
