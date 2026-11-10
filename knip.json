@@ -43,7 +43,13 @@
       "entry": ["src/index.ts", "**/*.test.{ts,tsx}"]
     },
     "packages/axoview-backend": {
-      "entry": ["server.js", "src/**/__tests__/**/*.spec.js", "jest.config.js"]
+      "entry": [
+        "server.js",
+        "src/**/__tests__/**/*.spec.js",
+        "src/__tests__/helpers/fakeCognito.register.mjs",
+        "src/__tests__/helpers/fakeCognito.hooks.mjs",
+        "jest.config.js"
+      ]
     },
     "packages/axoview-worker": {
       "entry": ["src/app.ts", "src/**/__tests__/**/*.spec.ts", "jest.config.cjs"]

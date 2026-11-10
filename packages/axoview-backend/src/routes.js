@@ -215,6 +215,9 @@ export function getConfig(_adapter, ctx) {
           }
         : null,
       serverStorage: env.STORAGE_ENABLED !== false,
+      // Sharing a diagram with another account by email (ADR 0057; the Express
+      // target with Cognito only: server.js decides and sets SHARING_ENABLED).
+      sharing: env.SHARING_ENABLED === true,
       // A5/CHR-08 (owner ruling 2026-07-30): the operator's canonical public
       // base, so every share link the CLIENT mints resolves against it instead
       // of whichever origin the page happens to be on (preview, staging, LAN).

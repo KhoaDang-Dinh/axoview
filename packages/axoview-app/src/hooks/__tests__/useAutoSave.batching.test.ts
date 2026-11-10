@@ -1,20 +1,20 @@
 /**
  * `useAutoSave` with batched uploads (server storage, alone in the workspace):
- * every 2 s pause is a checkpoint in the browser, and the upload goes out once
- * per batch window with the latest checkpoint, or at once when it matters.
+ * every 1 s pause is a checkpoint in the browser, and the upload goes out once
+ * per batch window with the latest checkpoint, or at once when it matters
+ * (another browser present, or a diagram other people have).
  */
 import { renderHook, act } from '@testing-library/react';
-import { useAutoSave, type AutoSaveBatching } from '../useAutoSave';
+import { DEBOUNCE_MS, useAutoSave, type AutoSaveBatching } from '../useAutoSave';
 import type { StorageProvider } from '../../services/storage/types';
 import type { DiagramData } from '../../diagramUtils';
 
-const DEBOUNCE_MS = 2000;
 const BATCH_MS = 30_000;
 
 const MODEL = (title: string): DiagramData =>
   ({ title, icons: [], colors: [], items: [], views: [], fitToScreen: true }) as DiagramData;
 
-function setup({ persisted = true, company = false } = {}) {
+function setup({ persisted = true, company = false, shared = [] as string[] } = {}) {
   const uploads: string[] = [];
   const storage = {
     saveDiagram: async (_id: string, model: unknown) => {
@@ -24,10 +24,14 @@ function setup({ persisted = true, company = false } = {}) {
   const checkpoints: string[] = [];
   const uploaded: string[] = [];
   let rev = 0;
-  const state = { persisted, company };
+  const state = { persisted, company, shared: new Set(shared) };
+  const askedAbout: string[] = [];
   const batch: AutoSaveBatching = {
     maxDelayMs: BATCH_MS,
-    uploadNow: () => state.company,
+    uploadNow: (id) => {
+      askedAbout.push(id);
+      return state.company || state.shared.has(id);
+    },
     checkpoint: async (_id, model) => {
       checkpoints.push(model.title as string);
       rev += 1;
@@ -36,7 +40,7 @@ function setup({ persisted = true, company = false } = {}) {
     onUploaded: (_id, r) => uploaded.push(r)
   };
   const hook = renderHook(() => useAutoSave({ storage, enabled: true, batch }));
-  return { hook, uploads, checkpoints, uploaded, state };
+  return { hook, uploads, checkpoints, uploaded, state, askedAbout };
 }
 
 /** Let the debounce fire and the async checkpoint settle. */
@@ -154,4 +158,27 @@ test('without batching, the 2 s autosave uploads directly as before', async () =
   act(() => hook.result.current.scheduleSave('d1', MODEL('a')));
   await pause();
   expect(uploads).toEqual(['a']);
+});
+
+test('a save starts 1 s after the last edit (owner decision 2026-11-10)', async () => {
+  expect(DEBOUNCE_MS).toBe(1000);
+  const { hook, checkpoints } = setup();
+  act(() => hook.result.current.scheduleSave('d1', MODEL('a')));
+  await pause(999);
+  expect(checkpoints).toEqual([]);
+  await pause(1);
+  expect(checkpoints).toEqual(['a']);
+});
+
+test('a diagram other people have uploads at once; the others still batch', async () => {
+  const { hook, uploads, askedAbout } = setup({ shared: ['shared-1'] });
+  act(() => hook.result.current.scheduleSave('shared-1', MODEL('theirs-too')));
+  await pause();
+  expect(uploads).toEqual(['theirs-too']);
+  expect(askedAbout).toEqual(['shared-1']);
+
+  act(() => hook.result.current.scheduleSave('mine', MODEL('only-mine')));
+  await pause();
+  expect(uploads).toEqual(['theirs-too']);
+  expect(hook.result.current.saveStatus).toBe('local');
 });

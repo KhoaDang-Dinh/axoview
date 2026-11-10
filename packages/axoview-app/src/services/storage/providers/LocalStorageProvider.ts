@@ -6,6 +6,7 @@ import {
   TreeManifest,
   isPersistedDiagramBlob
 } from '../types';
+import type { AddMemberResult, DiagramMember, SharedState } from '../types';
 import { leanIfModel } from '../leanModel';
 import { apiBaseUrl } from '../../../utils/apiBaseUrl';
 import { apiFetch } from '../../apiFetch';
@@ -88,6 +89,11 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
 /** Under the browsers' 64 KB keepalive budget, with room for another request. */
 const KEEPALIVE_MAX_BYTES = 48_000;
 
+/** A listing row's `shared` field (a diagram someone shared with this account). */
+function isSharedRow(value: unknown): value is { ownerEmail?: string | null } {
+  return typeof value === 'object' && value !== null && (value as { role?: unknown }).role === 'editor';
+}
+
 export class LocalStorageProvider implements StorageProvider {
   readonly id = 'local' as const;
   readonly displayName = 'Local Storage';
@@ -105,6 +111,8 @@ export class LocalStorageProvider implements StorageProvider {
   private readonly contentVersions = new Map<string, number>();
   /** lastModified of each diagram as this tab last saw it on the server (serverStamp). */
   private readonly serverModified = new Map<string, string>();
+  // What the server last said about who else has each diagram (rememberShared).
+  private readonly sharedStates = new Map<string, SharedState>();
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl ?? apiBaseUrl();
@@ -136,7 +144,10 @@ export class LocalStorageProvider implements StorageProvider {
         ? d.lastModified
         : new Date(d.lastModified as string | number | Date).toISOString(),
       folderId: (d.folderId as string | null | undefined) ?? null,
-      deletedAt: (d.deletedAt as string | undefined) ?? undefined
+      deletedAt: (d.deletedAt as string | undefined) ?? undefined,
+      ...(isSharedRow(d.shared)
+        ? { shared: { role: 'editor' as const, ownerEmail: d.shared.ownerEmail ?? null } }
+        : {})
     }));
   }
 
@@ -145,6 +156,7 @@ export class LocalStorageProvider implements StorageProvider {
       signal: timeoutSignal(10000)
     });
     if (!response.ok) throw new Error(`Failed to load diagram: ${response.status}`);
+    this.rememberShared(id, response);
     const version = response.headers?.get('ETag');
     const match = version?.match(/^"([1-9][0-9]*)"$/);
     if (match) {
@@ -233,6 +245,7 @@ export class LocalStorageProvider implements StorageProvider {
       response = await this.putDiagram(id, body);
     }
     if (!response.ok) throw new Error(`Failed to save diagram: ${response.status}`);
+    this.rememberShared(id, response);
     this.rememberVersion(id, response);
     this.rememberStamp(id, await response.json().catch(() => null));
   }
@@ -248,6 +261,21 @@ export class LocalStorageProvider implements StorageProvider {
     if (!match) return;
     this.diagramVersions.set(id, Number(match[1]));
     this.contentVersions.set(id, Number(match[1]));
+  }
+
+  /**
+   * Whether other people have `id` (the server's X-Axoview-Shared header on a
+   * load or save): the app then uploads every save at once instead of
+   * batching, so they see it within a second or two.
+   */
+  private rememberShared(id: string, response: Response): void {
+    const value = response.headers?.get('X-Axoview-Shared');
+    if (value === 'by-you' || value === 'with-you') this.sharedStates.set(id, value);
+    else this.sharedStates.delete(id);
+  }
+
+  sharedState(id: string): SharedState | undefined {
+    return this.sharedStates.get(id);
   }
 
   /** Re-read the diagram's current version from the server (its ETag). */
@@ -823,6 +851,51 @@ export class LocalStorageProvider implements StorageProvider {
     });
     if (!response.ok) throw await shareRequestError(response);
     return response.json();
+  }
+
+  // ---------------------------------------------------------------------------
+  // People a diagram is shared with (ADR 0057) — server storage with accounts
+  // ---------------------------------------------------------------------------
+
+  async listMembers(id: string): Promise<DiagramMember[]> {
+    if (!this.usingServer) return [];
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members`, {
+      signal: timeoutSignal(10000)
+    });
+    if (!response.ok) throw new Error(`Failed to list people: ${response.status}`);
+    const body = (await response.json()) as { members?: DiagramMember[] };
+    return Array.isArray(body.members) ? body.members : [];
+  }
+
+  async addMember(id: string, email: string): Promise<AddMemberResult> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+        signal: timeoutSignal(10000)
+      });
+      const body = (await response.json().catch(() => null)) as
+        | { member?: DiagramMember; reason?: string; error?: string }
+        | null;
+      if (response.ok && body?.member) {
+        this.sharedStates.set(id, 'by-you');
+        return { ok: true, member: body.member };
+      }
+      return { ok: false, reason: body?.reason || 'error', message: body?.error || `Sharing failed (${response.status})` };
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async removeMember(id: string, sub: string): Promise<void> {
+    if (!this.usingServer) return;
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members/${encodeURIComponent(sub)}`, {
+      method: 'DELETE',
+      signal: timeoutSignal(10000)
+    });
+    if (!response.ok) throw new Error(`Failed to remove: ${response.status}`);
   }
 
   async unshareDiagram(id: string): Promise<void> {

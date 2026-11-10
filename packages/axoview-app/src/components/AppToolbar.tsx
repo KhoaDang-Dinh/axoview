@@ -36,6 +36,7 @@ import { ExportPopover } from './ExportPopover';
 import { AuthControl } from './AuthControl';
 import { CognitoAccountControl } from './CognitoAccountControl';
 import { shareUrlFromUuid } from '../utils/shareUrl';
+import { SharePeople } from './SharePeople';
 import {
   drivePreviewUrl,
   getAccessOverview,
@@ -53,7 +54,8 @@ export function AppToolbar() {
     serverStorageAvailable,
     remoteStorageActive,
     activeProviderId,
-    storage
+    storage,
+    runtimeConfig
   } = useAppStorage();
   const driveActive = activeProviderId === 'google-drive';
   const {
@@ -126,6 +128,10 @@ export function AppToolbar() {
   const shareReqRef = useRef(0);
 
   const currentDiagramId = currentDiagram?.id;
+  // Sharing by email (ADR 0057): accounts and server storage, not Drive.
+  const peopleSharing = !!runtimeConfig?.sharing && !driveActive && remoteStorageActive;
+  const sharedWithYou =
+    peopleSharing && !!currentDiagramId && storage?.sharedState?.(currentDiagramId) === 'with-you';
 
   useEffect(() => {
     shareReqRef.current++; // invalidate any in-flight share fetch for the old id
@@ -150,6 +156,9 @@ export function AppToolbar() {
     const current = () => shareReqRef.current === reqId;
     setShowSharePopover(true);
     setShareError(null);
+    // Someone else's diagram, shared with this account: only its owner can
+    // publish a link or add people, so the popover just says so.
+    if (sharedWithYou) return;
     let url = shareUrl;
     if (!url) {
       try {
@@ -629,6 +638,15 @@ export function AppToolbar() {
                 <CloseIcon />
               </IconButton>
             </Stack>
+            {sharedWithYou ? (
+              <Typography variant="body2" color="text.secondary" data-axoview-id="share-shared-with-you">
+                {t(
+                  'share.people.sharedWithYou',
+                  'Someone shared this diagram with you, so you can edit it. Only its owner can share it further.'
+                )}
+              </Typography>
+            ) : (
+            <>
             <Typography variant="body2" color="text.secondary">
               {t('share.hint', 'Anyone with this link can view the diagram in read-only mode.')}
             </Typography>
@@ -661,6 +679,14 @@ export function AppToolbar() {
                 {shareCopied ? t('share.copied', '✓ Copied!') : t('share.copy', 'Copy')}
               </Button>
             </Stack>
+            {peopleSharing && currentDiagramId && storage && (
+              <>
+                <Divider />
+                <SharePeople diagramId={currentDiagramId} storage={storage} />
+              </>
+            )}
+            </>
+            )}
           </Stack>
         </Popover>
       )}

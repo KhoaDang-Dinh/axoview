@@ -1,6 +1,7 @@
 # ADR 0057 — Diagram Sharing and Permissions
 
-**Status:** Proposed
+**Status:** Accepted: the email field shipped (2026-11-10; see the addendum below). Realtime
+co-editing waits for [ADR 0055](0055-multiplayer-operation-protocol.md)/[0056](0056-realtime-service-on-eks.md).
 **Date:** 2026-11-09
 **Supersedes:** none
 **Superseded by:** none
@@ -134,3 +135,33 @@ open and edit the same server diagram, with access checked on every request and 
   - that user sees the diagram under "Shared with me" and edits live;
   - removing them takes it away;
   - an unknown email, and the same email added again, each show a red message.
+
+## Addendum 2026-11-10: what shipped first
+
+The owner asked for the email field under the share link, the green/red pop-ups and 1-second saves,
+on today's storage and sync, ahead of the realtime service.
+
+1. **Storage:** the membership list and the "shared with me" index live as two JSON objects in each
+   side's own workspace (`sharing/members/<diagramId>` and `sharing/inbox`, through the storage
+   adapter: S3 objects on AWS, files on fs), not as the DynamoDB items in §1. Every change is
+   read-modify-write. Two owners sharing with one person in the same instant could drop one inbox
+   entry; sharing again repairs it. The DynamoDB layout stays the target for the realtime phase.
+2. **Access:** a request for `/api/diagrams/:id` from someone the diagram was shared with runs
+   against the owner's workspace. Rename, move, trash, delete and the public link are owner-only
+   (`403 owner-only`). Membership answers are cached for 10 s per API process, so a removal takes
+   effect at once on the process that made it and within 10 s elsewhere.
+3. **Live updates:** without the sequencer, editing stays whole-document with "latest save wins".
+   Each save is published to the sync stream of everyone who has the diagram, and their open tab
+   reloads it.
+   - **Saves:** the app saves 1 s after the last edit (down from 2 s). A shared diagram uploads at
+     once instead of batching.
+   - **Measured:** a dropped icon reached the other person's open tab 1.8 s later, including the
+     drag.
+4. **Lookup:** Cognito `ListUsers` with an exact `email` filter, keeping verified, enabled
+   accounts. The API role has `cognito-idp:ListUsers` on its own pool only (infra_website,
+   `modules/identity/app_user_lookup.tf`).
+5. **Not yet:**
+   - roles other than `editor`;
+   - the agent rule (§4), which applies once agents act on server diagrams;
+   - the realtime socket's access checks (§3), which come with ADR 0056.
+

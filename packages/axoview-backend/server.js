@@ -29,6 +29,8 @@ import {
   revokeCognitoSession
 } from './src/cognitoSession.js';
 import { releaseInfoFor } from './src/releaseInfo.js';
+import { createSharing, SharingError } from './src/sharing.js';
+import { createCognitoDirectory } from './src/cognitoDirectory.js';
 
 dotenv.config();
 
@@ -264,6 +266,36 @@ const adapter = STORAGE_ADAPTER === 'aws'
   ? createAwsPublicAdapter({ bucketName: DATA_BUCKET, tableName: DYNAMODB_TABLE, region: AWS_REGION })
   : addWorkspaceScope(createFsAdapter(STORAGE_PATH));
 
+/** One workspace's storage: a signed-in person's own, or a diagram owner's. */
+function workspaceAdapter(workspaceId) {
+  return STORAGE_ADAPTER === 'aws'
+    ? createAwsWorkspaceAdapter({
+        workspaceId,
+        bucketName: DATA_BUCKET,
+        tableName: DYNAMODB_TABLE,
+        region: AWS_REGION
+      })
+    : adapter.forWorkspace(workspaceId);
+}
+
+// Sharing a diagram with another account by email (src/sharing.js, ADR 0057):
+// needs accounts (Cognito, with the pool to look people up in) and storage.
+const sharing = STORAGE_ENABLED && AUTH_MODE === 'cognito' && routeEnv.COGNITO_USER_POOL_ID && routeEnv.COGNITO_REGION
+  ? createSharing({
+      adapterFor: workspaceAdapter,
+      ...createCognitoDirectory({ userPoolId: routeEnv.COGNITO_USER_POOL_ID, region: routeEnv.COGNITO_REGION })
+    })
+  : null;
+routeEnv.SHARING_ENABLED = !!sharing;
+// Only the owner may rename, move, trash, delete or publish a shared diagram.
+const OWNER_ONLY_ROUTES = new Set([
+  'PATCH /api/diagrams/:id',
+  'PATCH /api/diagrams/:id/move',
+  'DELETE /api/diagrams/:id',
+  'POST /api/diagrams/:id/share',
+  'DELETE /api/diagrams/:id/share'
+]);
+
 // Realtime multi-device sync (src/syncCursor.js): every write bumps the
 // workspace's change cursor; /api/sync/events streams it to the other devices.
 // AWS: a DynamoDB item every API pod reads. fs (one process): in memory.
@@ -347,11 +379,27 @@ function makeCtx(req) {
 }
 
 /**
- * Tell the user's other devices about a successful write. Never fails the
- * write: a missed bump only delays the other devices until their next
- * reconnect or focus check.
+ * Who should hear about a change to diagram `id` in `owner`'s workspace: the
+ * owner and everyone it is shared with (each through their own sync stream).
  */
-async function publishChange(req, route, result) {
+async function diagramAudience(owner, id) {
+  const audience = new Set([owner]);
+  if (sharing && id) {
+    try {
+      for (const sub of await sharing.memberSubs(owner, id)) audience.add(sub);
+    } catch (err) {
+      console.warn('[sharing] could not read members', err?.name || err);
+    }
+  }
+  return audience;
+}
+
+/**
+ * Tell the user's other devices about a successful write, and for a shared
+ * diagram everyone else who has it. Never fails the write: a missed bump only
+ * delays the other devices until their next reconnect or focus check.
+ */
+async function publishChange(req, route, result, target) {
   const change = describeChange({
     method: req.method,
     route,
@@ -363,11 +411,34 @@ async function publishChange(req, route, result) {
   const device = req.headers['x-axoview-device'];
   if (typeof device === 'string' && DEVICE_ID_RE.test(device)) change.origin = device;
   change.at = new Date().toISOString();
-  try {
-    await syncCursor.bump(syncWorkspaceId(req), change);
-  } catch (err) {
-    console.warn('[sync] could not publish %s %s', req.method, route, err?.name || err);
+  const workspaces = change.kind === 'diagram' && target?.owner
+    ? await diagramAudience(target.owner, change.id)
+    : new Set([syncWorkspaceId(req)]);
+  for (const workspace of workspaces) {
+    try {
+      await syncCursor.bump(workspace, change);
+    } catch (err) {
+      console.warn('[sync] could not publish %s %s', req.method, route, err?.name || err);
+    }
   }
+}
+
+/**
+ * The storage a request acts on. A signed-in person's own workspace, or, for
+ * a diagram shared with them, its owner's (owner-only actions refused there).
+ */
+async function requestTarget(req) {
+  if (!req.user?.sub) return { adapter, owner: null, shared: false };
+  const own = { adapter: workspaceAdapter(req.user.sub), owner: req.user.sub, shared: false };
+  const route = `${req.method} ${req.route?.path}`;
+  const id = req.params?.id;
+  if (!sharing || !id || !req.route?.path?.startsWith('/api/diagrams/:id')) return own;
+  const access = await sharing.accessTo(req.user.sub, id);
+  if (!access) return own;
+  if (OWNER_ONLY_ROUTES.has(route)) {
+    throw new SharingError(403, 'owner-only', 'Only the owner can do that');
+  }
+  return { adapter: workspaceAdapter(access.owner), owner: access.owner, shared: true };
 }
 
 function adapt(handler, { requireStorage = true, sync = null } = {}) {
@@ -376,21 +447,18 @@ function adapt(handler, { requireStorage = true, sync = null } = {}) {
       return res.status(503).json({ error: 'Server storage is disabled' });
     }
     try {
-      const requestAdapter = req.user?.sub
-        ? STORAGE_ADAPTER === 'aws'
-          ? createAwsWorkspaceAdapter({
-              workspaceId: req.user.sub,
-              bucketName: DATA_BUCKET,
-              tableName: DYNAMODB_TABLE,
-              region: AWS_REGION
-            })
-          : adapter.forWorkspace(req.user.sub)
-        : adapter;
-      const result = await handler(requestAdapter, makeCtx(req));
+      const target = await requestTarget(req);
+      const result = await handler(target.adapter, makeCtx(req));
       // `sync: false`: a write that changed nothing (an unchanged save) has
       // nothing to tell the other devices.
       if (sync && result.sync !== false && result.status >= 200 && result.status < 300) {
-        await publishChange(req, sync, result);
+        await publishChange(req, sync, result, target);
+      }
+      // A diagram other people have: the app uploads its saves at once
+      // instead of batching them (axoview-app DiagramLifecycleProvider).
+      if (sharing && req.params?.id && req.route?.path === '/api/diagrams/:id' && result.status < 300 &&
+          (target.shared || (target.owner && (await diagramAudience(target.owner, req.params.id)).size > 1))) {
+        res.setHeader('X-Axoview-Shared', target.shared ? 'with-you' : 'by-you');
       }
       for (const [name, value] of Object.entries(result.headers || {})) {
         res.setHeader(name, value);
@@ -473,7 +541,12 @@ app.use('/api/ai', aiChatRouter);
 app.use('/api/mcp', createMcpRouter());
 
 // Diagrams (`sync`: the route, for the change other devices are told about)
-app.get('/api/diagrams', adapt(routes.listDiagrams));
+app.get('/api/diagrams', adapt(async (requestAdapter, ctx) => {
+  const result = await routes.listDiagrams(requestAdapter, ctx);
+  // Diagrams other people shared with this person, marked `shared`.
+  if (sharing && ctx.user?.sub) result.body = [...result.body, ...await sharing.sharedWithMe(ctx.user.sub)];
+  return result;
+}));
 app.get('/api/diagrams/:id', adapt(routes.getDiagram));
 app.post('/api/diagrams', adapt(routes.createDiagram, { sync: '/api/diagrams' }));
 app.put('/api/diagrams/:id', adapt(routes.saveDiagram, { sync: '/api/diagrams/:id' }));
@@ -613,6 +686,48 @@ app.get('/api/sync/events', async (req, res) => {
 });
 
 // Share
+// People a diagram is shared with (ADR 0057 §5): the owner lists, adds by
+// email, and removes. The person added hears about it on their sync stream,
+// so the diagram appears in their explorer at once.
+const SHARING_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+function sharingRoute(handler) {
+  return async (req, res) => {
+    if (!sharing) return res.status(404).json({ error: 'Sharing is not available here' });
+    if (!req.user?.sub) return res.status(401).json({ error: 'Unauthorized' });
+    if (!SHARING_ID_RE.test(req.params.id || '')) return res.status(400).json({ error: 'Invalid id' });
+    try {
+      const { status, body } = await handler(req);
+      res.status(status).json(body);
+    } catch (err) {
+      if (err instanceof SharingError) return res.status(err.status).json(err.body);
+      console.error('[sharing %s]', req.method, err);
+      res.status(500).json({ error: 'Internal error', reason: 'error' });
+    }
+  };
+}
+async function tellMember(sub, action, id) {
+  try {
+    await syncCursor.bump(sub, { kind: 'diagram', action, id, at: new Date().toISOString() });
+  } catch (err) {
+    console.warn('[sharing] could not notify', err?.name || err);
+  }
+}
+app.get('/api/diagrams/:id/members', sharingRoute(async (req) => ({
+  status: 200,
+  body: { members: await sharing.listMembers(req.user.sub, req.params.id) }
+})));
+app.post('/api/diagrams/:id/members', sharingRoute(async (req) => {
+  const member = await sharing.addMember(req.user.sub, req.params.id, req.body?.email);
+  await tellMember(member.sub, 'create', req.params.id);
+  return { status: 201, body: { member } };
+}));
+app.delete('/api/diagrams/:id/members/:sub', sharingRoute(async (req) => {
+  if (!/^[A-Za-z0-9-]{1,128}$/.test(req.params.sub)) return { status: 400, body: { error: 'Invalid member' } };
+  await sharing.removeMember(req.user.sub, req.params.id, req.params.sub);
+  await tellMember(req.params.sub, 'delete', req.params.id);
+  return { status: 200, body: { removed: req.params.sub } };
+}));
+
 app.post('/api/diagrams/:id/share', adapt(routes.shareDiagram));
 // SHARE-10 (owner ruling 2026-07-30): the read stays exempt from
 // ENABLE_SERVER_STORAGE=false — a published artifact surviving an API

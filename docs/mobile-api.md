@@ -20,6 +20,7 @@ GET /api/config
 {
   "authMode": "cognito",
   "serverStorage": true,
+  "sharing": true,
   "publicBaseUrl": "https://example.com",
   "cognito": {
     "domain": "https://axoview-prod-123456789012.auth.ap-southeast-1.amazoncognito.com",
@@ -186,6 +187,25 @@ Sharing:
 | `POST /api/diagrams/{id}/share` | `{ uuid, url, sharedAt }`: a read-only public snapshot |
 | `DELETE /api/diagrams/{id}/share` | `{ success }` |
 | `GET /api/public/diagrams/{uuid}` | the snapshot (no sign-in) |
+
+People a diagram is shared with ([ADR 0057](adr/0057-diagram-sharing-and-permissions.md); only when
+`/api/config` says `"sharing": true`; the owner only, anyone else gets `404`):
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /api/diagrams/{id}/members` | — | `{ members: [{ sub, email, role, addedAt }] }` |
+| `POST /api/diagrams/{id}/members` | `{ "email": "…" }` | `201 { member }`; or an error with a `reason`: `no-account` (404), `already-shared` (409), `self` (422), `invalid-email` (400), `rate-limited` (429, over 20 a minute) |
+| `DELETE /api/diagrams/{id}/members/{sub}` | — | `{ removed }` |
+
+- **Who can be added:** an account whose email is verified. Everyone added is an `editor`.
+- **On their side:** a diagram shared with someone appears in their `GET /api/diagrams` with
+  `shared: { role, ownerEmail }`, and loads and saves at its usual `/api/diagrams/{id}`.
+  Renaming, moving, trashing, deleting or publishing it is refused with `403`
+  (`reason: "owner-only"`).
+- **Live:** adding or removing a person sends a `diagram` `create` or `delete` change to their
+  sync stream, and every save goes to everyone who has the diagram.
+- **Header:** `GET`/`PUT /api/diagrams/{id}` answers `X-Axoview-Shared: by-you` or `with-you` for
+  a diagram other people have; the web app then uploads each save at once instead of batching.
 
 ### The diagram document
 

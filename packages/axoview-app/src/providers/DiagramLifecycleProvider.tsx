@@ -459,8 +459,8 @@ export function DiagramLifecycleProvider({
 
   // Batched uploads (server storage; stores/draftStore.ts, hooks/useAutoSave.ts).
   // Each autosave is a checkpoint in this browser; while no other browser has
-  // the workspace open the upload waits up to UPLOAD_BATCH_MS and carries the
-  // latest checkpoint. Drafts belong to the signed-in user (one shared key
+  // the workspace open and no one else has the diagram, the upload waits up
+  // to UPLOAD_BATCH_MS and carries the latest checkpoint. Drafts belong to the signed-in user (one shared key
   // when the deployment has no sign-in).
   const signedInSub = useCognitoSessionStore((state) => state.user?.sub ?? null);
   const userKeyRef = useRef('workspace');
@@ -488,7 +488,11 @@ export function DiagramLifecycleProvider({
     if (!batchingEnabled) return null;
     return {
       maxDelayMs: UPLOAD_BATCH_MS,
-      uploadNow: () => othersPresent(),
+      // At once while another browser has the workspace open, or when other
+      // people have this diagram (shared either way, ADR 0057): they should
+      // see the edit within a second or two, not after the batch window.
+      uploadNow: (id) => othersPresent() ||
+        (storageRef.current as { sharedState?: (id: string) => string | undefined } | null)?.sharedState?.(id) !== undefined,
       checkpoint: async (id, model) => {
         const userKey = userKeyRef.current;
         const baseVersion = knownVersionOfRef.current(id);

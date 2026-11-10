@@ -20,11 +20,12 @@ export type FlushOutcome = 'nothing-pending' | 'saved' | 'error';
 
 /**
  * Batched uploads (server storage). Without this every autosave goes to
- * storage 2 s after the user pauses, as it always has. With it, that moment is
+ * storage 1 s after the user pauses. With it, that moment is
  * a CHECKPOINT (the model saved in the browser, stores/draftStore.ts), and the
  * upload follows:
- *   - at once when `uploadNow()` says so (another browser has the workspace
- *     open, services/sync/presence.ts) or the checkpoint could not be
+ *   - at once when `uploadNow(id)` says so (another browser has the workspace
+ *     open, services/sync/presence.ts, or other people have this diagram:
+ *     it is shared, ADR 0057) or the checkpoint could not be
  *     persisted (no IndexedDB: nothing would survive a crash);
  *   - otherwise `maxDelayMs` after the first checkpoint not yet uploaded, as
  *     one upload of the latest one.
@@ -34,7 +35,7 @@ export type FlushOutcome = 'nothing-pending' | 'saved' | 'error';
  */
 export interface AutoSaveBatching {
   checkpoint: (diagramId: string, model: DiagramData) => Promise<{ rev: string; persisted: boolean }>;
-  uploadNow: () => boolean;
+  uploadNow: (diagramId: string) => boolean;
   maxDelayMs: number;
   /** The upload that included checkpoint `rev` landed. */
   onUploaded?: (diagramId: string, rev: string) => void;
@@ -80,7 +81,9 @@ export interface UseAutoSaveResult {
   resetStatus: () => void;
 }
 
-const DEBOUNCE_MS = 2000;
+// How long after the last edit a save starts (owner decision 2026-11-10: 1 s,
+// down from 2 s, so shared diagrams reach the other people sooner).
+export const DEBOUNCE_MS = 1000;
 
 interface Pending {
   diagramId: string;
@@ -206,7 +209,7 @@ export function useAutoSave({
     if (pendingRef.current !== pending) return;
     pending.rev = result.rev || undefined;
     pending.persisted = result.persisted;
-    if (!result.persisted || policy.uploadNow()) {
+    if (!result.persisted || policy.uploadNow(pending.diagramId)) {
       void startSave();
       return;
     }

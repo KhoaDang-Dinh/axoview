@@ -47,7 +47,30 @@ export interface DiagramMeta {
   thumbnail?: string;      // base64 PNG, generated on save
   lockedBy?: string;       // reserved for P3 collaboration — leave undefined for now
   deletedAt?: string;      // ISO 8601 — soft delete, null = not deleted
+  // Someone else's diagram shared with this account (ADR 0057): the owner's
+  // email when known. Only the owner can rename, move, trash or share it.
+  shared?: { role: 'editor'; ownerEmail: string | null };
 }
+
+/** A person a diagram is shared with, as its owner sees them (ADR 0057). */
+export interface DiagramMember {
+  sub: string;
+  email: string;
+  role: 'editor';
+  addedAt: string;
+}
+
+/**
+ * Adding a person by email. reason codes from the server: no-account,
+ * already-shared, self, invalid-email, rate-limited, not-found, owner-only;
+ * 'error' for a network or server failure.
+ */
+export type AddMemberResult =
+  | { ok: true; member: DiagramMember }
+  | { ok: false; reason: string; message: string };
+
+/** by-you: you own it and shared it; with-you: someone shared it with you. */
+export type SharedState = 'by-you' | 'with-you';
 
 export interface FolderMeta {
   id: string;
@@ -106,6 +129,14 @@ export interface StorageProvider {
   // Throws if the provider does not support shares (e.g. session-only).
   shareDiagram?(id: string): Promise<{ uuid: string; url: string; sharedAt: string }>;
   unshareDiagram?(id: string): Promise<void>;
+
+  // People a server diagram is shared with (ADR 0057; server storage with
+  // accounts). sharedState: what the server last said about `id` (the
+  // X-Axoview-Shared header); a shared diagram uploads its saves at once.
+  sharedState?(id: string): SharedState | undefined;
+  listMembers?(id: string): Promise<DiagramMember[]>;
+  addMember?(id: string, email: string): Promise<AddMemberResult>;
+  removeMember?(id: string, sub: string): Promise<void>;
 
   // Reserved for P3 — no-op stubs for now
   subscribe?(diagramId: string, callback: () => void): () => void;

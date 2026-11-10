@@ -1,6 +1,9 @@
 import {
+  AddMemberResult,
+  DiagramMember,
   DiagramMeta,
   FolderMeta,
+  SharedState,
   StorageProvider,
   TreeManifest
 } from './types';
@@ -163,6 +166,26 @@ export class StorageManager implements StorageProvider {
       throw new Error(`${provider.displayName} does not support sharing`);
     }
     return provider.shareDiagram(id);
+  }
+
+  sharedState(id: string): SharedState | undefined {
+    return this.active?.sharedState?.(id);
+  }
+
+  async listMembers(id: string): Promise<DiagramMember[]> {
+    const provider = this.getActiveProvider();
+    return provider.listMembers ? provider.listMembers(id) : [];
+  }
+
+  async addMember(id: string, email: string): Promise<AddMemberResult> {
+    const provider = this.getActiveProvider();
+    if (!provider.addMember) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.addMember(id, email);
+  }
+
+  async removeMember(id: string, sub: string): Promise<void> {
+    const provider = this.getActiveProvider();
+    if (provider.removeMember) await provider.removeMember(id, sub);
   }
 
   async unshareDiagram(id: string): Promise<void> {
