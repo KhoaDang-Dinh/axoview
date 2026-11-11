@@ -10,6 +10,10 @@
  * instead of one model call (novaAgent.js, ADR 0060): Nova may search the
  * manual, read the person's diagrams and suggest changes through tools. The
  * quota, the guardrail, the history and the answer's shape stay the same.
+ *
+ * With AI_MODEL_ROUTING_ENABLED, each message is answered by the configured
+ * model or a stronger one (modelRouting.js, ADR 0061); if the stronger one fails, the
+ * configured model answers instead.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Router } from 'express';
@@ -21,6 +25,7 @@ import { createNovaClient, defaultModelFor } from './bedrock.js';
 import { createGuardrail, isObviousPromptInjection, AiSafetyBlocked } from './guardrails.js';
 import { composeRagContext, PUBLIC_KNOWLEDGE } from './rag.js';
 import { createNovaAgentModel, runNovaAgent } from './novaAgent.js';
+import { chooseModel, resolveRouting } from './modelRouting.js';
 import { docsSearchFromEnv } from './docsSearch.js';
 import { emitAgentTelemetry, emitAiTelemetry } from './observability.js';
 import {
@@ -138,6 +143,12 @@ export function createAiChatRouter({
   // () => the person's workspace reader (workspaceReader.js), or null where
   // there is no server storage; read when a message runs, not at startup.
   workspaceReader = () => null,
+  // Model routing (modelRouting.js): off unless AI_MODEL_ROUTING_ENABLED. The
+  // strong model defaults to Nova Pro, called the same way as the configured one.
+  routingEnabled = process.env.AI_MODEL_ROUTING_ENABLED === 'true',
+  strongModelId = process.env.AI_BEDROCK_STRONG_MODEL_ID,
+  invokeNovaStrong,
+  agentModelStrong,
   now = () => new Date(),
   log = console
 } = {}) {
@@ -150,6 +161,9 @@ export function createAiChatRouter({
   });
   const sections = new Map(PUBLIC_KNOWLEDGE.map((chunk) => [chunk.id, chunk]));
   let model = agentModel || null;
+  // The strong model's two callers (single call, agent loop); null = no routing.
+  let invokeStrong = null;
+  let modelStrong = null;
   let inspect = inspectGuardrail || null;
   let invoke = invokeNova || null;
   let client = ddb || null;
@@ -176,6 +190,25 @@ export function createAiChatRouter({
       inspect = inspectGuardrail || null;
       invoke = invokeNova || null;
       log.error('[ai] chat disabled, invalid configuration: %s', setupProblem);
+    }
+    // Routing that cannot be set up never stops chat: the configured model
+    // then answers everything.
+    if (routingEnabled && !setupProblem) {
+      try {
+        const routing = resolveRouting({ enabled: true, region, modelId, strongModelId });
+        if (routing.strongModelId) {
+          invokeStrong = invokeNovaStrong || createNovaClient({ region, modelId: routing.strongModelId });
+          if (agentEnabled && model) {
+            modelStrong = agentModelStrong || createNovaAgentModel({ region, modelId: routing.strongModelId });
+          }
+        } else {
+          log.warn('[ai] model routing is off: %s', routing.problem);
+        }
+      } catch (error) {
+        invokeStrong = null;
+        modelStrong = null;
+        log.warn('[ai] model routing is off: %s', error?.message || 'invalid configuration');
+      }
     }
   }
   // Live chat is usable only when every piece is in place; /api/config
@@ -357,21 +390,44 @@ export function createAiChatRouter({
     for (const reference of references) await inspect(reference.text, 'INPUT');
     const evidence = composeRagContext(references);
     const prompt = composePrompt({ message, evidence, diagramText, nonce: randomBytes(6).toString('hex') });
-    let output;
-    let run = null;
-    if (agentEnabled && model) {
-      // The agent loop: the same question and data blocks, plus tools.
-      run = await runNovaAgent({
-        model, history, userTurn: prompt.user, page: diagram || null,
-        searchManual: retrieve, manualSection: (sectionId) => sections.get(sectionId) || null,
-        reader: workspaceReader(), sub: actor, inspect, references
-      });
-      output = { text: run.text, usage: run.usage };
-    } else {
+    const agentLoop = Boolean(agentEnabled && model);
+    const reader = agentLoop ? workspaceReader() : null;
+    // Which model answers (modelRouting.js); the configured one unless routing is set up.
+    const canRoute = agentLoop ? Boolean(modelStrong) : Boolean(invokeStrong);
+    let route = canRoute
+      ? chooseModel({
+          sharedPage: Boolean(diagramText), workspaceTools: Boolean(reader),
+          questionChars: message.length, historyMessages: history.length
+        })
+      : null;
+    const answer = async (tier) => {
+      if (agentLoop) {
+        // The agent loop: the same question and data blocks, plus tools.
+        const agentRun = await runNovaAgent({
+          model: tier === 'strong' ? modelStrong : model,
+          history, userTurn: prompt.user, page: diagram || null,
+          searchManual: retrieve, manualSection: (sectionId) => sections.get(sectionId) || null,
+          reader, sub: actor, inspect, references
+        });
+        return { run: agentRun, output: { text: agentRun.text, usage: agentRun.usage } };
+      }
       const modelMessages = [...history, { role: 'user', text: prompt.user }];
       // Suggestions need room for their JSON block; plain answers stay short.
-      output = await invoke(modelMessages, { system: prompt.system, maxTokens: diagramText ? 1200 : 512 });
+      const call = tier === 'strong' ? invokeStrong : invoke;
+      return { run: null, output: await call(modelMessages, { system: prompt.system, maxTokens: diagramText ? 1200 : 512 }) };
+    };
+    let answered;
+    try {
+      answered = await answer(route?.tier || 'fast');
+    } catch (error) {
+      // The strong model failing (not granted, throttled, down) must not cost
+      // the user their answer: the configured model answers instead.
+      if (route?.tier !== 'strong' || error instanceof AiSafetyBlocked) throw error;
+      log.warn('[ai] the strong model failed (%s); answering with the configured model', error?.name || 'unknown');
+      route = { tier: 'fast', reason: 'fallback' };
+      answered = await answer('fast');
     }
+    const { run, output } = answered;
     if (isObviousPromptInjection(output.text)) throw new AiSafetyBlocked('OUTPUT');
     await inspect(output.text, 'OUTPUT');
     // Suggestions only answer a page the user chose to share: from the
@@ -407,7 +463,8 @@ export function createAiChatRouter({
     ]);
     telemetry({ requestId: ctx.requestId, stage: 'completed', result: 'ok',
       latencyMs: Date.now() - ctx.startedAt, inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens, retrievedDocuments: references.length });
+      outputTokens: usage.outputTokens, retrievedDocuments: references.length,
+      ...(route ? { model: route.tier, route: route.reason } : {}) });
     // An agent turn: the user shared a page, so the model could propose edits.
     if (diagramText) {
       agentTelemetry({ requestId: ctx.requestId, suggestions: suggestions.length,

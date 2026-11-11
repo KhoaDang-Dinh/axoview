@@ -6,9 +6,10 @@
  */
 import { afterEach, expect, jest, test } from '@jest/globals';
 import http from 'node:http';
+import { format } from 'node:util';
 import express from 'express';
 import { createAiChatRouter } from '../chat.js';
-import { emitAgentTelemetry } from '../observability.js';
+import { emitAgentTelemetry, emitAiTelemetry } from '../observability.js';
 import { defaultModelFor, validateBedrockConfig } from '../bedrock.js';
 
 /** A DynamoDB stand-in: conditional quota updates, Get/Put, and a Query that
@@ -317,4 +318,127 @@ test('with the agent loop on, Nova searches the manual and suggests through tool
   expect(calls.model).toBe(0); // the single-call path was not used
   expect(model.calls[0].tools).toEqual(['search_manual', 'get_manual_section', 'suggest_changes']);
   expect(events[0]).toMatchObject({ outcome: 'suggested', suggestions: 1, toolCalls: 2 });
+});
+
+// --- Model routing (modelRouting.js) ---------------------------------------
+
+/** A router with routing on: counts which model answered each message. */
+function routedRouter(overrides = {}) {
+  const used = [];
+  const events = [];
+  const warnings = [];
+  const made = chatRouter({
+    routingEnabled: true,
+    invokeNova: async () => { used.push('fast'); return { text: 'Fast answer', usage: { inputTokens: 3, outputTokens: 1 } }; },
+    invokeNovaStrong: async () => { used.push('strong'); return { text: 'Strong answer', usage: { inputTokens: 5, outputTokens: 2 } }; },
+    telemetry: (fields) => events.push(emitAiTelemetry(fields, () => {})),
+    log: { warn: (...args) => warnings.push(format(...args)), error: () => {} },
+    ...overrides
+  });
+  return { ...made, used, events, warnings };
+}
+
+test('routing off (the default): the configured model answers everything and the log line is unchanged', async () => {
+  const events = [];
+  const strong = jest.fn();
+  const { router, calls } = chatRouter({
+    diagramContextEnabled: true, invokeNovaStrong: strong,
+    telemetry: (fields) => events.push(emitAiTelemetry(fields, () => {}))
+  });
+  const api = await serve(router);
+  expect((await api.post({ message: 'What is missing?', diagram: PAGE })).status).toBe(200);
+  expect(calls.model).toBe(1);
+  expect(strong).not.toHaveBeenCalled();
+  expect(events[0]).not.toHaveProperty('model');
+  expect(events[0]).not.toHaveProperty('route');
+});
+
+test('routing on: a plain question goes to the fast model, a shared page to the strong one, and the log says which', async () => {
+  const { router, used, events } = routedRouter({ diagramContextEnabled: true });
+  const api = await serve(router);
+  expect((await (await api.post({ message: 'How do I connect two items?' })).json()).reply).toBe('Fast answer');
+  expect((await (await api.post({ message: 'What is missing?', diagram: PAGE })).json()).reply).toBe('Strong answer');
+  expect(used).toEqual(['fast', 'strong']);
+  expect(events.map((e) => [e.model, e.route])).toEqual([['fast', 'plain'], ['strong', 'page']]);
+});
+
+test('routing on: a long question and a conversation well under way go to the strong model', async () => {
+  const { router, used, events } = routedRouter();
+  const api = await serve(router);
+  await api.post({ message: `Explain ${'this in detail '.repeat(50)}` });
+  expect(used).toEqual(['strong']);
+  // A conversation: the fifth message carries eight earlier ones.
+  let conversationId;
+  for (let i = 0; i < 5; i++) {
+    const body = await (await api.post({ message: `short question ${i}`, ...(conversationId ? { conversationId } : {}) })).json();
+    conversationId = body.conversationId;
+  }
+  expect(used.slice(1)).toEqual(['fast', 'fast', 'fast', 'fast', 'strong']);
+  expect(events.at(-1)).toMatchObject({ model: 'strong', route: 'long' });
+});
+
+test('routing on: when the strong model fails, the configured model answers and the log says fallback', async () => {
+  const { router, used, events, warnings, calls } = routedRouter({
+    diagramContextEnabled: true,
+    invokeNovaStrong: async () => { used.push('strong'); throw Object.assign(new Error('AccessDenied'), { name: 'AccessDeniedException', status: 503 }); }
+  });
+  const api = await serve(router);
+  const response = await api.post({ message: 'What is missing?', diagram: PAGE });
+  expect(response.status).toBe(200);
+  expect((await response.json()).reply).toBe('Fast answer');
+  expect(used).toEqual(['strong', 'fast']);
+  expect(events[0]).toMatchObject({ result: 'ok', model: 'fast', route: 'fallback' });
+  expect(warnings.join('\n')).toMatch(/strong model failed \(AccessDeniedException\)/);
+  // The guardrail still ran on the question, the page and the answer.
+  expect(calls.guardrail).toBeGreaterThanOrEqual(3);
+});
+
+test('routing on: the fast model failing is still an error (no second attempt)', async () => {
+  const { router, used } = routedRouter({
+    invokeNova: async () => { used.push('fast'); throw Object.assign(new Error('down'), { status: 503 }); }
+  });
+  const api = await serve(router);
+  expect((await api.post({ message: 'hello there' })).status).toBe(503);
+  expect(used).toEqual(['fast']);
+});
+
+test('routing on: the strong model\'s answer goes through the output guardrail like any other', async () => {
+  const seen = [];
+  const { router } = routedRouter({
+    diagramContextEnabled: true,
+    inspectGuardrail: async (text, source) => {
+      seen.push([source, text]);
+      if (source === 'OUTPUT') throw new (await import('../guardrails.js')).AiSafetyBlocked('OUTPUT');
+    }
+  });
+  const api = await serve(router);
+  expect((await api.post({ message: 'What is missing?', diagram: PAGE })).status).toBe(422);
+  expect(seen.at(-1)).toEqual(['OUTPUT', 'Strong answer']);
+});
+
+test('routing that cannot be set up never stops chat: the configured model answers', async () => {
+  const { router, used, warnings, events } = routedRouter({ modelId: 'apac.amazon.nova-pro-v1:0', diagramContextEnabled: true });
+  expect(router.ready).toBe(true);
+  const api = await serve(router);
+  expect((await api.post({ message: 'What is missing?', diagram: PAGE })).status).toBe(200);
+  expect(used).toEqual(['fast']);
+  expect(warnings.join('\n')).toMatch(/model routing is off: the configured model is already the strongest/);
+  expect(events[0]).not.toHaveProperty('model');
+});
+
+test('routing with the agent loop: workspace tools send the message to the strong agent model', async () => {
+  const { ScriptedModel } = await import('./helpers/scriptedModel.js');
+  const fast = new ScriptedModel([{ text: 'Fast agent.' }]);
+  const strong = new ScriptedModel([{ text: 'Strong agent.' }]);
+  const reader = { list: async () => [], read: async () => null };
+  const withTools = routedRouter({ agentEnabled: true, agentModel: fast, agentModelStrong: strong, workspaceReader: () => reader });
+  expect((await (await (await serve(withTools.router)).post({ message: 'hello there' })).json()).reply).toBe('Strong agent.');
+  expect(withTools.events[0]).toMatchObject({ model: 'strong', route: 'tools' });
+  expect(fast.calls).toHaveLength(0);
+
+  // No server storage, so no workspace tools: a plain question stays on the fast agent model.
+  const fastOnly = new ScriptedModel([{ text: 'Fast agent.' }]);
+  const plain = routedRouter({ agentEnabled: true, agentModel: fastOnly, agentModelStrong: new ScriptedModel([{ text: 'unused' }]) });
+  expect((await (await (await serve(plain.router)).post({ message: 'hello there' })).json()).reply).toBe('Fast agent.');
+  expect(plain.events[0]).toMatchObject({ model: 'fast', route: 'plain' });
 });
