@@ -4,7 +4,12 @@
  * Answers from the user manual (rag.js). With AI_DIAGRAM_CONTEXT_ENABLED, a
  * message may carry a description of the open page, and the reply may carry
  * suggested changes (suggestions.js) that the user carries out; the API never
- * changes a diagram. No guest model usage, MCP or tool execution.
+ * changes a diagram. No guest model usage.
+ *
+ * With AI_NOVA_AGENT_ENABLED, a message runs a short Strands agent loop
+ * instead of one model call (novaAgent.js, ADR 0060): Nova may search the
+ * manual, read the person's diagrams and suggest changes through tools. The
+ * quota, the guardrail, the history and the answer's shape stay the same.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Router } from 'express';
@@ -14,7 +19,8 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { createNovaClient, defaultModelFor } from './bedrock.js';
 import { createGuardrail, isObviousPromptInjection, AiSafetyBlocked } from './guardrails.js';
-import { composeRagContext } from './rag.js';
+import { composeRagContext, PUBLIC_KNOWLEDGE } from './rag.js';
+import { createNovaAgentModel, runNovaAgent } from './novaAgent.js';
 import { docsSearchFromEnv } from './docsSearch.js';
 import { emitAgentTelemetry, emitAiTelemetry } from './observability.js';
 import {
@@ -126,6 +132,12 @@ export function createAiChatRouter({
   guardrailId = process.env.AI_GUARDRAIL_ID,
   guardrailVersion = process.env.AI_GUARDRAIL_VERSION,
   diagramContextEnabled = process.env.AI_DIAGRAM_CONTEXT_ENABLED === 'true',
+  // The agent loop (novaAgent.js): off unless AI_NOVA_AGENT_ENABLED.
+  agentEnabled = process.env.AI_NOVA_AGENT_ENABLED === 'true',
+  agentModel,
+  // () => the person's workspace reader (workspaceReader.js), or null where
+  // there is no server storage; read when a message runs, not at startup.
+  workspaceReader = () => null,
   now = () => new Date(),
   log = console
 } = {}) {
@@ -136,6 +148,8 @@ export function createAiChatRouter({
     docsSearch = docsSearch || docsSearchFromEnv(process.env, { log });
     return (await docsSearch(message, { limit: 3 })).items;
   });
+  const sections = new Map(PUBLIC_KNOWLEDGE.map((chunk) => [chunk.id, chunk]));
+  let model = agentModel || null;
   let inspect = inspectGuardrail || null;
   let invoke = invokeNova || null;
   let client = ddb || null;
@@ -151,6 +165,7 @@ export function createAiChatRouter({
         inspect = createGuardrail({ region, guardrailId, guardrailVersion });
       }
       if (!invoke && region) invoke = createNovaClient({ region, modelId });
+      if (agentEnabled && !model && region) model = createNovaAgentModel({ region, modelId });
       if (!client && tableName && region) {
         client = DynamoDBDocumentClient.from(new DynamoDBClient({ region }), {
           marshallOptions: { removeUndefinedValues: true }
@@ -342,15 +357,30 @@ export function createAiChatRouter({
     for (const reference of references) await inspect(reference.text, 'INPUT');
     const evidence = composeRagContext(references);
     const prompt = composePrompt({ message, evidence, diagramText, nonce: randomBytes(6).toString('hex') });
-    const modelMessages = [...history, { role: 'user', text: prompt.user }];
-    // Suggestions need room for their JSON block; plain answers stay short.
-    const output = await invoke(modelMessages, { system: prompt.system, maxTokens: diagramText ? 1200 : 512 });
+    let output;
+    let run = null;
+    if (agentEnabled && model) {
+      // The agent loop: the same question and data blocks, plus tools.
+      run = await runNovaAgent({
+        model, history, userTurn: prompt.user, page: diagram || null,
+        searchManual: retrieve, manualSection: (sectionId) => sections.get(sectionId) || null,
+        reader: workspaceReader(), sub: actor, inspect, references
+      });
+      output = { text: run.text, usage: run.usage };
+    } else {
+      const modelMessages = [...history, { role: 'user', text: prompt.user }];
+      // Suggestions need room for their JSON block; plain answers stay short.
+      output = await invoke(modelMessages, { system: prompt.system, maxTokens: diagramText ? 1200 : 512 });
+    }
     if (isObviousPromptInjection(output.text)) throw new AiSafetyBlocked('OUTPUT');
     await inspect(output.text, 'OUTPUT');
-    // Suggestions only answer a page the user chose to share.
+    // Suggestions only answer a page the user chose to share: from the
+    // suggest_changes tool, or a ```suggestions block in the reply.
     const extracted = extractSuggestions(output.text);
-    const suggestions = diagramText ? extracted.suggestions : [];
-    const cited = tidyCitations(extracted.reply, references);
+    const suggestions = diagramText
+      ? [...(run?.suggestions || []), ...extracted.suggestions].slice(0, MAX_SUGGESTIONS)
+      : [];
+    const cited = tidyCitations(extracted.reply, run ? run.references : references);
     const reply = (cited.reply || 'Here are some suggestions for this page.').slice(0, 6000);
     const usage = {
       inputTokens: Math.max(0, Number(output.usage?.inputTokens) || 0),
@@ -381,7 +411,7 @@ export function createAiChatRouter({
     // An agent turn: the user shared a page, so the model could propose edits.
     if (diagramText) {
       agentTelemetry({ requestId: ctx.requestId, suggestions: suggestions.length,
-        dropped: extracted.dropped,
+        dropped: extracted.dropped, toolCalls: run?.toolCalls.length ?? 0,
         sources: cited.sources?.length || 0, latencyMs: Date.now() - ctx.startedAt });
     }
     return res.status(200).json({

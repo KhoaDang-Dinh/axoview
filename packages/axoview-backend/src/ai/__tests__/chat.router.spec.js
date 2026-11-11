@@ -294,3 +294,27 @@ test('an instruction hidden in an item name is blocked before the model is calle
   expect(response.status).toBe(422);
   expect(calls.model).toBe(0);
 });
+
+test('with the agent loop on, Nova searches the manual and suggests through tools; the answer keeps its shape', async () => {
+  const { ScriptedModel } = await import('./helpers/scriptedModel.js');
+  const model = new ScriptedModel([
+    { tool: 'search_manual', input: { query: 'connect two items' } },
+    { tool: 'suggest_changes', input: { operations: [{ op: 'connect', from: { id: 'n1' }, to: { id: 'n2' }, label: 'SQL' }] } },
+    { text: 'Connect them [connectors-connecting-two-items].' }
+  ]);
+  const events = [];
+  const { router, calls } = chatRouter({
+    diagramContextEnabled: true, agentEnabled: true, agentModel: model,
+    agentTelemetry: (fields) => events.push(emitAgentTelemetry(fields, () => {})),
+    retrieveKnowledge: async () => [{ id: 'connectors-connecting-two-items', title: 'Connecting two items', text: 'Press C, then click both items.' }]
+  });
+  const api = await serve(router);
+  const body = await (await api.post({ message: 'What is missing?', diagram: PAGE })).json();
+  // Citations become the sources list, as on the single-call path.
+  expect(body.reply).toBe('Connect them.');
+  expect(body.suggestions).toEqual([{ op: 'connect', from: { id: 'n1' }, to: { id: 'n2' }, label: 'SQL' }]);
+  expect(body.sources.map((s) => s.id)).toContain('connectors-connecting-two-items');
+  expect(calls.model).toBe(0); // the single-call path was not used
+  expect(model.calls[0].tools).toEqual(['search_manual', 'get_manual_section', 'suggest_changes']);
+  expect(events[0]).toMatchObject({ outcome: 'suggested', suggestions: 1, toolCalls: 2 });
+});
