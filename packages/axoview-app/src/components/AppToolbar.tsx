@@ -36,6 +36,8 @@ import { ExportPopover } from './ExportPopover';
 import { AuthControl } from './AuthControl';
 import { CognitoAccountControl } from './CognitoAccountControl';
 import { shareUrlFromUuid } from '../utils/shareUrl';
+import { SharePeople } from './SharePeople';
+import { ProposalPrompt } from './ProposalPrompt';
 import {
   drivePreviewUrl,
   getAccessOverview,
@@ -53,7 +55,8 @@ export function AppToolbar() {
     serverStorageAvailable,
     remoteStorageActive,
     activeProviderId,
-    storage
+    storage,
+    runtimeConfig
   } = useAppStorage();
   const driveActive = activeProviderId === 'google-drive';
   const {
@@ -126,6 +129,13 @@ export function AppToolbar() {
   const shareReqRef = useRef(0);
 
   const currentDiagramId = currentDiagram?.id;
+  // Sharing by email (ADR 0057): accounts and server storage, not Drive.
+  const peopleSharing = !!runtimeConfig?.sharing && !driveActive && remoteStorageActive;
+  // This account's level on the open diagram (the server's X-Axoview-Role):
+  // a Full admin shares like the owner; a Read only member sees a note
+  // instead of the link and the email field.
+  const myRole = peopleSharing && currentDiagramId ? storage?.sharedRole?.(currentDiagramId) : undefined;
+  const sharedWithYou = myRole === 'viewer';
 
   useEffect(() => {
     shareReqRef.current++; // invalidate any in-flight share fetch for the old id
@@ -150,6 +160,9 @@ export function AppToolbar() {
     const current = () => shareReqRef.current === reqId;
     setShowSharePopover(true);
     setShareError(null);
+    // Someone else's diagram, shared with this account: only its owner can
+    // publish a link or add people, so the popover just says so.
+    if (sharedWithYou) return;
     let url = shareUrl;
     if (!url) {
       try {
@@ -494,6 +507,9 @@ export function AppToolbar() {
               </Tooltip>
             )}
             <StatusCluster />
+            {peopleSharing && currentDiagramId && storage && (
+              <ProposalPrompt diagramId={currentDiagramId} role={myRole} storage={storage} />
+            )}
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
@@ -629,6 +645,15 @@ export function AppToolbar() {
                 <CloseIcon />
               </IconButton>
             </Stack>
+            {sharedWithYou ? (
+              <Typography variant="body2" color="text.secondary" data-axoview-id="share-shared-with-you">
+                {t(
+                  'share.people.sharedWithYouViewer',
+                  'Shared with you as Read only. Only its owner or a Full admin can share it.'
+                )}
+              </Typography>
+            ) : (
+            <>
             <Typography variant="body2" color="text.secondary">
               {t('share.hint', 'Anyone with this link can view the diagram in read-only mode.')}
             </Typography>
@@ -661,6 +686,14 @@ export function AppToolbar() {
                 {shareCopied ? t('share.copied', '✓ Copied!') : t('share.copy', 'Copy')}
               </Button>
             </Stack>
+            {peopleSharing && currentDiagramId && storage && (
+              <>
+                <Divider />
+                <SharePeople diagramId={currentDiagramId} storage={storage} />
+              </>
+            )}
+            </>
+            )}
           </Stack>
         </Popover>
       )}

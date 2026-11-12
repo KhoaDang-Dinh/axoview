@@ -35,6 +35,7 @@ import {
 import { useInitialDataManager } from 'src/hooks/useInitialDataManager';
 import { useView } from 'src/hooks/useView';
 import { useDirtyTracker } from 'src/hooks/useDirtyTracker';
+import { useAgentChanges } from 'src/hooks/useAgentCommit';
 import { ClipboardProvider } from 'src/clipboard/ClipboardContext';
 import { LayerContextProvider } from 'src/hooks/useLayerContext';
 import { CanvasModeProvider } from 'src/contexts/CanvasModeContext';
@@ -220,6 +221,7 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
 
     const { load } = initialDataManager;
     const { markClean } = useDirtyTracker(initialDataManager.isReady);
+    const agentChanges = useAgentChanges();
 
     // Wrap the exposed load so every programmatic load resets Axoview's
     // internal dirty flag.  Without this, axoviewRef.current.load() triggers
@@ -237,9 +239,11 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
           uiStateActions.setExportImageAngle(options?.angle ?? 'asViewed');
           uiStateActions.setDialog('EXPORT_IMAGE');
         },
-        getActiveViewId: () => uiStore.getState().view || undefined
+        getActiveViewId: () => uiStore.getState().view || undefined,
+        applyAgentOperations: (operations, options) => agentChanges.apply(operations, options?.viewId),
+        prepareAgentOperations: (operations, options) => agentChanges.prepare(operations, options?.viewId)
       }),
-      [load, markClean, uiStateActions, uiStore]
+      [load, markClean, uiStateActions, uiStore, agentChanges]
     );
 
     const mergedInitialData = useMemo(() => {

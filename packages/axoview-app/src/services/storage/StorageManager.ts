@@ -1,6 +1,14 @@
 import {
+  AddMemberResult,
+  DiagramMember,
   DiagramMeta,
+  AgentLevel,
+  DiagramRole,
   FolderMeta,
+  MemberRole,
+  Proposal,
+  ProposalDecision,
+  SharedState,
   StorageProvider,
   TreeManifest
 } from './types';
@@ -163,6 +171,65 @@ export class StorageManager implements StorageProvider {
       throw new Error(`${provider.displayName} does not support sharing`);
     }
     return provider.shareDiagram(id);
+  }
+
+  sharedState(id: string): SharedState | undefined {
+    return this.active?.sharedState?.(id);
+  }
+
+  async listMembers(id: string): Promise<DiagramMember[]> {
+    const provider = this.getActiveProvider();
+    return provider.listMembers ? provider.listMembers(id) : [];
+  }
+
+  sharedRole(id: string): DiagramRole | undefined {
+    return this.active?.sharedRole?.(id);
+  }
+
+  async addMember(id: string, email: string, role?: MemberRole): Promise<AddMemberResult> {
+    const provider = this.getActiveProvider();
+    if (!provider.addMember) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.addMember(id, email, role);
+  }
+
+  async setMemberRole(id: string, sub: string, role: MemberRole): Promise<AddMemberResult> {
+    const provider = this.getActiveProvider();
+    if (!provider.setMemberRole) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.setMemberRole(id, sub, role);
+  }
+
+  // The account's setting, kept by the server whichever place the open
+  // diagram is in (a Drive diagram's agent is the same person's agent).
+  async agentLevel(): Promise<AgentLevel> {
+    const provider = this.registry.get('local');
+    return provider?.agentLevel ? provider.agentLevel() : 'viewer';
+  }
+
+  async setAgentLevel(level: AgentLevel): Promise<boolean> {
+    const provider = this.registry.get('local');
+    return provider?.setAgentLevel ? provider.setAgentLevel(level) : false;
+  }
+
+  async listProposals(id: string): Promise<Proposal[]> {
+    const provider = this.getActiveProvider();
+    return provider.listProposals ? provider.listProposals(id) : [];
+  }
+
+  async approveProposal(id: string, proposalId: string, change: { applied: number; document: unknown }): Promise<ProposalDecision> {
+    const provider = this.getActiveProvider();
+    if (!provider.approveProposal) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.approveProposal(id, proposalId, change);
+  }
+
+  async rejectProposal(id: string, proposalId: string): Promise<ProposalDecision> {
+    const provider = this.getActiveProvider();
+    if (!provider.rejectProposal) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.rejectProposal(id, proposalId);
+  }
+
+  async removeMember(id: string, sub: string): Promise<void> {
+    const provider = this.getActiveProvider();
+    if (provider.removeMember) await provider.removeMember(id, sub);
   }
 
   async unshareDiagram(id: string): Promise<void> {

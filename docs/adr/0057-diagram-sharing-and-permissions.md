@@ -1,6 +1,7 @@
 # ADR 0057 — Diagram Sharing and Permissions
 
-**Status:** Proposed
+**Status:** Accepted: the email field, the permission levels and agents on their person's account
+shipped (2026-11-10; see the addenda below). Realtime co-editing waits for [ADR 0055](0055-multiplayer-operation-protocol.md)/[0056](0056-realtime-service-on-eks.md).
 **Date:** 2026-11-09
 **Supersedes:** none
 **Superseded by:** none
@@ -134,3 +135,85 @@ open and edit the same server diagram, with access checked on every request and 
   - that user sees the diagram under "Shared with me" and edits live;
   - removing them takes it away;
   - an unknown email, and the same email added again, each show a red message.
+
+## Addendum 2026-11-10: what shipped first
+
+The owner asked for the email field under the share link, the green/red pop-ups and 1-second saves,
+on today's storage and sync, ahead of the realtime service.
+
+1. **Storage:** the membership list and the "shared with me" index live as two JSON objects in each
+   side's own workspace (`sharing/members/<diagramId>` and `sharing/inbox`, through the storage
+   adapter: S3 objects on AWS, files on fs), not as the DynamoDB items in §1. Every change is
+   read-modify-write. Two owners sharing with one person in the same instant could drop one inbox
+   entry; sharing again repairs it. The DynamoDB layout stays the target for the realtime phase.
+2. **Access:** a request for `/api/diagrams/:id` from someone the diagram was shared with runs
+   against the owner's workspace. Rename, move, trash, delete and the public link are owner-only
+   (`403 owner-only`). Membership answers are cached for 10 s per API process, so a removal takes
+   effect at once on the process that made it and within 10 s elsewhere.
+3. **Live updates:** without the sequencer, editing stays whole-document with "latest save wins".
+   Each save is published to the sync stream of everyone who has the diagram, and their open tab
+   reloads it.
+   - **Saves:** the app saves 1 s after the last edit (down from 2 s). A shared diagram uploads at
+     once instead of batching.
+   - **Measured:** a dropped icon reached the other person's open tab 1.8 s later, including the
+     drag.
+4. **Lookup:** Cognito `ListUsers` with an exact `email` filter, keeping verified, enabled
+   accounts. The API role has `cognito-idp:ListUsers` on its own pool only (infra_website,
+   `modules/identity/app_user_lookup.tf`).
+5. **Not yet:** the realtime socket's access checks (§3), which come with ADR 0056. (The roles
+   followed the same day: next addendum.)
+
+## Addendum 2026-11-10 (2): three permission levels
+
+The owner replaced §2's roles the same day:
+
+| Level | Role | What it allows | Who may hold it |
+|---|---|---|---|
+| Read only | `viewer` | Opening it, in the existing read-only viewer (`/display/<id>`, the one the public link uses). Every write is refused. | people and agents |
+| Change needs approval | `proposer` | Reading. Each save is stored as a proposal that the owner or a Full admin approves or rejects. | agents (the data model allows people too; the app offers it to agents only, to avoid a UI redesign for now) |
+| Full admin | `admin` | Everything the owner can do: edit, rename, trash, delete, publish the link, add and remove people and change their levels. Only moving it between the owner's own folders stays with the owner. | people only |
+
+- **Agents:** never Full admin, enforced on add and on every level change (§4's "never above their
+  person" is still the rule for the person behind them).
+- **The owner:** stays the owner. The diagram lives in their workspace and no one can remove them.
+- **Proposals:**
+  - **Storage:** kept in the owner's workspace (`sharing/proposals/<id>` and one document each).
+  - **Approving:** saves the proposed document like any save, so everyone who has the diagram gets
+    it.
+  - **Stale proposals:** one made before the diagram last changed is marked stale. Approving it
+    needs an explicit "Apply anyway" (`force`), because the whole document replaces those changes.
+  - **In the app:** a "N to approve" chip in the toolbar opens Approve and Reject.
+- **Agent accounts don't exist yet.** When they do, they are members with `kind: "agent"`. The API
+  already enforces their levels, and the same proposal flow serves them. (Replaced the same day:
+  agents are not members, next addendum.)
+
+## Addendum 2026-11-10 (3): an agent works on its person's account
+
+The owner decided the same day that an agent has no account of its own. It works on its person's
+account, and that person is its one admin. This replaces addendum 2's agent rows and refines §4.
+
+- **Members are people only:** Read only (`viewer`) or Full admin (`admin`). `proposer`, `kind` and
+  `agent-not-admin` are gone from the members API; `invalid-role` refuses anything else.
+- **The person sets their agent's level once, for the account** (`GET`/`PUT /api/agent`, kept at
+  `agents/settings` in their workspace):
+
+  | Level | `level` | What the agent may do |
+  |---|---|---|
+  | Read only (the default) | `viewer` | Read and suggest. The person makes each change. |
+  | Changes need my approval | `proposer` | Each change it suggests is made only once its person approves it. |
+
+- **Never above its person** (`sharing.agentLevelOn`): on a diagram the person may only view, the
+  agent is Read only whatever the setting says. Nothing above "approval" exists for an agent.
+- **Its person approves, no one else:**
+  - **In the app (the built-in assistant):** the approval happens in the chat. See
+    [ADR 0052's 2026-11-10 addendum](0052-ai-assistant-boundaries.md). Nothing is stored: the
+    approved change is an ordinary edit, saved like any edit, and one Undo takes it back.
+  - **Through the API (outside agents, MCP sign-in: [ADR 0059](0059-agent-sign-in-and-workspace-mcp.md)):** a change is stored as a
+    proposal with `by: { sub: <its person>, agent: <client> }`. Only that person lists, approves or
+    rejects it, and only while they may change the diagram (the owner or a Full admin): the
+    diagram's owner does not review someone else's agent. Since ADR 0059 a proposal holds the
+    agent's operations, not a document: the app checks them against the page as it is when the
+    person looks, so addendum 2's stale rule ("Apply anyway") is gone.
+- **Why:** the person answers for their agent, so the agent's reach is the person's reach minus
+  the right to act unseen. Admins keep managing people; they don't each review every agent.
+

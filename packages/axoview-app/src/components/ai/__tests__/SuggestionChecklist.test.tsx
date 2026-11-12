@@ -44,4 +44,31 @@ describe('SuggestionChecklist', () => {
     rerender(<SuggestionChecklist steps={[steps[2]]} />);
     expect(container.textContent).toBe('');
   });
+
+  describe('"Changes need my approval"', () => {
+    const second = { ...steps[0], index: 3, summary: 'Add “Cache”', nodeIds: [] };
+
+    test('each step that applies can be approved, alone or all at once; no tick boxes or how-to', () => {
+      const onApprove = jest.fn();
+      render(<SuggestionChecklist steps={[...steps, second]} onApprove={onApprove} />);
+      expect(screen.getByText(/nothing changes until you approve/)).toBeTruthy();
+      expect(screen.queryByLabelText(/^Done:/)).toBeNull();
+      expect(screen.queryByText(/Press C/)).toBeNull();
+      expect(screen.queryByLabelText('Approve: Remove “Legacy FTP” and its connections')).toBeNull();
+      fireEvent.click(screen.getByLabelText('Approve: Connect “Web” to “Database”, named “SQL”'));
+      expect(onApprove).toHaveBeenLastCalledWith([0]);
+      fireEvent.click(screen.getByText('Approve all 2'));
+      expect(onApprove).toHaveBeenLastCalledWith([0, 3]);
+    });
+
+    test('an approved step shows as done, with nothing left to approve on it', () => {
+      render(<SuggestionChecklist steps={[steps[1], second]} applied={[steps[0]]} onApprove={jest.fn()} />);
+      const done = document.querySelector('[data-axoview-id="ai-suggestion-0"]')!;
+      expect(done.getAttribute('data-status')).toBe('applied');
+      expect(done.textContent).toContain('Approved and done');
+      expect(screen.queryByLabelText('Approve: Connect “Web” to “Database”, named “SQL”')).toBeNull();
+      // One step left to approve: no "Approve all".
+      expect(screen.queryByText(/Approve all/)).toBeNull();
+    });
+  });
 });

@@ -114,3 +114,11 @@ in the backend routes. This ADR decides **how often** a browser uploads. It depe
   - a second tab shows the edit without a download;
   - after a lost upload, the draft is restored on the next open, or offered when the diagram
     changed elsewhere.
+
+## Addendum 2026-11-10
+
+- **Timing:** the checkpoint now follows 1 s after the last edit instead of 2 s (owner decision).
+- **Shared diagrams:** a diagram other people have ([ADR 0057](0057-diagram-sharing-and-permissions.md)
+  addendum; the server's `X-Axoview-Shared` header) uploads every checkpoint at once, like a
+  workspace another browser has open.
+

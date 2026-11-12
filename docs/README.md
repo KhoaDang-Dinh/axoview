@@ -125,11 +125,12 @@ Deep snapshots cut on a date and left immutable. Read for the comprehensive narr
 | [0051](adr/0051-view-rotation-default-angle-sharing-and-export.md) | View rotation: per-page default angle, viewer controls, export angle — Accepted |
 | [0052](adr/0052-ai-assistant-boundaries.md) | Additive AI assistant, chat-header MCP integrations, authorized SSE and agent boundaries — Accepted |
 | [0053](adr/0053-presence-on-the-sync-stream.md) | Presence on the sync stream (join/renew/here/leave, tab and browser ids, other browsers only) — Accepted |
-| [0054](adr/0054-local-drafts-and-batched-uploads.md) | Local drafts and batched uploads (2 s checkpoints in the browser, one upload per 30 s while alone, recovery on open) — Accepted |
+| [0054](adr/0054-local-drafts-and-batched-uploads.md) | Local drafts and batched uploads (1 s checkpoints in the browser since 2026-11-10, one upload per 30 s while alone, at once for shared diagrams, recovery on open) — Accepted |
 | [0055](adr/0055-multiplayer-operation-protocol.md) | Multiplayer operation protocol (id-addressed ops, last-writer-wins per property, checked structural ops, atomic batches, per-participant undo) — Proposed |
 | [0056](adr/0056-realtime-service-on-eks.md) | Realtime service on EKS (sequencer per diagram, lease, DynamoDB journal, S3 checkpoints cached at CloudFront, WebSockets) — Proposed |
-| [0057](adr/0057-diagram-sharing-and-permissions.md) | Diagram sharing and permissions (membership list, owner/editor/viewer, agents capped at their person's role) — Proposed |
+| [0057](adr/0057-diagram-sharing-and-permissions.md) | Diagram sharing and permissions (membership list, owner/editor/viewer, agents capped at their person's role; the email field, Read only / Full admin, and agents on their person's account with "Changes need my approval" shipped 2026-11-10) — Accepted |
 | [0058](adr/0058-multiplayer-presence-ui.md) | Multiplayer presence UI (participants bar, follow mode, remote cursors and selections, live status line) — Proposed |
+| [0059](adr/0059-agent-sign-in-and-workspace-mcp.md) | Agent sign-in and the workspace MCP server (Axoview as OAuth server: CIMD/DCR clients, PKCE, resource-bound tokens, a grant per person and client; list/read/propose tools; proposals hold operations the person approves in the app) — Accepted |
 
 ---
 

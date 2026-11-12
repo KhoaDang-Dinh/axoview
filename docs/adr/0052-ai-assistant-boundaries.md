@@ -47,6 +47,35 @@ vocabulary's shape rules; `packages/axoview-backend/src/ai/__fixtures__/suggesti
 is asserted by both test suites so the two cannot drift. Answers about using
 Axoview come from the user manual ([docs/ai/rag.md](../ai/rag.md)).
 
+## Addendum — 2026-11-10: approve, then apply (the in-app assistant)
+
+**Decision.** The first write. The owner set the permission model
+([ADR 0057 addendum 3](0057-diagram-sharing-and-permissions.md)): an agent works on its person's
+account, its person sets once what it may do, and only that person approves its changes.
+
+- **Where:** with `AI_AGENT_WRITE_ENABLED` (off by default), server storage and diagram context, the
+  chat shows "Nova may": *Read only: suggest, never change* (the default) or *Changes need my
+  approval*. The setting is the account's (`GET`/`PUT /api/agent`).
+- **How:** under approval, each ready step in the checklist gets **Approve**, and there is
+  **Approve all**.
+  - **Applying:** the app hands the operations to the editor (`AxoviewRef.applyAgentOperations`).
+    It runs `applyOperations` on the live model and lands the result as **one undoable change**,
+    stamped with its page. One Undo takes the whole approval back. The scene is rebuilt, so new
+    connectors are routed at once.
+  - **Saving:** the change is saved like any edit. It goes through the person's own save, so the
+    sharing rules and the version checks apply unchanged.
+  - **After approving:** the steps left are re-checked against the changed page. A step that no
+    longer applies is not made, and the chat says why.
+- **Never above the person:** on a read-only view (a public link, a Drive file, a diagram shared
+  as Read only) there is nothing to approve. The chat says Nova is "Read only here, like you".
+- **Still not wired:** model tool calls that write by themselves. Outside agents sign in the same
+  day ([ADR 0059](0059-agent-sign-in-and-workspace-mcp.md)): their changes go to the person as
+  stored proposals, approved through this same editor path, never straight to the diagram.
+
+**Why.** The vocabulary, the page description and the checks had been proven by recommending
+(the addendum above). Approving one step at a time keeps the person in charge. Applying through
+the editor means approved changes get undo, saving and sharing for free.
+
 ## Addendum — 2026-11-04: the manual as public RAG for every AI
 
 **Decision.** The user manual is public reference material, available to any AI

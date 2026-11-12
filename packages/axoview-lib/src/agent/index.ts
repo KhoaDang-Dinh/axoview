@@ -1,6 +1,7 @@
 /**
  * Diagram primitives for AI agents (ADR 0052 addendum 2026-11-04): describe a
- * page, check proposed operations against it, and (not yet wired) apply them.
+ * page, check proposed operations against it, and apply the ones a person
+ * approved (through the editor: hooks/useAgentCommit.ts).
  * Pure and DOM-free, so they ship in the Node-safe standalone bundle.
  */
 export {

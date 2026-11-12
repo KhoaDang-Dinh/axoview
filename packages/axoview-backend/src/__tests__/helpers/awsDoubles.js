@@ -56,6 +56,12 @@ export function makeAwsDoubles() {
       calls.push(command.constructor.name);
       const input = command.input;
       if (command instanceof PutObjectCommand) {
+        if (input.IfNoneMatch === '*' && objects.has(input.Key)) {
+          const error = new Error('At least one of the pre-conditions you specified did not hold');
+          error.name = 'PreconditionFailed';
+          error.$metadata = { httpStatusCode: 412 };
+          throw error;
+        }
         objects.set(input.Key, new Uint8Array(input.Body));
         return {};
       }

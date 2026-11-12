@@ -765,6 +765,35 @@ export interface LoadOptions {
   view?: string;
 }
 
+/**
+ * What `applyAgentOperations` did with each operation, in order: the fields of
+ * `diagramAgent.PlanStep` a host needs to report it (declared here so the
+ * types do not import the agent module).
+ */
+export interface AgentStepOutcome {
+  index: number;
+  status: 'ready' | 'not_applicable' | 'invalid';
+  summary: string;
+  problem?: string;
+}
+
+/**
+ * An agent's operations worked out but not yet in the editor
+ * (`prepareAgentOperations`).
+ */
+export interface AgentPreparedChange {
+  /** What each operation would do, in order: only `ready` ones change anything. */
+  steps: AgentStepOutcome[];
+  /** The diagram with the ready steps made. The editor still shows it without them. */
+  model: Model;
+  /**
+   * Puts that diagram in the editor as ONE undoable change and returns the
+   * steps as made. If the diagram was edited since it was prepared, the steps
+   * are made again on the diagram as it is now, so that edit is kept.
+   */
+  commit: () => AgentStepOutcome[];
+}
+
 export interface AxoviewRef {
   load: (data: InitialData, options?: LoadOptions) => void;
   /**
@@ -780,4 +809,17 @@ export interface AxoviewRef {
    * the editor's stores.
    */
   getActiveViewId: () => string | undefined;
+  /**
+   * Carries out an AI agent's operations (the `diagramAgent` vocabulary) that
+   * its person approved, on `viewId` or the page on screen, as ONE undoable
+   * change. Returns the steps: only `ready` ones changed anything. ADR 0052
+   * addendum 2026-11-10.
+   */
+  applyAgentOperations: (operations: unknown[], options?: { viewId?: string }) => AgentStepOutcome[];
+  /**
+   * The same change worked out without touching the editor, for a host that
+   * must store the resulting diagram before showing it: save `model`, then
+   * call `commit`. Null before a diagram loads. ADR 0059 addendum 2026-11-12.
+   */
+  prepareAgentOperations: (operations: unknown[], options?: { viewId?: string }) => AgentPreparedChange | null;
 }

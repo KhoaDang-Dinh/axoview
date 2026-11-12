@@ -9,8 +9,10 @@ import { getDeviceId } from './deviceId';
  */
 export interface SyncChange {
   seq: number;
-  kind: 'diagram' | 'folder' | 'tree' | 'resync' | 'presence';
-  action?: 'create' | 'save' | 'update' | 'move' | 'delete' | 'join' | 'renew' | 'here' | 'leave';
+  // proposal: a save under "Change needs approval" was made or decided
+  // (ADR 0057); the owner's and admins' apps refresh their waiting list.
+  kind: 'diagram' | 'folder' | 'tree' | 'resync' | 'presence' | 'proposal';
+  action?: 'create' | 'save' | 'update' | 'move' | 'delete' | 'join' | 'renew' | 'here' | 'leave' | 'resolve';
   id?: string;
   version?: number;
   name?: string;

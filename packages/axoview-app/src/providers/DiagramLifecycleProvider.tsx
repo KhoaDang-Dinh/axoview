@@ -459,8 +459,8 @@ export function DiagramLifecycleProvider({
 
   // Batched uploads (server storage; stores/draftStore.ts, hooks/useAutoSave.ts).
   // Each autosave is a checkpoint in this browser; while no other browser has
-  // the workspace open the upload waits up to UPLOAD_BATCH_MS and carries the
-  // latest checkpoint. Drafts belong to the signed-in user (one shared key
+  // the workspace open and no one else has the diagram, the upload waits up
+  // to UPLOAD_BATCH_MS and carries the latest checkpoint. Drafts belong to the signed-in user (one shared key
   // when the deployment has no sign-in).
   const signedInSub = useCognitoSessionStore((state) => state.user?.sub ?? null);
   const userKeyRef = useRef('workspace');
@@ -488,7 +488,11 @@ export function DiagramLifecycleProvider({
     if (!batchingEnabled) return null;
     return {
       maxDelayMs: UPLOAD_BATCH_MS,
-      uploadNow: () => othersPresent(),
+      // At once while another browser has the workspace open, or when other
+      // people have this diagram (shared either way, ADR 0057): they should
+      // see the edit within a second or two, not after the batch window.
+      uploadNow: (id) => othersPresent() ||
+        (storageRef.current as { sharedState?: (id: string) => string | undefined } | null)?.sharedState?.(id) !== undefined,
       checkpoint: async (id, model) => {
         const userKey = userKeyRef.current;
         const baseVersion = knownVersionOfRef.current(id);
@@ -642,13 +646,29 @@ export function DiagramLifecycleProvider({
   const currentModelRef = useRef<DiagramData | null>(null);
   useEffect(() => { currentModelRef.current = currentModel; }, [currentModel]);
   // The AI assistant reads the open page only when the user asks it to
-  // ("Include this page"), at that moment; nothing is pushed to it.
+  // ("Include this page"), at that moment; nothing is pushed to it. Changes
+  // it suggests are carried out only when the person approves them, through
+  // the editor, as one undoable change saved like any edit (ADR 0052
+  // addendum 2026-11-10).
+  const isReadonlyUrlRef = useRef(isReadonlyUrl);
+  isReadonlyUrlRef.current = isReadonlyUrl;
   useEffect(() => {
-    const { setReadPage } = useAssistantPageStore.getState();
+    const { setReadPage, setPageAccess } = useAssistantPageStore.getState();
     setReadPage(() => (currentModelRef.current
       ? { model: currentModelRef.current as unknown as Model, viewId: axoviewRef.current?.getActiveViewId() }
       : null));
-    return () => setReadPage(null);
+    setPageAccess(
+      (operations, viewId) => axoviewRef.current?.applyAgentOperations(operations, { viewId }) ?? [],
+      () => {
+        const id = currentDiagramRef.current?.id;
+        if (!id || !currentModelRef.current || isReadonlyUrlRef.current) return false;
+        return storageRef.current?.sharedRole?.(id) !== 'viewer';
+      }
+    );
+    return () => {
+      setReadPage(null);
+      setPageAccess(null, null);
+    };
   }, []);
 
   const currentDiagramRef = useRef<SavedDiagram | null>(null);
@@ -713,6 +733,52 @@ export function DiagramLifecycleProvider({
 
   const diagramNameRef = useRef(diagramName);
   useEffect(() => { diagramNameRef.current = diagramName; }, [diagramName]);
+
+  /** The editor's model as the document this app saves (what an autosave of it sends). */
+  const documentOf = useCallback((model: Model): DiagramData => {
+    // isoflow's model schema doesn't include `requiredPacks`, so the field
+    // is dropped from `model` here. Re-attach from the in-memory ref so the
+    // hint survives autosave round-trips when the icons array hasn't been
+    // fully rehydrated (e.g. a pack is still loading on first open).
+    const preservedRequiredPacks = currentModelRef.current?.requiredPacks;
+    return {
+      title: model.title || diagramNameRef.current || 'Untitled',
+      icons: model.icons || [],
+      colors: model.colors || defaultColors,
+      items: model.items || [],
+      views: model.views || [],
+      fitToScreen: true,
+      ...(Array.isArray(preservedRequiredPacks)
+        ? { requiredPacks: preservedRequiredPacks }
+        : {})
+    };
+  }, []);
+
+  // Approving an outside agent's proposal (components/ProposalPrompt.tsx): the
+  // change is stored before it shows, so the agent is never told "approved"
+  // for something that then fails to save (ADR 0059 addendum 2026-11-12).
+  useEffect(() => {
+    const { setStoreThenApply } = useAssistantPageStore.getState();
+    setStoreThenApply(async (operations, viewId, store) => {
+      const id = currentDiagramRef.current?.id;
+      if (!id || !axoviewRef.current) return { status: 'nothing', steps: [] };
+      // Edits not uploaded yet go up first, as any save does. What is then
+      // sent for approval is built on exactly what the server holds, so the
+      // server can refuse it if the diagram changes elsewhere meanwhile.
+      if ((await autoSaveSaveNowRef.current()) === 'error') return { status: 'unsaved', steps: [] };
+      if (currentDiagramRef.current?.id !== id) return { status: 'nothing', steps: [] };
+      const prepared = axoviewRef.current?.prepareAgentOperations(operations, { viewId });
+      if (!prepared) return { status: 'nothing', steps: [] };
+      const made = prepared.steps.filter((step) => step.status === 'ready').length;
+      if (made === 0) return { status: 'nothing', steps: prepared.steps };
+      if (!(await store(documentOf(prepared.model), made))) return { status: 'not-stored', steps: prepared.steps };
+      // Stored. If another diagram was opened meanwhile, it is not this
+      // editor's to show: the stored diagram has the change when reopened.
+      if (currentDiagramRef.current?.id !== id) return { status: 'made', steps: prepared.steps };
+      return { status: 'made', steps: prepared.commit() };
+    });
+    return () => setStoreThenApply(null);
+  }, [documentOf]);
 
   // Session-mode scratch buffer
   const scratchBufferRef = useRef<Map<string, DiagramData>>(new Map());
@@ -1506,6 +1572,11 @@ export function DiagramLifecycleProvider({
     void (async () => {
       try {
         const raw: unknown = await storage.loadDiagram(urlDiagramId);
+        if (storage.sharedRole?.(urlDiagramId) === 'viewer') {
+          // A Read only member following an editor link: the read-only viewer.
+          navigate(`/display/${encodeURIComponent(urlDiagramId)}`, { replace: true });
+          return;
+        }
         await handleDiagramManagerLoad(urlDiagramId, raw, '', { view: page });
       } catch (e) {
         console.warn('Could not reopen the diagram in the URL:', e);
@@ -2182,6 +2253,12 @@ export function DiagramLifecycleProvider({
 
         const buffered = scratchBufferRef.current.get(id);
         const rawData: unknown = buffered ?? await storage.loadDiagram(id);
+        // Shared with this account as Read only: it opens in the read-only
+        // viewer, the same one a public link shows (ADR 0057, 2026-11-10).
+        if (storage.sharedRole?.(id) === 'viewer') {
+          navigate(`/display/${encodeURIComponent(id)}`);
+          return;
+        }
         await handleDiagramManagerLoad(id, rawData, name);
       } catch (e) {
         console.error('openDiagramById failed:', e);
@@ -2189,7 +2266,7 @@ export function DiagramLifecycleProvider({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.saveNow/resetStatus; whole autoSave churns on every save-status change
-    [storage, storageManager, setActiveProviderId, remoteStorageActive, autoSave.saveNow, autoSave.resetStatus, handleDiagramManagerLoad]
+    [storage, storageManager, setActiveProviderId, remoteStorageActive, autoSave.saveNow, autoSave.resetStatus, handleDiagramManagerLoad, navigate]
   );
 
   const handlePreviewClick = useCallback(async () => {
@@ -2357,22 +2434,7 @@ export function DiagramLifecycleProvider({
   // ---------------------------------------------------------------------------
   const handleModelUpdated = useCallback(
     (model: Model) => {
-      // isoflow's model schema doesn't include `requiredPacks`, so the field
-      // is dropped from `model` here. Re-attach from the in-memory ref so the
-      // hint survives autosave round-trips when the icons array hasn't been
-      // fully rehydrated (e.g. a pack is still loading on first open).
-      const preservedRequiredPacks = currentModelRef.current?.requiredPacks;
-      const updatedModel: DiagramData = {
-        title: model.title || diagramNameRef.current || 'Untitled',
-        icons: model.icons || [],
-        colors: model.colors || defaultColors,
-        items: model.items || [],
-        views: model.views || [],
-        fitToScreen: true,
-        ...(Array.isArray(preservedRequiredPacks)
-          ? { requiredPacks: preservedRequiredPacks }
-          : {})
-      };
+      const updatedModel = documentOf(model);
       setCurrentModel(updatedModel);
 
       if (isAfterLoadRef.current) {
@@ -2413,7 +2475,7 @@ export function DiagramLifecycleProvider({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.scheduleSave; whole autoSave churns on every save-status change
-    [isReadonlyUrl, remoteStorageActive, autoSave.scheduleSave]
+    [isReadonlyUrl, remoteStorageActive, autoSave.scheduleSave, documentOf]
   );
 
   // ---------------------------------------------------------------------------

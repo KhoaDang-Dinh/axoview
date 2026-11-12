@@ -22,6 +22,11 @@ export interface RuntimeConfig {
   cognito: CognitoAuthConfig | null;
   serverStorage: boolean;
   /**
+   * Sharing a diagram with another account by email (ADR 0057): the server
+   * has accounts (Cognito) and storage. Missing → false.
+   */
+  sharing: boolean;
+  /**
    * A5/CHR-08 (owner ruling 2026-07-30). The canonical, externally reachable
    * base URL of this deployment, when the operator has configured one
    * (`PUBLIC_BASE_URL`). Every share link the app mints resolves against it,
@@ -71,6 +76,7 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   authMode: 'none',
   cognito: null,
   serverStorage: false,
+  sharing: false,
   publicBaseUrl: null,
   ai: {
     chatEnabled: false,
@@ -130,6 +136,7 @@ export async function fetchRuntimeConfig(): Promise<RuntimeConfig> {
         ...DEFAULT_CONFIG,
         ...data,
         // Missing/malformed capability values fail closed.
+        sharing: data.sharing === true,
         ai: {
           chatEnabled: data.ai?.chatEnabled === true,
           liveChat: data.ai?.chatEnabled === true && data.ai?.liveChat === true,

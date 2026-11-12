@@ -215,6 +215,9 @@ export function getConfig(_adapter, ctx) {
           }
         : null,
       serverStorage: env.STORAGE_ENABLED !== false,
+      // Sharing a diagram with another account by email (ADR 0057; the Express
+      // target with Cognito only: server.js decides and sets SHARING_ENABLED).
+      sharing: env.SHARING_ENABLED === true,
       // A5/CHR-08 (owner ruling 2026-07-30): the operator's canonical public
       // base, so every share link the CLIENT mints resolves against it instead
       // of whichever origin the page happens to be on (preview, staging, LAN).
@@ -333,6 +336,22 @@ export async function saveDiagram(adapter, ctx) {
     const preserved = state?.owned ?? pickServerOwned(existing);
     const storedHash = state?.contentHash ?? (existing ? await contentHash(existing) : null);
 
+    // A save that must not replace anything its author has not seen (approving
+    // an agent's proposal, server.js): the author says which state the document
+    // was built on, and any other state refuses the save. A versioned store
+    // checks If-Match in the write itself (a conditional write, so it holds
+    // across API pods). The fs store has no versions: compare the lastModified
+    // the author loaded, under this key's lock (one process serves an fs store).
+    if (ctx.mustMatch) {
+      if (state !== undefined) {
+        if (ctx.ifMatch === undefined) throw new HttpError(428, { error: 'If-Match is required', reason: 'precondition-required' });
+      } else if (typeof ctx.ifUnmodified !== 'string') {
+        throw new HttpError(428, { error: 'baseModified is required', reason: 'precondition-required' });
+      } else if (!existing || existing.lastModified !== ctx.ifUnmodified) {
+        throw new HttpError(409, { error: 'Diagram was changed since it was loaded', reason: 'conflict' });
+      }
+    }
+
     // Nothing the user can see changed (an undo back to the saved state, a
     // second tab saving what the first already saved): write nothing and tell
     // nobody. A versioned store still requires If-Match, so a save without one
@@ -351,11 +370,15 @@ export async function saveDiagram(adapter, ctx) {
       };
     }
 
+    // On a store without versions lastModified is what tells two states
+    // apart (ctx.mustMatch above, the app's drafts), so a save never repeats
+    // the stamp it replaces, even within the same millisecond.
+    const previous = state === undefined ? Date.parse(existing?.lastModified) : NaN;
     const data = {
       ...body,
       ...preserved,
       id,
-      lastModified: new Date().toISOString()
+      lastModified: new Date(Number.isFinite(previous) ? Math.max(Date.now(), previous + 1) : Date.now()).toISOString()
     };
     const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
     const written = await adapter.put(`diagrams/${id}`, bytes, {

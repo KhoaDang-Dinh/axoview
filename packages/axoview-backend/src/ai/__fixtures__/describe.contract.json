@@ -1,0 +1,836 @@
+{
+  "_comment": "describeDiagram contract: axoview-lib src/agent/describe.ts and axoview-backend src/ai/describeDiagram.js must both produce `expected`. Regenerate from the lib when describe.ts changes.",
+  "cases": [
+    {
+      "name": "first page by default",
+      "model": {
+        "title": "Shop <b>platform</b>",
+        "icons": [
+          {
+            "id": "srv",
+            "name": "Server",
+            "url": "x"
+          },
+          {
+            "id": "db",
+            "name": "Database",
+            "url": "x"
+          }
+        ],
+        "colors": [
+          {
+            "id": "c1",
+            "value": "#000000"
+          }
+        ],
+        "items": [
+          {
+            "id": "web",
+            "name": "Web",
+            "icon": "srv"
+          },
+          {
+            "id": "api",
+            "name": "API",
+            "label": "Orders API",
+            "icon": "srv",
+            "description": "Handles   orders\nand refunds"
+          },
+          {
+            "id": "db1",
+            "name": "Database",
+            "icon": "db"
+          },
+          {
+            "id": "off",
+            "name": "Not on this page",
+            "icon": "missing-icon"
+          },
+          {
+            "id": "long",
+            "name": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+          }
+        ],
+        "views": [
+          {
+            "id": "p1",
+            "name": "Production",
+            "items": [
+              {
+                "id": "web",
+                "tile": {
+                  "x": 0,
+                  "y": 0
+                }
+              },
+              {
+                "id": "api",
+                "tile": {
+                  "x": 4,
+                  "y": 0
+                }
+              },
+              {
+                "id": "db1",
+                "tile": {
+                  "x": 8,
+                  "y": 0
+                }
+              },
+              {
+                "id": "long",
+                "tile": {
+                  "x": 20,
+                  "y": 20
+                }
+              },
+              {
+                "id": "ghost",
+                "tile": {
+                  "x": 1,
+                  "y": 1
+                }
+              }
+            ],
+            "connectors": [
+              {
+                "id": "k1",
+                "name": "HTTPS",
+                "anchors": [
+                  {
+                    "id": "a1",
+                    "ref": {
+                      "item": "web"
+                    }
+                  },
+                  {
+                    "id": "a2",
+                    "ref": {
+                      "tile": {
+                        "x": 2,
+                        "y": 0
+                      }
+                    }
+                  },
+                  {
+                    "id": "a3",
+                    "ref": {
+                      "item": "api"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "k2",
+                "anchors": [
+                  {
+                    "id": "a4",
+                    "ref": {
+                      "item": "api"
+                    }
+                  },
+                  {
+                    "id": "a5",
+                    "ref": {
+                      "item": "db1"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "k3",
+                "anchors": [
+                  {
+                    "id": "a6",
+                    "ref": {
+                      "item": "api"
+                    }
+                  },
+                  {
+                    "id": "a7",
+                    "ref": {
+                      "tile": {
+                        "x": 9,
+                        "y": 9
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            "rectangles": [
+              {
+                "id": "r1",
+                "name": "Backend",
+                "from": {
+                  "x": 3,
+                  "y": -1
+                },
+                "to": {
+                  "x": 9,
+                  "y": 1
+                }
+              },
+              {
+                "id": "r2",
+                "from": {
+                  "x": 50,
+                  "y": 50
+                },
+                "to": {
+                  "x": 51,
+                  "y": 51
+                }
+              }
+            ],
+            "textBoxes": [
+              {
+                "id": "t1",
+                "tile": {
+                  "x": 0,
+                  "y": 5
+                },
+                "content": "<p>Deployed nightly</p>"
+              },
+              {
+                "id": "t2",
+                "tile": {
+                  "x": 0,
+                  "y": 6
+                },
+                "content": "   "
+              }
+            ]
+          },
+          {
+            "id": "p2",
+            "name": "",
+            "items": [],
+            "connectors": []
+          }
+        ]
+      },
+      "options": {},
+      "expected": {
+        "title": "Shop platform",
+        "page": {
+          "id": "p1",
+          "name": "Production"
+        },
+        "pages": [
+          {
+            "id": "p1",
+            "name": "Production"
+          },
+          {
+            "id": "p2",
+            "name": "Page"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "web",
+            "name": "Web",
+            "icon": "Server"
+          },
+          {
+            "id": "api",
+            "name": "API",
+            "label": "Orders API",
+            "icon": "Server",
+            "description": "Handles orders and refunds"
+          },
+          {
+            "id": "db1",
+            "name": "Database",
+            "icon": "Database"
+          },
+          {
+            "id": "long",
+            "name": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL…"
+          }
+        ],
+        "connections": [
+          {
+            "id": "k1",
+            "from": "web",
+            "to": "api",
+            "name": "HTTPS"
+          },
+          {
+            "id": "k2",
+            "from": "api",
+            "to": "db1"
+          }
+        ],
+        "groups": [
+          {
+            "id": "r1",
+            "name": "Backend",
+            "contains": [
+              "api",
+              "db1"
+            ]
+          },
+          {
+            "id": "r2",
+            "contains": []
+          }
+        ],
+        "notes": [
+          {
+            "id": "t1",
+            "text": "Deployed nightly"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "a named page",
+      "model": {
+        "title": "Shop <b>platform</b>",
+        "icons": [
+          {
+            "id": "srv",
+            "name": "Server",
+            "url": "x"
+          },
+          {
+            "id": "db",
+            "name": "Database",
+            "url": "x"
+          }
+        ],
+        "colors": [
+          {
+            "id": "c1",
+            "value": "#000000"
+          }
+        ],
+        "items": [
+          {
+            "id": "web",
+            "name": "Web",
+            "icon": "srv"
+          },
+          {
+            "id": "api",
+            "name": "API",
+            "label": "Orders API",
+            "icon": "srv",
+            "description": "Handles   orders\nand refunds"
+          },
+          {
+            "id": "db1",
+            "name": "Database",
+            "icon": "db"
+          },
+          {
+            "id": "off",
+            "name": "Not on this page",
+            "icon": "missing-icon"
+          },
+          {
+            "id": "long",
+            "name": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+          }
+        ],
+        "views": [
+          {
+            "id": "p1",
+            "name": "Production",
+            "items": [
+              {
+                "id": "web",
+                "tile": {
+                  "x": 0,
+                  "y": 0
+                }
+              },
+              {
+                "id": "api",
+                "tile": {
+                  "x": 4,
+                  "y": 0
+                }
+              },
+              {
+                "id": "db1",
+                "tile": {
+                  "x": 8,
+                  "y": 0
+                }
+              },
+              {
+                "id": "long",
+                "tile": {
+                  "x": 20,
+                  "y": 20
+                }
+              },
+              {
+                "id": "ghost",
+                "tile": {
+                  "x": 1,
+                  "y": 1
+                }
+              }
+            ],
+            "connectors": [
+              {
+                "id": "k1",
+                "name": "HTTPS",
+                "anchors": [
+                  {
+                    "id": "a1",
+                    "ref": {
+                      "item": "web"
+                    }
+                  },
+                  {
+                    "id": "a2",
+                    "ref": {
+                      "tile": {
+                        "x": 2,
+                        "y": 0
+                      }
+                    }
+                  },
+                  {
+                    "id": "a3",
+                    "ref": {
+                      "item": "api"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "k2",
+                "anchors": [
+                  {
+                    "id": "a4",
+                    "ref": {
+                      "item": "api"
+                    }
+                  },
+                  {
+                    "id": "a5",
+                    "ref": {
+                      "item": "db1"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "k3",
+                "anchors": [
+                  {
+                    "id": "a6",
+                    "ref": {
+                      "item": "api"
+                    }
+                  },
+                  {
+                    "id": "a7",
+                    "ref": {
+                      "tile": {
+                        "x": 9,
+                        "y": 9
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            "rectangles": [
+              {
+                "id": "r1",
+                "name": "Backend",
+                "from": {
+                  "x": 3,
+                  "y": -1
+                },
+                "to": {
+                  "x": 9,
+                  "y": 1
+                }
+              },
+              {
+                "id": "r2",
+                "from": {
+                  "x": 50,
+                  "y": 50
+                },
+                "to": {
+                  "x": 51,
+                  "y": 51
+                }
+              }
+            ],
+            "textBoxes": [
+              {
+                "id": "t1",
+                "tile": {
+                  "x": 0,
+                  "y": 5
+                },
+                "content": "<p>Deployed nightly</p>"
+              },
+              {
+                "id": "t2",
+                "tile": {
+                  "x": 0,
+                  "y": 6
+                },
+                "content": "   "
+              }
+            ]
+          },
+          {
+            "id": "p2",
+            "name": "",
+            "items": [],
+            "connectors": []
+          }
+        ]
+      },
+      "options": {
+        "viewId": "p2"
+      },
+      "expected": {
+        "title": "Shop platform",
+        "page": {
+          "id": "p2",
+          "name": "Page"
+        },
+        "pages": [
+          {
+            "id": "p1",
+            "name": "Production"
+          },
+          {
+            "id": "p2",
+            "name": "Page"
+          }
+        ],
+        "nodes": [],
+        "connections": [],
+        "groups": [],
+        "notes": [],
+        "truncated": false
+      }
+    },
+    {
+      "name": "an unknown page falls back to the first",
+      "model": {
+        "title": "Shop <b>platform</b>",
+        "icons": [
+          {
+            "id": "srv",
+            "name": "Server",
+            "url": "x"
+          },
+          {
+            "id": "db",
+            "name": "Database",
+            "url": "x"
+          }
+        ],
+        "colors": [
+          {
+            "id": "c1",
+            "value": "#000000"
+          }
+        ],
+        "items": [
+          {
+            "id": "web",
+            "name": "Web",
+            "icon": "srv"
+          },
+          {
+            "id": "api",
+            "name": "API",
+            "label": "Orders API",
+            "icon": "srv",
+            "description": "Handles   orders\nand refunds"
+          },
+          {
+            "id": "db1",
+            "name": "Database",
+            "icon": "db"
+          },
+          {
+            "id": "off",
+            "name": "Not on this page",
+            "icon": "missing-icon"
+          },
+          {
+            "id": "long",
+            "name": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+          }
+        ],
+        "views": [
+          {
+            "id": "p1",
+            "name": "Production",
+            "items": [
+              {
+                "id": "web",
+                "tile": {
+                  "x": 0,
+                  "y": 0
+                }
+              },
+              {
+                "id": "api",
+                "tile": {
+                  "x": 4,
+                  "y": 0
+                }
+              },
+              {
+                "id": "db1",
+                "tile": {
+                  "x": 8,
+                  "y": 0
+                }
+              },
+              {
+                "id": "long",
+                "tile": {
+                  "x": 20,
+                  "y": 20
+                }
+              },
+              {
+                "id": "ghost",
+                "tile": {
+                  "x": 1,
+                  "y": 1
+                }
+              }
+            ],
+            "connectors": [
+              {
+                "id": "k1",
+                "name": "HTTPS",
+                "anchors": [
+                  {
+                    "id": "a1",
+                    "ref": {
+                      "item": "web"
+                    }
+                  },
+                  {
+                    "id": "a2",
+                    "ref": {
+                      "tile": {
+                        "x": 2,
+                        "y": 0
+                      }
+                    }
+                  },
+                  {
+                    "id": "a3",
+                    "ref": {
+                      "item": "api"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "k2",
+                "anchors": [
+                  {
+                    "id": "a4",
+                    "ref": {
+                      "item": "api"
+                    }
+                  },
+                  {
+                    "id": "a5",
+                    "ref": {
+                      "item": "db1"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "k3",
+                "anchors": [
+                  {
+                    "id": "a6",
+                    "ref": {
+                      "item": "api"
+                    }
+                  },
+                  {
+                    "id": "a7",
+                    "ref": {
+                      "tile": {
+                        "x": 9,
+                        "y": 9
+                      }
+                    }
+                  }
+                ]
+              }
+            ],
+            "rectangles": [
+              {
+                "id": "r1",
+                "name": "Backend",
+                "from": {
+                  "x": 3,
+                  "y": -1
+                },
+                "to": {
+                  "x": 9,
+                  "y": 1
+                }
+              },
+              {
+                "id": "r2",
+                "from": {
+                  "x": 50,
+                  "y": 50
+                },
+                "to": {
+                  "x": 51,
+                  "y": 51
+                }
+              }
+            ],
+            "textBoxes": [
+              {
+                "id": "t1",
+                "tile": {
+                  "x": 0,
+                  "y": 5
+                },
+                "content": "<p>Deployed nightly</p>"
+              },
+              {
+                "id": "t2",
+                "tile": {
+                  "x": 0,
+                  "y": 6
+                },
+                "content": "   "
+              }
+            ]
+          },
+          {
+            "id": "p2",
+            "name": "",
+            "items": [],
+            "connectors": []
+          }
+        ]
+      },
+      "options": {
+        "viewId": "nope"
+      },
+      "expected": {
+        "title": "Shop platform",
+        "page": {
+          "id": "p1",
+          "name": "Production"
+        },
+        "pages": [
+          {
+            "id": "p1",
+            "name": "Production"
+          },
+          {
+            "id": "p2",
+            "name": "Page"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "web",
+            "name": "Web",
+            "icon": "Server"
+          },
+          {
+            "id": "api",
+            "name": "API",
+            "label": "Orders API",
+            "icon": "Server",
+            "description": "Handles orders and refunds"
+          },
+          {
+            "id": "db1",
+            "name": "Database",
+            "icon": "Database"
+          },
+          {
+            "id": "long",
+            "name": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL…"
+          }
+        ],
+        "connections": [
+          {
+            "id": "k1",
+            "from": "web",
+            "to": "api",
+            "name": "HTTPS"
+          },
+          {
+            "id": "k2",
+            "from": "api",
+            "to": "db1"
+          }
+        ],
+        "groups": [
+          {
+            "id": "r1",
+            "name": "Backend",
+            "contains": [
+              "api",
+              "db1"
+            ]
+          },
+          {
+            "id": "r2",
+            "contains": []
+          }
+        ],
+        "notes": [
+          {
+            "id": "t1",
+            "text": "Deployed nightly"
+          }
+        ],
+        "truncated": false
+      }
+    },
+    {
+      "name": "no pages",
+      "model": {
+        "title": "",
+        "icons": [],
+        "colors": [],
+        "items": [],
+        "views": []
+      },
+      "options": {},
+      "expected": {
+        "title": "Untitled",
+        "page": {
+          "id": "",
+          "name": ""
+        },
+        "pages": [],
+        "nodes": [],
+        "connections": [],
+        "groups": [],
+        "notes": [],
+        "truncated": false
+      }
+    }
+  ]
+}

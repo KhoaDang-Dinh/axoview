@@ -5,10 +5,11 @@
  * anchors or colours, so a model can produce it from a page description and a
  * person can check it at a glance.
  *
- * Today the assistant only RECOMMENDS: planOperations checks each operation
- * against the live page and the user carries it out. applyOperations is the
- * write primitive for the later approve-and-apply stage and is not wired to any
- * UI or API.
+ * planOperations checks each operation against the live page. By default the
+ * assistant only recommends and the user carries each step out; under
+ * "Changes need my approval" (ADR 0052 addendum 2026-11-10) the person
+ * approves a step in the chat and the editor carries it out with
+ * applyOperations (hooks/useAgentCommit.ts), as one undoable change.
  */
 import * as z from 'zod';
 

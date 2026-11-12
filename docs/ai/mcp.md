@@ -7,7 +7,20 @@ UI: no changes to original editor elements. Only the floating chat bubble is new
 
 Choose client -> client-specific setup -> external client initiates MCP OAuth -> Axoview-hosted authorization/consent -> client completes. A browser redirect cannot force a third-party app to install a connector. Offer copyable remote URL and setup instructions where direct installation links are unsupported. Keep grants separate for six clients.
 
-Endpoint: `/api/mcp`. **Live today: the public manual only** (below). Workspace tools come later behind OAuth; read-only first: list_diagrams, get_diagram, inspect_topology, get_shared_diagram, get_diagram_version. Later search_diagrams and approval-gated writes.
+Endpoints: `/api/mcp`, the public manual (below), and `/api/mcp/workspace`, a person's diagrams behind OAuth (next section).
+
+## Workspace tools (live; `AI_MCP_ENABLED`)
+
+[ADR 0059](../adr/0059-agent-sign-in-and-workspace-mcp.md). An agent works as its person after they approve it on Axoview's consent page. The client discovers sign-in from the `401`'s `WWW-Authenticate` (`resource_metadata`) and Axoview's OAuth server (issuer `/api/oauth`: CIMD or DCR clients, PKCE S256, `resource` required).
+
+| Tool | Scope | Returns |
+|---|---|---|
+| `list_diagrams` | `diagrams:read` | the person's diagrams and those shared with them: id, name, access (owner, admin, viewer), whether the agent may propose |
+| `read_diagram` | `diagrams:read` | `id`, optional `page`: the page's description (items, icons, connections, groups, text) and the list of pages |
+| `propose_changes` | `diagrams:propose` | `id`, optional `page`, 1-12 `operations` (the `diagramAgent` vocabulary), optional `note`: a pending proposal. Nothing changes until the person approves it in Axoview |
+| `get_proposal` | `diagrams:read` | `id`, `proposal`: pending, approved (with how many steps were made) or rejected. Approved is reported only once the diagram holding the change is stored |
+
+Without `diagrams:propose`, `propose_changes` answers `403` with `error="insufficient_scope"`. On a diagram shared with the person as Read only it is a tool error. Claude Code: `claude mcp add --transport http axoview <base>/api/mcp/workspace`, then `/mcp` to sign in.
 
 Authorization: Cognito identifies the user, but existing SPA auth does not alone implement MCP OAuth requirements. Plan protected-resource metadata and authorization-server discovery, client registration compatibility, code/PKCE, consent, scopes/audiences, token expiry/revocation. CloudFront currently forwards /api/*; `/.well-known/*` needs explicit routing design. Require `diagrams:read`, `diagrams:search`, future `diagrams:write` plus fresh resource checks per tool. No anonymous workspace MCP. Validate every supported client independently in dev.
 

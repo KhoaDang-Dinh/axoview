@@ -1,11 +1,10 @@
 /**
  * applyOperations: carry out the ready steps of a plan on a copy of the model.
  *
- * This is the write primitive for the later approve-and-apply stage (ADR 0052
- * addendum 2026-11-04). Nothing calls it from the UI or the API yet: today the
- * assistant only recommends, and the user makes each change. It exists now so
- * the vocabulary is proven end to end (every operation produces a model the
- * schema accepts) before anything is allowed to write.
+ * The write primitive (ADR 0052 addenda 2026-11-04 and 2026-11-10). The editor
+ * calls it when a person approves their agent's suggested steps in the chat
+ * (hooks/useAgentCommit.ts, AxoviewRef.applyAgentOperations); no API calls it.
+ * Every operation produces a model the schema accepts.
  *
  * Pure: returns a new model and the steps; the input is never mutated. Only
  * `ready` steps change anything, so applying a plan does exactly what

@@ -48,13 +48,22 @@ describe('the return path', () => {
     expect(takeSignInReturn()).toBe('/d/abc?page=page%20one%2F%C3%A4');
   });
 
+  it("keeps an agent's consent page (ADR 0059), and only with a well-formed request id", () => {
+    rememberSignInReturn('/oauth/consent?request=abcdefghijklmnopqrstuvwx');
+    expect(takeSignInReturn()).toBe('/oauth/consent?request=abcdefghijklmnopqrstuvwx');
+    for (const path of ['/oauth/consent?request=short', '/oauth/consent?request=abcdefghijklmnopqrstuvwx&next=//evil.example', '/oauth/consent']) {
+      rememberSignInReturn(path);
+      expect(takeSignInReturn()).toBe('/');
+    }
+  });
+
   it('is used once', () => {
     rememberSignInReturn('/d/abc');
     expect(takeSignInReturn()).toBe('/d/abc');
     expect(takeSignInReturn()).toBe('/');
   });
 
-  it('never keeps anything but a diagram link, so it cannot send the user elsewhere', () => {
+  it('never keeps anything but a diagram link or a consent page, so it cannot send the user elsewhere', () => {
     for (const path of [
       '//evil.example/d/abc', 'https://evil.example/', '/d/abc/../../admin', '/display/abc',
       '/d/abc?page=x&next=https://evil.example', '/d/' + 'a'.repeat(65), '/', '/ai/connect/x'

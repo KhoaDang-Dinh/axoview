@@ -220,3 +220,16 @@ describe('wire contract shared with the API', () => {
     expect(diagramOperationSchema.safeParse(op).success).toBe(false);
   });
 });
+
+describe('page description contract shared with the API', () => {
+  // packages/axoview-backend describes a page for the workspace MCP server
+  // (read_diagram) with its own plain-JS copy; both must give the same.
+  const contract: { cases: { name: string; model: unknown; options: { viewId?: string }; expected: unknown }[] } =
+    JSON.parse(readFileSync(
+      join(__dirname, '../../../../axoview-backend/src/ai/__fixtures__/describe.contract.json'), 'utf8'
+    ));
+
+  test.each(contract.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    expect(describeDiagram(c.model as Model, c.options)).toEqual(c.expected);
+  });
+});

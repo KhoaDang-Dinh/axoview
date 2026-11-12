@@ -118,6 +118,32 @@ export function createAwsWorkspaceAdapter({
     }));
   }
 
+  /**
+   * Create the object only if none exists; true when this call created it.
+   * S3 conditional write (If-None-Match: *): of concurrent calls for one key
+   * the first to finish succeeds and the rest get 412, on every API pod.
+   */
+  async function putObjectIfAbsent(key, value) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await s3.send(new PutObjectCommand({
+          Bucket: bucketName,
+          Key: key,
+          Body: value,
+          ContentType: 'application/json',
+          IfNoneMatch: '*'
+        }));
+        return true;
+      } catch (error) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (error?.name === 'PreconditionFailed' || status === 412) return false;
+        // 409: a conflicting operation was in flight; S3 asks for a retry.
+        if ((error?.name === 'ConditionalRequestConflict' || status === 409) && attempt < 2) continue;
+        throw error;
+      }
+    }
+  }
+
   async function getDiagram(id) {
     const item = await getItem({ PK: partition, SK: `DIAGRAM#${id}` });
     if (!item?.objectKey) return null;
@@ -255,15 +281,23 @@ export function createAwsWorkspaceAdapter({
       if (snapshot) return putPublic(snapshot[1], value);
       return putObject(`${workspaceRoot}/objects/${key}.json`, value);
     },
+    /** Generic objects only: create if absent; true when this call created it (atomic). */
+    async putIfAbsent(key, value) {
+      if (DIAGRAM_KEY_RE.test(key) || PUBLIC_KEY_RE.test(key)) {
+        throw new Error('putIfAbsent is for generic objects, not diagrams or public snapshots');
+      }
+      return putObjectIfAbsent(`${workspaceRoot}/objects/${key}.json`, value);
+    },
     async delete(key, options = {}) {
       const diagram = DIAGRAM_KEY_RE.exec(key);
       if (diagram) return deleteDiagram(diagram[1], options.expectedVersion);
       const snapshot = PUBLIC_KEY_RE.exec(key);
       if (snapshot) return deletePublic(snapshot[1]);
-      return s3.send(new DeleteObjectCommand({
+      await s3.send(new DeleteObjectCommand({
         Bucket: bucketName,
         Key: `${workspaceRoot}/objects/${key}.json`
       }));
+      return undefined;
     },
     async list(prefix) {
       const s3Prefix = `${workspaceRoot}/objects/${prefix}`;

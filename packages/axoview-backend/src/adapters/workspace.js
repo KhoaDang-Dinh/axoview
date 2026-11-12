@@ -22,6 +22,10 @@ export function createWorkspaceAdapter(base, workspaceId) {
     async put(key, value) {
       return base.put(scopedKey(key), value);
     },
+    /** Create only if absent; true when this call created it (atomic). */
+    async putIfAbsent(key, value) {
+      return base.putIfAbsent(scopedKey(key), value);
+    },
     async delete(key) {
       return base.delete(scopedKey(key));
     },
