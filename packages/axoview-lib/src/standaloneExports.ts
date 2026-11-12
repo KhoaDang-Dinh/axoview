@@ -10,6 +10,7 @@ export type {
   InitialData,
   AxoviewRef,
   AgentStepOutcome,
+  AgentPreparedChange,
   LoadOptions,
   IconUsageReport,
   IconUsageScan

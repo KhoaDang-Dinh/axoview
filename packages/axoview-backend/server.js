@@ -766,10 +766,14 @@ function sharingRoute(handler) {
       return res.status(400).json({ error: 'Invalid member' });
     }
     try {
-      const { status, body } = await handler(req);
+      const { status, body, headers = {} } = await handler(req, res);
+      for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
       res.status(status).json(body);
     } catch (err) {
-      if (err instanceof SharingError) return res.status(err.status).json(err.body);
+      // A SharingError, or a refusal from a storage route the handler used (routes.js HttpError).
+      if (err instanceof SharingError || (typeof err?.status === 'number' && err.body)) {
+        return res.status(err.status).json(err.body);
+      }
       console.error('[sharing %s]', req.method, err);
       res.status(500).json({ error: 'Internal error', reason: 'error' });
     }
@@ -802,23 +806,68 @@ app.delete('/api/diagrams/:id/members/:sub', sharingRoute(async (req) => {
 // Proposals: changes an outside agent proposed through the workspace MCP
 // server (ADR 0059). Only the agent's own person sees and decides them, and
 // only while they may change the diagram (its owner or a Full admin). They
-// hold operations: the person's app carries out the approved ones on the open
-// diagram as one undoable edit and saves it like any edit, then records the
-// decision here. (The in-app assistant is approved in the chat instead.)
+// hold operations: the person's app works out the diagram with the approved
+// ones made, and approving IS saving that diagram. (The in-app assistant is
+// approved in the chat instead.)
 app.get('/api/diagrams/:id/proposals', sharingRoute(async (req) => {
   const owner = await sharing.managedBy(req.user.sub, req.params.id);
   return { status: 200, body: { proposals: await sharing.pendingProposals(owner, req.params.id, req.user.sub) } };
 }));
-app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req) => {
+// Approve = save, then record (ADR 0059 addendum 2026-11-12). The request
+// carries the diagram with the approved steps made (`document`) and the state
+// it was built on: If-Match "<version>", or `baseModified` on a store without
+// versions. In this order:
+//   1. the proposal is this person's and still waiting;
+//   2. the diagram is saved against that state. If it changed since (409), or
+//      no state was given (428), or storage fails, nothing is recorded: the
+//      proposal keeps waiting and the diagram is untouched;
+//   3. only then is "approved" recorded, with the version that holds the
+//      change. The agent reads that record, so it never sees "approved" for a
+//      change that is not stored.
+// If the answer is lost and the app asks again, step 1 finds the recorded
+// approval and returns it without saving twice.
+app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req, res) => {
   const id = req.params.id;
+  const pid = req.params.pid;
   const owner = await sharing.managedBy(req.user.sub, id);
-  if (!SHARING_ID_RE.test(req.params.pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
-  // The app has carried out the approved steps on the open diagram and saves
-  // them like any edit; this records the decision for the agent.
+  if (!SHARING_ID_RE.test(pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
+  const proposal = await sharing.proposalFor(owner, id, pid, req.user.sub);
+  if (proposal.status === 'approved') return { status: 200, body: { proposal } };
+  if (proposal.status !== 'pending') throw new SharingError(409, 'already-decided', 'That proposal was already rejected');
+
+  const document = req.body?.document;
+  if (!document || typeof document !== 'object' || Array.isArray(document)) {
+    return { status: 400, body: { error: 'The diagram with the approved changes is required', reason: 'no-document' } };
+  }
   const applied = Number.isInteger(req.body?.applied) && req.body.applied >= 0 ? req.body.applied : null;
-  const resolved = await sharing.resolveProposal(owner, id, req.params.pid, 'approved', req.user.sub, { applied });
+  const target = {
+    adapter: workspaceAdapter(owner),
+    owner,
+    shared: owner !== req.user.sub,
+    role: owner === req.user.sub ? 'owner' : 'admin'
+  };
+  const saved = await routes.saveDiagram(target.adapter, {
+    ...makeCtx(req),
+    params: { id },
+    body: document,
+    mustMatch: true,
+    ifUnmodified: typeof req.body.baseModified === 'string' ? req.body.baseModified : undefined
+  });
+  // Stored. The app learns the new version whatever happens next, and the
+  // person's other devices and the people the diagram is shared with hear of
+  // the save as of any other.
+  for (const [name, value] of Object.entries(saved.headers || {})) res.setHeader(name, value);
+  if (saved.sync !== false) {
+    await publishChange({ method: 'PUT', params: { id }, body: document, headers: req.headers, user: req.user },
+      '/api/diagrams/:id', saved, target);
+  }
+  const version = /^"([1-9][0-9]*)"$/.exec(saved.headers?.ETag || '')?.[1];
+  const resolved = await sharing.resolveProposal(owner, id, pid, 'approved', req.user.sub, {
+    applied,
+    version: version ? Number(version) : null
+  });
   await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id });
-  return { status: 200, body: { proposal: resolved } };
+  return { status: 200, body: { proposal: resolved, lastModified: saved.body?.lastModified ?? null } };
 }));
 app.post('/api/diagrams/:id/proposals/:pid/reject', sharingRoute(async (req) => {
   const id = req.params.id;

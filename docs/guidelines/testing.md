@@ -1,6 +1,6 @@
 # Regression Test Suite Reference
 
-**Last updated:** 2026-11-06 (rev 3 — the live-update Docker specs and their DOM signals, scripting the API on the dev server; previous rev 2026-10-04 re-measured totals after view rotation, ADRs 0049–0051; previous rev 2026-09-30 re-measured totals; the Worker's `app.spec.ts` probe-input block now expects `404` for unknown `/api/*` paths in every auth mode, including shared-token with no secret; previous rev 2026-09-24 added the contract "Testing against the Docker image" (ADR 0048))
+**Last updated:** 2026-11-12 (rev 4 — the agent end-to-end test against the built app and the real backend; previous rev 2026-11-06 the live-update Docker specs and their DOM signals, scripting the API on the dev server; previous rev 2026-10-04 re-measured totals after view rotation, ADRs 0049–0051; previous rev 2026-09-30 re-measured totals; the Worker's `app.spec.ts` probe-input block now expects `404` for unknown `/api/*` paths in every auth mode, including shared-token with no secret; previous rev 2026-09-24 added the contract "Testing against the Docker image" (ADR 0048))
 **Unit / integration totals** (measured 2026-10-04 via `npm test` per workspace):
 
 | Workspace | Passing | Suites |
@@ -26,7 +26,7 @@ E2E suite lives at [`packages/axoview-e2e/`](../../packages/axoview-e2e/) (Playw
 
 | Section | What is in it |
 |---|---|
-| [Contracts the suite depends on](#contracts-the-suite-depends-on) | how CI shards the e2e run and the two invariants that keep it safe · reading a gate's exit code · gate authoring · the merged scene canvas · label counter-scale · the exploratory lane · the e2e rig traps · scripting the API on the dev server (`helpers/mockApi.ts`) |
+| [Contracts the suite depends on](#contracts-the-suite-depends-on) | how CI shards the e2e run and the two invariants that keep it safe · reading a gate's exit code · gate authoring · the merged scene canvas · label counter-scale · the exploratory lane · the e2e rig traps · scripting the API on the dev server (`helpers/mockApi.ts`) · the agent end-to-end test (`tests-agents/`) |
 | [Testing against the Docker image](#testing-against-the-docker-image-adr-0048) | the `Docker Gate` smoke and the full regression against the built image: the runner and its resource contract, exit codes, the bridge flag, the insecure origin, why the port is never 3000, reading `summary.json`, attributing a failure · live-update specs and their DOM signals |
 | [Engine performance harness](#engine-performance-harness-2026-06-15--adr-0020) | `npm run perf`, its env knobs, and the same-session A/B measurement rule |
 | [Quick Reference](#quick-reference) | layer → suite index |
@@ -301,6 +301,30 @@ for `/api/config`, the Cognito refresh and the chat endpoint.
 `npm run dev:backend`, or a stand-in for the image) turns the local-storage
 specs into server-storage runs against whatever that server holds, and
 explorer specs fail on rows they didn't create. CI never has one.
+
+### The agent end-to-end test: built app, real backend (2026-11-12)
+
+One flow needs no mock at all: an outside agent signing in and getting a change
+approved ([ADR 0059](../adr/0059-agent-sign-in-and-workspace-mcp.md), addendum
+2026-11-12). It has its own config,
+[`playwright.agents.config.ts`](../../packages/axoview-e2e/playwright.agents.config.ts),
+and its own directory, `tests-agents/`:
+
+- **Stack:** [`agents/stack.mjs`](../../packages/axoview-e2e/agents/stack.mjs)
+  serves the built app and proxies `/api` to the real backend on one origin
+  (`127.0.0.1:8089`, backend on `3189`, storage in a fresh temp directory). The
+  backend starts with the `fakeCognito` test hook, so `test-user:<sub>` is a
+  signed-in person. Nothing else is faked.
+- **Client:** the official MCP SDK (`@modelcontextprotocol/sdk`, a dev
+  dependency of the e2e package) does discovery, registration, PKCE and the
+  tool calls. The spec only plays the person: consent, then Approve.
+- **Run:** `npm run build`, then `npm run test:e2e:agents`. CI runs it on every
+  pull request into `dev` and `master`
+  ([`e2e-agents.yml`](../../.github/workflows/e2e-agents.yml)), unlike the main
+  suite, which is master only.
+- **Why not the dev config:** that one must never see a prod bundle and has the
+  API mocked in the page (above). This one reads no debug bridge: it asserts on
+  the page and on what the server stored.
 
 ### The bulk canvas is ONE canvas (2026-08-02, R3/GPU-13)
 

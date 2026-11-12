@@ -6,11 +6,15 @@
  *
  * Each proposal is a list of operations (the diagramAgent vocabulary). They
  * are checked against the page as it is now, so a step that no longer applies
- * says why instead of overwriting anything. Approve carries out the steps that
- * apply, through the editor, as one undoable change saved like any edit (the
- * same path as approving the in-app assistant: ADR 0052 addendum 2026-11-10),
- * then records the decision for the agent. Reject records it and changes
- * nothing.
+ * says why instead of overwriting anything.
+ *
+ * Approve is a save (ADR 0059 addendum 2026-11-12). The diagram with the steps
+ * that apply is worked out without touching the editor and sent to the server,
+ * which stores it only if the diagram is still as this window holds it, and
+ * records the approval for the agent only once it is stored. Then the steps
+ * appear in the editor as one undoable change. If storing fails, nothing
+ * changes anywhere and the proposal keeps waiting. Reject records the decision
+ * and changes nothing.
  *
  * The list refreshes when the diagram opens and whenever the sync stream says
  * a proposal was made or decided (hooks/useRealtimeSync.ts).
@@ -32,11 +36,11 @@ import { diagramAgent } from 'axoview';
 import { notificationStore } from '../stores/notificationStore';
 import { useAssistantPageStore } from '../stores/assistantPageStore';
 import { PROPOSALS_CHANGED_EVENT } from '../hooks/useRealtimeSync';
-import type { DiagramRole, Proposal, StorageProvider } from '../services/storage/types';
+import type { DiagramRole, Proposal, ProposalDecision, StorageProvider } from '../services/storage/types';
 
 type PlanStep = diagramAgent.PlanStep;
 
-export type ProposalStorage = Pick<StorageProvider, 'listProposals' | 'resolveProposal'>;
+export type ProposalStorage = Pick<StorageProvider, 'listProposals' | 'approveProposal' | 'rejectProposal'>;
 
 export function ProposalPrompt({
   diagramId,
@@ -51,8 +55,13 @@ export function ProposalPrompt({
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // Once the last one is decided the dialog is done: a proposal that arrives
+  // later announces itself with the chip, it does not reopen the dialog.
+  useEffect(() => {
+    if (proposals.length === 0) setOpen(false);
+  }, [proposals.length]);
   const readPage = useAssistantPageStore((state) => state.readPage);
-  const applyToPage = useAssistantPageStore((state) => state.applyToPage);
+  const storeThenApplyToPage = useAssistantPageStore((state) => state.storeThenApplyToPage);
   const canChangePage = useAssistantPageStore((state) => state.canChangePage);
   // Anyone who may change the diagram checks when it opens and whenever the
   // sync stream announces a proposal (the server announces one only to the
@@ -108,16 +117,12 @@ export function ProposalPrompt({
     return diagramAgent.planOperations(page.model, proposal.viewId ?? undefined, proposal.operations);
   }, [readPage]);
 
-  const record = useCallback(async (proposal: Proposal, decision: 'approve' | 'reject', applied?: number) => {
-    const result = storage.resolveProposal
-      ? await storage.resolveProposal(diagramId, proposal.id, decision, applied)
-      : { ok: false as const, reason: 'error', message: '' };
+  const forget = useCallback((proposal: Proposal) => {
     setProposals((current) => current.filter((p) => p.id !== proposal.id));
-    return result.ok;
-  }, [diagramId, storage]);
+  }, []);
 
   const approve = useCallback(async (proposal: Proposal) => {
-    if (!applyToPage || !canChangePage?.()) {
+    if (!storeThenApplyToPage || !storage.approveProposal || !canChangePage?.()) {
       notificationStore.push({ severity: 'error', message: t('proposals.cannotChange', 'You can only view this diagram, so nothing was changed') });
       return;
     }
@@ -131,32 +136,61 @@ export function ProposalPrompt({
         });
         return;
       }
-      const outcomes = applyToPage(ready.map((step) => proposal.operations[step.index]), proposal.viewId ?? undefined);
-      const made = outcomes.filter((step) => step.status === 'ready').length;
-      const saved = await record(proposal, 'approve', made);
+      let answer: ProposalDecision = { ok: false, reason: 'error', message: '' };
+      const outcome = await storeThenApplyToPage(
+        ready.map((step) => proposal.operations[step.index]),
+        proposal.viewId ?? undefined,
+        async (document, made) => {
+          answer = await storage.approveProposal!(diagramId, proposal.id, { applied: made, document });
+          return answer.ok;
+        }
+      );
+      if (outcome.status === 'made') {
+        const made = outcome.steps.filter((step) => step.status === 'ready').length;
+        forget(proposal);
+        notificationStore.push({
+          severity: 'success',
+          message: t('proposals.made', { count: made, defaultValue: made === 1 ? 'Change approved and made' : `${made} changes approved and made` })
+        });
+        return;
+      }
+      // Nothing was changed, here or on the server.
+      const failed = answer as { ok: false; reason: string };
+      const decided = outcome.status === 'not-stored' && (failed.reason === 'already-decided' || failed.reason === 'no-proposal');
       notificationStore.push({
-        severity: saved ? 'success' : 'warning',
-        message: saved
-          ? t('proposals.made', { count: made, defaultValue: made === 1 ? 'Change approved and made' : `${made} changes approved and made` })
-          : t('proposals.madeNotRecorded', "Made the changes, but couldn't tell the agent: it may ask again")
+        severity: 'error',
+        message: outcome.status === 'nothing'
+          ? t('proposals.nothingApplies', 'None of these changes fit the page as it is now: nothing was changed')
+          : outcome.status === 'unsaved'
+            ? t('proposals.saveFirst', "Your latest edits couldn't be saved, so nothing was approved: try again when you are back online")
+            : failed.reason === 'conflict'
+              ? t('proposals.changedElsewhere', 'This diagram was changed somewhere else, so nothing was approved: try again once it has refreshed')
+              : decided
+                ? t('proposals.alreadyDecided', 'That change was already decided in another window: nothing was changed')
+                : t('proposals.notSaved', "Couldn't save the change, so nothing was approved: try again")
       });
+      if (decided) forget(proposal);
+      void refresh();
     } finally {
       setBusy(null);
     }
-  }, [applyToPage, canChangePage, planOf, record, t]);
+  }, [storeThenApplyToPage, storage, canChangePage, planOf, diagramId, forget, refresh, t]);
 
   const reject = useCallback(async (proposal: Proposal) => {
     setBusy(proposal.id);
     try {
-      const ok = await record(proposal, 'reject');
-      notificationStore.push(ok
+      const result = storage.rejectProposal
+        ? await storage.rejectProposal(diagramId, proposal.id)
+        : { ok: false as const, reason: 'error', message: '' };
+      forget(proposal);
+      notificationStore.push(result.ok
         ? { severity: 'success', message: t('proposals.rejected', 'Change rejected') }
         : { severity: 'error', message: t('proposals.failed', "Couldn't record your decision: try again") });
-      if (!ok) void refresh();
+      if (!result.ok) void refresh();
     } finally {
       setBusy(null);
     }
-  }, [record, refresh, t]);
+  }, [storage, diagramId, forget, refresh, t]);
 
   if (!mayReview || proposals.length === 0) return null;
 

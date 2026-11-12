@@ -189,7 +189,42 @@ test('a change your agent proposed through MCP waits for you: the chip opens it,
   await byAxoviewId(page, 'proposal-approve').click();
   await expect(toast(page, 'success')).toContainText('Change approved and made');
   await expect(chip).toHaveCount(0);
-  expect(mock.callsTo('POST /api/diagrams/d1/proposals/p1/approve').map((c) => c.body)).toEqual([{ applied: 1 }]);
+  // Approving is saving: the request carries the diagram with the step made.
+  const sent = mock.callsTo('POST /api/diagrams/d1/proposals/p1/approve').map((c) => c.body as {
+    applied: number; document: { items: Array<{ name: string }> };
+  });
+  expect(sent).toHaveLength(1);
+  expect(sent[0].applied).toBe(1);
+  expect(sent[0].document.items.map((item) => item.name)).toContain('Cache');
+});
+
+test('approving when the diagram changed elsewhere: nothing is made and the change keeps waiting', async ({ page, context, baseURL }) => {
+  const proposal = {
+    id: 'p1',
+    by: { sub: 'alice-1', agent: 'Claude Code' },
+    viewId: 'p1',
+    operations: [{ op: 'add_node', name: 'Cache' }],
+    note: null,
+    createdAt: '2026-11-10T07:00:00.000Z'
+  };
+  const mock = await boot(page, context, baseURL!, { state: 'by-you', role: 'owner' });
+  mock.set('GET /api/diagrams/d1/proposals', { status: 200, json: { proposals: [proposal] } });
+  mock.set('POST /api/diagrams/d1/proposals/p1/approve', {
+    status: 409, json: { error: 'Diagram was changed since it was loaded', reason: 'conflict' }
+  });
+  await page.reload();
+  const chip = byAxoviewId(page, 'proposals-chip');
+  await expect(chip).toHaveText('1 to approve', { timeout: 20_000 });
+  await chip.click();
+  await byAxoviewId(page, 'proposal-approve').click();
+  await expect(toast(page, 'error')).toContainText('changed somewhere else, so nothing was approved');
+  await expect(chip).toHaveText('1 to approve');
+  expect(mock.callsTo('POST /api/diagrams/d1/proposals/p1/approve')).toHaveLength(1);
+  // The editor was not touched, so no save carries the step either.
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(3000);
+  const saved = mock.callsTo('PUT /api/diagrams/d1').map((c) => JSON.stringify(c.body));
+  expect(saved.filter((body) => body.includes('Cache'))).toEqual([]);
 });
 
 test('shared with you as Read only: an editor link opens the read-only viewer', async ({ page, context, baseURL }) => {

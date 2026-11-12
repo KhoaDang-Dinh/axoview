@@ -8,11 +8,21 @@
  *   oauth/codes/<sha256(code)>         an authorization code (2 min, used once)
  *   oauth/tokens/<sha256(token)>       an access token (1 h) or refresh token (30 days)
  *   oauth/grants/<sub>/<grantId>       what a person let one client do
+ *   oauth/used/<sha256(credential)>    a one-time credential that was used
  *
  * Codes and tokens are stored only as hashes: a copy of the bucket gives no
  * usable credential. A token is valid only while its grant exists, so
  * disconnecting a client (deleting its grant) ends every token it holds.
  * Expired objects are deleted when next read.
+ *
+ * One-time credentials (a consent request, an authorization code, a refresh
+ * token) are used by CLAIMING them: creating oauth/used/<hash> with the
+ * adapter's putIfAbsent, which exactly one of any number of concurrent
+ * attempts wins, on every API pod. Reading the record and deleting it is not
+ * enough: two attempts can both read it before either deletes. A claim is
+ * never deleted by the request that made it, because an attempt that read the
+ * record earlier could then claim it again; it carries the credential's
+ * expiry so a sweep can remove it afterwards.
  */
 import crypto from 'crypto';
 
@@ -75,6 +85,12 @@ export function createOAuthStore({ adapter, now = Date.now }) {
 
   const grantKey = (sub, grantId) => `oauth/grants/${sub}/${grantId}`;
 
+  /** Claim a one-time credential: true for exactly one caller, ever. */
+  const claim = (credential, expires) => adapter.putIfAbsent(
+    `oauth/used/${sha256(credential)}`,
+    new TextEncoder().encode(JSON.stringify({ usedAt: now(), expires: typeof expires === 'number' ? expires : null }))
+  );
+
   return {
     // --- clients (DCR) ---------------------------------------------------
     async registerClient({ client_name, redirect_uris }) {
@@ -96,7 +112,15 @@ export function createOAuthStore({ adapter, now = Date.now }) {
       return id;
     },
     readRequest: (id) => (/^[A-Za-z0-9_-]{24}$/.test(id) ? readLive(`oauth/requests/${id}`) : Promise.resolve(null)),
-    dropRequest: (id) => remove(`oauth/requests/${id}`),
+    /** The request, for the one decision that gets to answer it; null for any other. */
+    async takeRequest(id) {
+      if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{24}$/.test(id)) return null;
+      const key = `oauth/requests/${id}`;
+      const record = await readLive(key);
+      if (!record || !(await claim(`request:${id}`, record.expires))) return null;
+      await remove(key);
+      return record;
+    },
 
     // --- codes -------------------------------------------------------------
     async issueCode(fields) {
@@ -104,12 +128,16 @@ export function createOAuthStore({ adapter, now = Date.now }) {
       await write(`oauth/codes/${sha256(code)}`, { ...fields, expires: now() + CODE_TTL_MS });
       return code;
     },
-    /** The code's record, deleted as it is read: a code works once. */
+    /**
+     * The code's record, for the one attempt that gets to use it: a code works
+     * once, however many requests present it at the same moment.
+     */
     async takeCode(code) {
       if (typeof code !== 'string' || code.length > 100) return null;
       const key = `oauth/codes/${sha256(code)}`;
       const record = await readLive(key);
-      if (record) await remove(key);
+      if (!record || !(await claim(`code:${code}`, record.expires))) return null;
+      await remove(key);
       return record;
     },
 
@@ -128,6 +156,16 @@ export function createOAuthStore({ adapter, now = Date.now }) {
       return readLive(`oauth/tokens/${sha256(token)}`);
     },
     dropToken: (token) => remove(`oauth/tokens/${sha256(token)}`),
+    /**
+     * Use up a refresh token (rotation): true for the one attempt that gets to
+     * exchange it, false for any other, concurrent or later. The token is
+     * gone afterwards.
+     */
+    async useRefreshToken(token, record) {
+      if (!(await claim(`refresh:${token}`, record.expires))) return false;
+      await remove(`oauth/tokens/${sha256(token)}`);
+      return true;
+    },
 
     // --- grants ------------------------------------------------------------
     async saveGrant(sub, { clientId, clientName, scopes, redirectHost }) {
@@ -159,7 +197,8 @@ export function createOAuthStore({ adapter, now = Date.now }) {
     async listGrants(sub) {
       // Adapters differ in how much of the key list() returns; the last
       // segment is the grant id either way.
-      const keys = await adapter.list(`oauth/grants/${sub}`);
+      // The trailing slash keeps a prefix-matching store (S3) to this person.
+      const keys = await adapter.list(`oauth/grants/${sub}/`);
       const ids = keys.map((key) => key.split('/').pop()).filter((id) => /^[a-f0-9]{32}$/.test(id));
       const grants = await Promise.all(ids.map((id) => read(grantKey(sub, id))));
       return grants.filter(Boolean).sort((a, b) => a.createdAt.localeCompare(b.createdAt));

@@ -33,12 +33,39 @@ interface AssistantPageState {
     apply: ((operations: unknown[], viewId?: string) => AgentStepOutcome[]) | null,
     canChange: (() => boolean) | null
   ) => void;
+  /**
+   * Carries out operations that must be stored before they show (approving
+   * an outside agent's proposal: ADR 0059 addendum 2026-11-12). The diagram
+   * with the steps made is worked out without changing the editor and handed
+   * to `store`; only when `store` says it is stored does the change appear,
+   * as one undoable change. Registered with applyToPage.
+   */
+  storeThenApplyToPage: StoreThenApply | null;
+  setStoreThenApply: (run: StoreThenApply | null) => void;
 }
+
+/**
+ * `made`: stored and now on screen. `nothing`: no step fits the diagram as it
+ * is. `not-stored`: `store` refused, the diagram is as it was. `unsaved`:
+ * earlier edits could not be saved first, so nothing was tried.
+ */
+export interface StoreThenApplyResult {
+  status: 'made' | 'nothing' | 'not-stored' | 'unsaved';
+  steps: AgentStepOutcome[];
+}
+
+export type StoreThenApply = (
+  operations: unknown[],
+  viewId: string | undefined,
+  store: (document: unknown, made: number) => Promise<boolean>
+) => Promise<StoreThenApplyResult>;
 
 export const useAssistantPageStore = create<AssistantPageState>((set) => ({
   readPage: null,
   setReadPage: (reader) => set({ readPage: reader }),
   applyToPage: null,
   canChangePage: null,
-  setPageAccess: (apply, canChange) => set({ applyToPage: apply, canChangePage: canChange })
+  setPageAccess: (apply, canChange) => set({ applyToPage: apply, canChangePage: canChange }),
+  storeThenApplyToPage: null,
+  setStoreThenApply: (run) => set({ storeThenApplyToPage: run })
 }));

@@ -244,10 +244,24 @@ test('an agent\'s proposal waits for its own person, not the owner; Read only en
   expect((await alice.post(`/api/diagrams/${id}/proposals/${first.id}/approve`, {})).status).toBe(404);
   expect((await bob.get(`/api/diagrams/${id}/proposals`)).body.proposals.map((p) => p.id).sort()).toEqual([first.id, second.id].sort());
 
+  // Bob approves: his app saves the owner's diagram with the step made, and
+  // the owner hears of the save like any other.
   const bobHears = await bob.listen(700);
-  const approved = await bob.post(`/api/diagrams/${id}/proposals/${first.id}/approve`, { applied: 1 });
+  const aliceHears = await alice.listen(700);
+  const loaded = (await bob.get(`/api/diagrams/${id}`)).body;
+  const approved = await bob.post(`/api/diagrams/${id}/proposals/${first.id}/approve`, {
+    applied: 1, document: { ...loaded, items: [{ id: 'cache', name: 'Cache' }] }, baseModified: loaded.lastModified
+  });
+  expect(approved.status).toBe(200);
   expect(approved.body.proposal).toMatchObject({ status: 'approved', applied: 1, resolvedBy: 'bob-2', by: { sub: 'bob-2', agent: 'Claude Code' } });
-  expect((await bobHears.stop()).map((e) => [e.kind, e.action, e.id])).toContainEqual(['proposal', 'resolve', id]);
+  expect((await alice.get(`/api/diagrams/${id}`)).body.items).toEqual([{ id: 'cache', name: 'Cache' }]);
+  const bobHeard = (await bobHears.stop()).map((e) => [e.kind, e.action, e.id]);
+  expect(bobHeard).toContainEqual(['proposal', 'resolve', id]);
+  expect(bobHeard).toContainEqual(['diagram', 'save', id]);
+  const aliceHeard = (await aliceHears.stop()).map((e) => [e.kind, e.action, e.id]);
+  expect(aliceHeard).toContainEqual(['diagram', 'save', id]);
+  // The decision itself is between bob and his agent.
+  expect(aliceHeard.filter(([kind]) => kind === 'proposal')).toEqual([]);
   expect((await bob.post(`/api/diagrams/${id}/proposals/${second.id}/reject`, {})).body.proposal.status).toBe('rejected');
   expect((await bob.get(`/api/diagrams/${id}/proposals`)).body.proposals).toEqual([]);
 

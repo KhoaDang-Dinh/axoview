@@ -239,9 +239,9 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
 
   router.post(`${ISSUER_PATH}/requests/:id`, guard, async (req, res) => {
     if (!req.user?.sub) return res.status(401).json({ error: 'Unauthorized' });
-    const request = await store.readRequest(req.params.id);
+    // One decision answers a request, however many arrive together.
+    const request = await store.takeRequest(req.params.id);
     if (!request) return res.status(404).json({ error: 'This sign-in request has expired. Start again from the app.', reason: 'expired' });
-    await store.dropRequest(req.params.id);
     const { authorizationServer } = metadataFor(baseUrlOf(req, publicBaseUrl));
     const iss = authorizationServer.issuer;
     if (req.body?.approve !== true) {
@@ -307,8 +307,11 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
         if (body.resource !== undefined && !sameResource(body.resource, record.resource)) {
           return tokenError(res, 400, 'invalid_target', `resource must be ${protectedResource.resource}`);
         }
-        // Rotation (OAuth 2.1 §4.3.1): the old refresh token works once.
-        await store.dropToken(body.refresh_token);
+        // Rotation (OAuth 2.1 §4.3.1): the old refresh token works once, for
+        // one request, however many present it together.
+        if (!(await store.useRefreshToken(body.refresh_token, record))) {
+          return tokenError(res, 400, 'invalid_grant', 'The refresh token is unknown or expired');
+        }
         const narrowed = typeof body.scope === 'string' && body.scope.trim()
           ? record.scope.split(' ').filter((s) => body.scope.split(/\s+/).includes(s)).join(' ')
           : record.scope;

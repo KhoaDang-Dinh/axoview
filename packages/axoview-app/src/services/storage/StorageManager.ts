@@ -215,10 +215,16 @@ export class StorageManager implements StorageProvider {
     return provider.listProposals ? provider.listProposals(id) : [];
   }
 
-  async resolveProposal(id: string, proposalId: string, decision: 'approve' | 'reject', applied?: number): Promise<ProposalDecision> {
+  async approveProposal(id: string, proposalId: string, change: { applied: number; document: unknown }): Promise<ProposalDecision> {
     const provider = this.getActiveProvider();
-    if (!provider.resolveProposal) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
-    return provider.resolveProposal(id, proposalId, decision, applied);
+    if (!provider.approveProposal) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.approveProposal(id, proposalId, change);
+  }
+
+  async rejectProposal(id: string, proposalId: string): Promise<ProposalDecision> {
+    const provider = this.getActiveProvider();
+    if (!provider.rejectProposal) return { ok: false, reason: 'error', message: 'Sharing is not available here' };
+    return provider.rejectProposal(id, proposalId);
   }
 
   async removeMember(id: string, sub: string): Promise<void> {

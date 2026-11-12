@@ -229,14 +229,20 @@ On a diagram the person may only view, the agent is Read only whatever the level
 Changes an outside agent proposed through the workspace MCP server ([ADR 0059](adr/0059-agent-sign-in-and-workspace-mcp.md))
 wait for its person alone, while they may change the diagram (owner or Full admin; anyone else gets
 `404`). A proposal holds operations in the `diagramAgent` vocabulary, not a document: the app checks
-them against the page, makes the approved ones as an ordinary edit, saves it, then records the
-decision here.
+them against the page and works out the diagram with the approved ones made. Approving is saving
+that diagram ([ADR 0059](adr/0059-agent-sign-in-and-workspace-mcp.md), addendum 2026-11-12): the
+decision is recorded only once it is stored.
 
 | Method and path | Body | Answer |
 |---|---|---|
 | `GET /api/diagrams/{id}/proposals` | — | `{ proposals: [{ id, by: { sub, agent }, viewId, operations, note, createdAt }] }`: this person's agents' waiting ones |
-| `POST /api/diagrams/{id}/proposals/{pid}/approve` | `{ "applied": n }`: how many steps were made | `{ proposal }` |
+| `POST /api/diagrams/{id}/proposals/{pid}/approve` | `{ "applied": n, "document": {…} }`: how many steps were made and the diagram with them. The state it was built on: `If-Match: "<version>"`, or `"baseModified": "<lastModified>"` on a backend without versions | `{ proposal, lastModified }`, with the new `ETag` |
 | `POST /api/diagrams/{id}/proposals/{pid}/reject` | — | `{ proposal }` |
+
+Approve answers `409` with `reason: "conflict"` (or a version conflict) when the diagram changed
+since that state, `428` when no state is named and `400` without a document. In each case nothing
+is stored and the proposal keeps waiting. A decision is final: the other one afterwards is `409`
+with `reason: "already-decided"`; the same one again returns the recorded proposal.
 
 A new one sends `kind: "proposal"` `create`, and deciding one `resolve`, to that person's sync stream.
 

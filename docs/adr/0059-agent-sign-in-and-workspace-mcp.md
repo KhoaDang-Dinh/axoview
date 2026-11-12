@@ -151,3 +151,52 @@ Cognito cannot be that authorization server: it has no CIMD, no DCR and no resou
     not applicable), see "Approve the 3 that fit" and approve;
   - the saved diagram gains the item and two connectors;
   - `get_proposal` reports "3 of 4".
+
+## Addendum 2026-11-12: approvals that hold, credentials used once, proposals that are not lost
+
+Four weaknesses in what shipped, and what replaced them. Nothing here changes what an agent may do.
+
+1. **Approving is saving.** Before, the app made the approved steps in the editor, told the server
+   "approved", and saved with the next autosave. An agent could read "approved" for a change that
+   then failed to save or was never uploaded. Now:
+   - The app works the diagram with the steps out **without touching the editor**
+     (`AxoviewRef.prepareAgentOperations`) and sends it with the approval:
+     `POST /api/diagrams/{id}/proposals/{pid}/approve` with `{ applied, document }`.
+   - The request names the state the document was built on: `If-Match: "<version>"` where
+     diagrams are versioned (AWS), else `baseModified`, the `lastModified` the window loaded (fs).
+     The server saves only if the diagram is still in that state. Otherwise it answers `409` (or
+     `428` when no state is named), stores nothing, and the proposal keeps waiting.
+   - The server records "approved" only after the save succeeded, with the version that holds the
+     change. `get_proposal` reads that record, so "approved" always means "stored".
+   - Only then do the steps appear in the editor, as one undoable change (`commit()`), and they
+     are exactly the stored diagram, new ids included. Edits the window had not uploaded yet go up
+     first, so they are part of what the approval is built on.
+   - The in-app assistant is unchanged: its approvals have no server record
+     ([ADR 0052](0052-ai-assistant-boundaries.md), addendum 2026-11-10).
+2. **One-time credentials are claimed, not read and deleted.** A consent request, an authorization
+   code and a refresh token are each used by creating `oauth/used/<sha256>` with the storage
+   adapter's new `putIfAbsent` (S3 `If-None-Match: *`; a hard link on fs). Exactly one of any
+   number of concurrent attempts creates it, on every API pod; the others get `invalid_grant`.
+   Reading the record and then deleting it let two attempts both pass.
+3. **Each proposal is its own object.** `sharing/proposed/<diagramId>/<pid>` is created once and
+   never changed; its decision is a second create-once object, `sharing/decided/<diagramId>/<pid>`.
+   Proposals made in the same instant are all kept, and of decisions arriving together the first
+   stands: repeating it returns it, the other one is `409 already-decided`. Before, all of a
+   diagram's proposals shared one object that every writer read, changed and wrote back.
+4. **The flow is tested end to end on every pull request.** `npm run test:e2e:agents`
+   (`packages/axoview-e2e/tests-agents`, workflow `e2e-agents.yml`): the official MCP SDK client,
+   the built app, the real backend and a real browser go through OAuth, propose, approve and
+   persisted. Only Cognito is faked.
+
+**Limits, stated plainly:**
+- **Waiting proposals per person:** the cap of 20 is checked before the write, so agents proposing
+  in the same instant can end a few above it.
+- **Approve and reject at the same moment:** if the same person approves in one window and rejects
+  in another within the time of one save, the save can go in while "rejected" is recorded. The
+  record never says "approved" for something not stored; the reverse can happen in that window.
+- **Used-credential markers** carry their credential's expiry and are not deleted by the request
+  that made them. Like the other leftovers they wait for a sweep.
+- **fs storage** compares `lastModified` under an in-process lock: correct for the single process
+  that serves an fs store. Several API pods need the AWS adapter, whose check is a conditional
+  write.
+

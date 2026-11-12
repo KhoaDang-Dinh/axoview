@@ -18,7 +18,7 @@ Endpoints: `/api/mcp`, the public manual (below), and `/api/mcp/workspace`, a pe
 | `list_diagrams` | `diagrams:read` | the person's diagrams and those shared with them: id, name, access (owner, admin, viewer), whether the agent may propose |
 | `read_diagram` | `diagrams:read` | `id`, optional `page`: the page's description (items, icons, connections, groups, text) and the list of pages |
 | `propose_changes` | `diagrams:propose` | `id`, optional `page`, 1-12 `operations` (the `diagramAgent` vocabulary), optional `note`: a pending proposal. Nothing changes until the person approves it in Axoview |
-| `get_proposal` | `diagrams:read` | `id`, `proposal`: pending, approved (with how many steps were made) or rejected |
+| `get_proposal` | `diagrams:read` | `id`, `proposal`: pending, approved (with how many steps were made) or rejected. Approved is reported only once the diagram holding the change is stored |
 
 Without `diagrams:propose`, `propose_changes` answers `403` with `error="insufficient_scope"`. On a diagram shared with the person as Read only it is a tool error. Claude Code: `claude mcp add --transport http axoview <base>/api/mcp/workspace`, then `/mcp` to sign in.
 
