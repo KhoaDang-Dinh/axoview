@@ -61,7 +61,9 @@
         "pom/**/*.ts",
         "helpers/**/*.ts",
         "playwright.config.ts",
-        "playwright.docker.config.ts"
+        "playwright.docker.config.ts",
+        "playwright.agents.config.ts",
+        "agents/stack.mjs"
       ]
     }
   }

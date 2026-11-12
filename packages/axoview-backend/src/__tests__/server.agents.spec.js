@@ -82,7 +82,7 @@ function person(base, sub) {
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null };
   };
-  return { get: (p) => call('GET', p), post: (p, b) => call('POST', p, b), patch: (p, b) => call('PATCH', p, b), del: (p) => call('DELETE', p) };
+  return { get: (p) => call('GET', p), post: (p, b) => call('POST', p, b), put: (p, b) => call('PUT', p, b), patch: (p, b) => call('PATCH', p, b), del: (p) => call('DELETE', p) };
 }
 
 /** An MCP client (modern protocol) holding `token`. */
@@ -147,6 +147,17 @@ async function connect(base, { sub = 'alice-1', scopes, scope = 'diagrams:read d
   });
   return { registered, shown: shown.body, back, tokens: await tokenResponse.json(), status: tokenResponse.status, app };
 }
+
+/** The diagram as the app sends it once it made "add a Cache, connect Web to it". */
+const withCache = (diagram) => ({
+  ...diagram,
+  items: [...diagram.items, { id: 'cache', name: 'Cache' }],
+  views: diagram.views.map((view) => ({
+    ...view,
+    items: [...view.items, { id: 'cache', tile: { x: 2, y: 0 } }],
+    connectors: [...(view.connectors || []), { id: 'c1', anchors: [{ id: 'a1', ref: { item: 'web' } }, { id: 'a2', ref: { item: 'cache' } }] }]
+  }))
+});
 
 const DIAGRAM = {
   name: 'Network', title: 'Network', icons: [{ id: 'db', name: 'Database', url: 'x' }], colors: [],
@@ -216,11 +227,104 @@ test('the whole way: consent, token, read, propose; the person approves in the a
   })]);
   expect((await agent.call('get_proposal', { id, proposal: pid })).body.result.structuredContent.status).toBe('pending');
 
-  // The app carried out both steps and saved; it records the decision.
-  expect((await app.post(`/api/diagrams/${id}/proposals/${pid}/approve`, { applied: 2 })).body.proposal)
-    .toMatchObject({ status: 'approved', applied: 2, resolvedBy: 'alice-1' });
+  // Approving is saving: the app sends the diagram with both steps made and
+  // the state it built that on.
+  const loaded = (await app.get(`/api/diagrams/${id}`)).body;
+  const approved = await app.post(`/api/diagrams/${id}/proposals/${pid}/approve`, {
+    applied: 2, document: withCache(loaded), baseModified: loaded.lastModified
+  });
+  expect(approved.status).toBe(200);
+  expect(approved.body.proposal).toMatchObject({ status: 'approved', applied: 2, resolvedBy: 'alice-1' });
   const after = await agent.call('get_proposal', { id, proposal: pid });
   expect(after.body.result.structuredContent).toEqual({ id: pid, status: 'approved', steps: 2, applied: 2 });
+  // And the agent reads its own change back.
+  const reread = (await agent.call('read_diagram', { id })).body.result.structuredContent.description;
+  expect(reread.nodes.map((n) => n.name).sort()).toEqual(['Cache', 'Web']);
+}, T);
+
+test('an agent sees "approved" only after the diagram is saved', async () => {
+  const { base } = await startServer();
+  const { tokens, app } = await connect(base);
+  const id = (await app.post('/api/diagrams', DIAGRAM)).body.id;
+  const agent = mcpClient(base, tokens.access_token);
+  const propose = async () => (await agent.call('propose_changes', {
+    id, operations: [{ op: 'add_node', name: 'Cache' }]
+  })).body.result.structuredContent.proposal.id;
+  const statusOf = async (pid) => (await agent.call('get_proposal', { id, proposal: pid })).body.result.structuredContent.status;
+  const diagram = async () => (await app.get(`/api/diagrams/${id}`)).body;
+  const approve = (pid, body) => app.post(`/api/diagrams/${id}/proposals/${pid}/approve`, body);
+  const pid = await propose();
+  const loaded = await diagram();
+
+  // No diagram, or no word on what it was built on: refused, still waiting, nothing stored.
+  expect((await approve(pid, { applied: 1 })).status).toBe(400);
+  expect((await approve(pid, { applied: 1, document: withCache(loaded) })).status).toBe(428);
+  expect(await statusOf(pid)).toBe('pending');
+  expect(await diagram()).toEqual(loaded);
+
+  // The diagram changed after the app loaded it (another device saved): the
+  // approval is refused, the other device's save is kept, the proposal waits.
+  await app.put(`/api/diagrams/${id}`, { ...DIAGRAM, title: 'Renamed elsewhere' });
+  const elsewhere = await diagram();
+  const stale = await approve(pid, { applied: 1, document: withCache(loaded), baseModified: loaded.lastModified });
+  expect(stale.status).toBe(409);
+  expect(await statusOf(pid)).toBe('pending');
+  expect((await app.get(`/api/diagrams/${id}/proposals`)).body.proposals.map((p) => p.id)).toEqual([pid]);
+  expect(await diagram()).toEqual(elsewhere);
+
+  // Built on the current state: stored first, then recorded.
+  const done = await approve(pid, { applied: 1, document: withCache(elsewhere), baseModified: elsewhere.lastModified });
+  expect(done.status).toBe(200);
+  expect(done.body.proposal.status).toBe('approved');
+  const saved = await diagram();
+  expect(saved.title).toBe('Renamed elsewhere');
+  expect(saved.items.map((item) => item.name)).toEqual(['Web', 'Cache']);
+  expect(done.body.lastModified).toBe(saved.lastModified);
+  expect(await statusOf(pid)).toBe('approved');
+
+  // The answer was lost and the app asks again: the recorded approval comes back, nothing is saved twice.
+  const again = await approve(pid, { applied: 1, document: withCache(elsewhere), baseModified: elsewhere.lastModified });
+  expect(again.status).toBe(200);
+  expect(again.body.proposal).toEqual(done.body.proposal);
+  expect(await diagram()).toEqual(saved);
+  // A decision is final.
+  const late = await app.post(`/api/diagrams/${id}/proposals/${pid}/reject`, {});
+  expect(late.status).toBe(409);
+  expect(late.body.reason).toBe('already-decided');
+  const rejected = await propose();
+  expect((await app.post(`/api/diagrams/${id}/proposals/${rejected}/reject`, {})).body.proposal.status).toBe('rejected');
+  const refused = await approve(rejected, { applied: 1, document: withCache(saved), baseModified: saved.lastModified });
+  expect(refused.status).toBe(409);
+  expect(await diagram()).toEqual(saved);
+}, T);
+
+test('approvals of one diagram arriving together: each proposal is approved only if its save went in', async () => {
+  const { base } = await startServer();
+  const { tokens, app } = await connect(base);
+  const id = (await app.post('/api/diagrams', DIAGRAM)).body.id;
+  const agent = mcpClient(base, tokens.access_token);
+  // Six agents' proposals made at the same moment: none is lost.
+  const pids = (await Promise.all(Array.from({ length: 6 }, (_, i) =>
+    agent.call('propose_changes', { id, operations: [{ op: 'add_node', name: `Node ${i}` }] }))))
+    .map((r) => r.body.result.structuredContent.proposal.id);
+  expect(new Set(pids).size).toBe(6);
+  expect((await app.get(`/api/diagrams/${id}/proposals`)).body.proposals.map((p) => p.id).sort()).toEqual([...pids].sort());
+
+  // Six windows approve one each, all built on the same state.
+  const loaded = (await app.get(`/api/diagrams/${id}`)).body;
+  const answers = await Promise.all(pids.map((pid, i) => app.post(`/api/diagrams/${id}/proposals/${pid}/approve`, {
+    applied: 1,
+    document: { ...loaded, items: [...loaded.items, { id: `n${i}`, name: `Node ${i}` }] },
+    baseModified: loaded.lastModified
+  })));
+  expect(answers.map((a) => a.status).sort()).toEqual([200, 409, 409, 409, 409, 409]);
+  const winner = answers.findIndex((a) => a.status === 200);
+  const saved = (await app.get(`/api/diagrams/${id}`)).body;
+  expect(saved.items.map((item) => item.name)).toEqual(['Web', `Node ${winner}`]);
+  for (const [i, pid] of pids.entries()) {
+    const status = (await agent.call('get_proposal', { id, proposal: pid })).body.result.structuredContent.status;
+    expect(status).toBe(i === winner ? 'approved' : 'pending');
+  }
 }, T);
 
 test('never above its person: read-only consent, a Read only diagram, someone else\'s diagram', async () => {
@@ -319,4 +423,51 @@ test('denying sends the client access_denied; off unless AI_MCP_ENABLED', async 
   const off = await startServer({ mcp: false });
   expect((await fetch(`${off.base}/.well-known/oauth-authorization-server/api/oauth`)).status).toBe(404);
   expect((await mcpClient(off.base, 'x').rpc('tools/list')).status).toBe(404);
+}, T);
+
+test('one-time credentials cannot be reused by concurrent attempts: consent, code, refresh token', async () => {
+  const { base } = await startServer();
+  const app = person(base, 'alice-1');
+  const registered = await (await fetch(`${base}/api/oauth/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client_name: 'Racer', redirect_uris: [REDIRECT] })
+  })).json();
+  const { verifier, challenge } = pkce();
+  const url = new URL(`${base}/api/oauth/authorize`);
+  Object.entries({
+    response_type: 'code', client_id: registered.client_id, redirect_uri: REDIRECT, code_challenge: challenge,
+    code_challenge_method: 'S256', resource: `${base}/api/mcp/workspace`, state: 's'
+  }).forEach(([k, v]) => url.searchParams.set(k, v));
+  const requestId = new URL((await fetch(url, { redirect: 'manual' })).headers.get('location')).searchParams.get('request');
+  const together = (n, attempt) => Promise.all(Array.from({ length: n }, () => attempt()));
+
+  // Twelve approvals of one consent request at once: one answers it, with one code.
+  const approvals = await together(12, () => app.post(`/api/oauth/requests/${requestId}`, { approve: true }));
+  const answered = approvals.filter((r) => r.status === 200);
+  expect(answered).toHaveLength(1);
+  expect(approvals.filter((r) => r.status === 404)).toHaveLength(11);
+  const code = new URL(answered[0].body.redirect).searchParams.get('code');
+
+  // Twelve exchanges of that code at once: one pair of tokens.
+  const exchange = () => fetch(`${base}/api/oauth/token`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, client_id: registered.client_id, code_verifier: verifier })
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  const exchanges = await together(12, exchange);
+  const issued = exchanges.filter((r) => r.status === 200);
+  expect(issued).toHaveLength(1);
+  expect(exchanges.filter((r) => r.body.error === 'invalid_grant')).toHaveLength(11);
+
+  // Twelve refreshes with that refresh token at once: one rotation.
+  const refresh = () => fetch(`${base}/api/oauth/token`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: form({ grant_type: 'refresh_token', refresh_token: issued[0].body.refresh_token, client_id: registered.client_id })
+  }).then(async (r) => ({ status: r.status, body: await r.json() }));
+  const refreshes = await together(12, refresh);
+  const rotated = refreshes.filter((r) => r.status === 200);
+  expect(rotated).toHaveLength(1);
+  expect(refreshes.filter((r) => r.body.error === 'invalid_grant')).toHaveLength(11);
+  // The one new pair works; the old refresh token never does again.
+  expect((await mcpClient(base, rotated[0].body.access_token).call('list_diagrams')).status).toBe(200);
+  expect((await refresh()).body.error).toBe('invalid_grant');
 }, T);

@@ -10,7 +10,7 @@ import { ModelProvider, useModelStoreApi } from '../../stores/modelStore';
 import { SceneProvider, useSceneStoreApi } from '../../stores/sceneStore';
 import { UiStateProvider, useUiStateStoreApi } from '../../stores/uiStateStore';
 import { useHistory } from '../useHistory';
-import { iconForHint, useAgentCommit } from '../useAgentCommit';
+import { iconForHint, useAgentChanges, useAgentCommit } from '../useAgentCommit';
 
 const AllProviders = ({ children }: { children: React.ReactNode }) => (
   <ModelProvider>
@@ -28,6 +28,7 @@ const ICONS = [
 function setup() {
   const hook = renderHook(() => ({
     commit: useAgentCommit(),
+    changes: useAgentChanges(),
     history: useHistory(),
     model: useModelStoreApi(),
     scene: useSceneStoreApi(),
@@ -82,4 +83,63 @@ it('matches an icon hint by id or name, exact before partial', () => {
   expect(iconForHint(ICONS, 'data')).toBe('db');
   expect(iconForHint(ICONS, 'printer')).toBeUndefined();
   expect(iconForHint(ICONS, undefined)).toBeUndefined();
+});
+
+describe('prepare: the change worked out before it is put in the editor', () => {
+  const OPS = [
+    { op: 'add_node', name: 'Cache', icon: 'database' },
+    { op: 'connect', from: { name: 'Web' }, to: { name: 'Cache' } }
+  ];
+
+  it('returns the resulting diagram and leaves the editor, its scene and its history alone', () => {
+    const { result } = setup();
+    const before = result.current.model.getState();
+    const prepared = result.current.changes.prepare(OPS, 'p1')!;
+    expect(prepared.steps.map((s) => s.status)).toEqual(['ready', 'ready']);
+    expect(prepared.model.items.map((item) => item.name)).toEqual(['Web', 'Cache']);
+    expect(prepared.model.views[0].connectors).toHaveLength(1);
+    expect(result.current.model.getState().items).toBe(before.items);
+    expect(result.current.model.getState().views).toBe(before.views);
+    expect(Object.keys(result.current.scene.getState().connectors)).toEqual([]);
+    expect(result.current.model.getState().actions.canUndo()).toBe(false);
+  });
+
+  it('commit puts exactly that diagram in the editor, ids included, as one undoable change', () => {
+    const { result } = setup();
+    const prepared = result.current.changes.prepare(OPS, 'p1')!;
+    let steps: typeof prepared.steps = [];
+    act(() => { steps = prepared.commit(); });
+    expect(steps).toBe(prepared.steps);
+    const model = result.current.model.getState();
+    expect(model.items).toBe(prepared.model.items);
+    expect(model.views).toBe(prepared.model.views);
+    expect(Object.keys(result.current.scene.getState().connectors)).toEqual([prepared.model.views[0].connectors![0].id]);
+
+    act(() => { result.current.history.undo(); });
+    expect(result.current.model.getState().items.map((item) => item.name)).toEqual(['Web']);
+    expect(result.current.model.getState().actions.canUndo()).toBe(false);
+  });
+
+  it('edited between prepare and commit: the steps are made on the diagram as it is now, keeping the edit', () => {
+    const { result } = setup();
+    const prepared = result.current.changes.prepare(OPS, 'p1')!;
+    act(() => {
+      const state = result.current.model.getState();
+      state.actions.set({ items: [...state.items, { id: 'db1', name: 'Orders', icon: 'db' }] });
+    });
+    let steps: typeof prepared.steps = [];
+    act(() => { steps = prepared.commit(); });
+    expect(steps.map((s) => s.status)).toEqual(['ready', 'ready']);
+    expect(result.current.model.getState().items.map((item) => item.name)).toEqual(['Web', 'Orders', 'Cache']);
+  });
+
+  it('nothing applicable: commit changes nothing; no diagram loaded: null', () => {
+    const { result } = setup();
+    const prepared = result.current.changes.prepare([{ op: 'remove_node', node: { name: 'Nobody' } }], 'p1')!;
+    act(() => { prepared.commit(); });
+    expect(result.current.model.getState().actions.canUndo()).toBe(false);
+
+    const empty = renderHook(() => useAgentChanges(), { wrapper: AllProviders });
+    expect(empty.result.current.prepare(OPS)).toBeNull();
+  });
 });

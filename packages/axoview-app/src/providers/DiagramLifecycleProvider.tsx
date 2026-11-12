@@ -734,6 +734,52 @@ export function DiagramLifecycleProvider({
   const diagramNameRef = useRef(diagramName);
   useEffect(() => { diagramNameRef.current = diagramName; }, [diagramName]);
 
+  /** The editor's model as the document this app saves (what an autosave of it sends). */
+  const documentOf = useCallback((model: Model): DiagramData => {
+    // isoflow's model schema doesn't include `requiredPacks`, so the field
+    // is dropped from `model` here. Re-attach from the in-memory ref so the
+    // hint survives autosave round-trips when the icons array hasn't been
+    // fully rehydrated (e.g. a pack is still loading on first open).
+    const preservedRequiredPacks = currentModelRef.current?.requiredPacks;
+    return {
+      title: model.title || diagramNameRef.current || 'Untitled',
+      icons: model.icons || [],
+      colors: model.colors || defaultColors,
+      items: model.items || [],
+      views: model.views || [],
+      fitToScreen: true,
+      ...(Array.isArray(preservedRequiredPacks)
+        ? { requiredPacks: preservedRequiredPacks }
+        : {})
+    };
+  }, []);
+
+  // Approving an outside agent's proposal (components/ProposalPrompt.tsx): the
+  // change is stored before it shows, so the agent is never told "approved"
+  // for something that then fails to save (ADR 0059 addendum 2026-11-12).
+  useEffect(() => {
+    const { setStoreThenApply } = useAssistantPageStore.getState();
+    setStoreThenApply(async (operations, viewId, store) => {
+      const id = currentDiagramRef.current?.id;
+      if (!id || !axoviewRef.current) return { status: 'nothing', steps: [] };
+      // Edits not uploaded yet go up first, as any save does. What is then
+      // sent for approval is built on exactly what the server holds, so the
+      // server can refuse it if the diagram changes elsewhere meanwhile.
+      if ((await autoSaveSaveNowRef.current()) === 'error') return { status: 'unsaved', steps: [] };
+      if (currentDiagramRef.current?.id !== id) return { status: 'nothing', steps: [] };
+      const prepared = axoviewRef.current?.prepareAgentOperations(operations, { viewId });
+      if (!prepared) return { status: 'nothing', steps: [] };
+      const made = prepared.steps.filter((step) => step.status === 'ready').length;
+      if (made === 0) return { status: 'nothing', steps: prepared.steps };
+      if (!(await store(documentOf(prepared.model), made))) return { status: 'not-stored', steps: prepared.steps };
+      // Stored. If another diagram was opened meanwhile, it is not this
+      // editor's to show: the stored diagram has the change when reopened.
+      if (currentDiagramRef.current?.id !== id) return { status: 'made', steps: prepared.steps };
+      return { status: 'made', steps: prepared.commit() };
+    });
+    return () => setStoreThenApply(null);
+  }, [documentOf]);
+
   // Session-mode scratch buffer
   const scratchBufferRef = useRef<Map<string, DiagramData>>(new Map());
   const dirtyDiagramIdsRef = useRef<Set<string>>(new Set());
@@ -2388,22 +2434,7 @@ export function DiagramLifecycleProvider({
   // ---------------------------------------------------------------------------
   const handleModelUpdated = useCallback(
     (model: Model) => {
-      // isoflow's model schema doesn't include `requiredPacks`, so the field
-      // is dropped from `model` here. Re-attach from the in-memory ref so the
-      // hint survives autosave round-trips when the icons array hasn't been
-      // fully rehydrated (e.g. a pack is still loading on first open).
-      const preservedRequiredPacks = currentModelRef.current?.requiredPacks;
-      const updatedModel: DiagramData = {
-        title: model.title || diagramNameRef.current || 'Untitled',
-        icons: model.icons || [],
-        colors: model.colors || defaultColors,
-        items: model.items || [],
-        views: model.views || [],
-        fitToScreen: true,
-        ...(Array.isArray(preservedRequiredPacks)
-          ? { requiredPacks: preservedRequiredPacks }
-          : {})
-      };
+      const updatedModel = documentOf(model);
       setCurrentModel(updatedModel);
 
       if (isAfterLoadRef.current) {
@@ -2444,7 +2475,7 @@ export function DiagramLifecycleProvider({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.scheduleSave; whole autoSave churns on every save-status change
-    [isReadonlyUrl, remoteStorageActive, autoSave.scheduleSave]
+    [isReadonlyUrl, remoteStorageActive, autoSave.scheduleSave, documentOf]
   );
 
   // ---------------------------------------------------------------------------

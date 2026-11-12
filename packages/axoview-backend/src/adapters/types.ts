@@ -13,6 +13,11 @@
 export interface ObjectStorage {
   get(key: string): Promise<Uint8Array | null>;
   put(key: string, value: Uint8Array): Promise<void>;
+  /**
+   * Create the object only if none exists. Atomic across processes: of
+   * concurrent calls for one key exactly one resolves true.
+   */
+  putIfAbsent(key: string, value: Uint8Array): Promise<boolean>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<string[]>;
 }

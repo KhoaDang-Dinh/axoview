@@ -5,6 +5,7 @@
  * turns the members API's answers into results the share field shows.
  */
 import { LocalStorageProvider } from '../providers/LocalStorageProvider';
+import { leanIfModel } from '../leanModel';
 
 const BASE = 'http://localhost:3001';
 
@@ -18,11 +19,13 @@ function response(status: number, body: unknown, headers: Record<string, string>
   } as unknown as Response;
 }
 
-function script(responses: Response[]): Array<{ url: string; method: string; body: unknown }> {
-  const calls: Array<{ url: string; method: string; body: unknown }> = [];
+type Call = { url: string; method: string; body: unknown; headers: Record<string, string> };
+function script(responses: Response[]): Call[] {
+  const calls: Call[] = [];
   let index = 0;
   (global as any).fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    calls.push({ url: String(input), method: (init.method || 'GET').toUpperCase(), body: init.body ? JSON.parse(String(init.body)) : undefined });
+    calls.push({ url: String(input), method: (init.method || 'GET').toUpperCase(), body: init.body ? JSON.parse(String(init.body)) : undefined,
+      headers: Object.fromEntries(new Headers(init.headers).entries()) });
     const next = responses[index++];
     if (!next) throw new TypeError('Failed to fetch');
     return next;
@@ -109,18 +112,97 @@ it('changes a level; an unknown level is refused with its reason', async () => {
   expect(await p.setMemberRole('d1', 'bob', 'owner' as never)).toMatchObject({ ok: false, reason: 'invalid-role' });
 });
 
-it('lists proposals and records a decision with how many steps were made', async () => {
+it('lists proposals; rejecting records the decision or says why not', async () => {
   const p = serverProvider();
   const waiting = [{ id: 'p1', by: { sub: 'me', agent: 'Claude Code' }, viewId: 'v1', operations: [{ op: 'add_node', name: 'X' }], note: null, createdAt: 'x' }];
   const calls = script([
     response(200, { proposals: waiting }),
-    response(200, { proposal: { id: 'p1', status: 'approved' } }),
-    response(404, { error: 'gone', reason: 'no-proposal' })
+    response(200, { proposal: { id: 'p1', status: 'rejected' } }),
+    response(409, { error: 'That proposal was already approved', reason: 'already-decided' })
   ]);
   expect(await p.listProposals('d1')).toEqual(waiting);
-  expect(await p.resolveProposal('d1', 'p1', 'approve', 1)).toEqual({ ok: true });
-  expect(calls[1]).toMatchObject({ url: `${BASE}/api/diagrams/d1/proposals/p1/approve`, method: 'POST', body: { applied: 1 } });
-  expect(await p.resolveProposal('d1', 'p1', 'reject')).toEqual({ ok: false, reason: 'no-proposal', message: 'gone' });
+  expect(await p.rejectProposal('d1', 'p1')).toEqual({ ok: true });
+  expect(calls[1]).toMatchObject({ url: `${BASE}/api/diagrams/d1/proposals/p1/reject`, method: 'POST' });
+  expect(await p.rejectProposal('d1', 'p1')).toEqual({ ok: false, reason: 'already-decided', message: 'That proposal was already approved' });
+});
+
+describe('approving a proposal is a save that names the state it was built on', () => {
+  const DOC = {
+    title: 'Net', icons: [], colors: [], fitToScreen: true,
+    items: [{ id: 'a', name: 'Cache' }],
+    views: [{ id: 'v1', name: 'Page 1', items: [{ id: 'a', tile: { x: 0, y: 0 } }] }]
+  };
+  // Sent the way every save is (ADR 0003: pack icons stripped, packs recorded).
+  const SENT = JSON.parse(JSON.stringify(leanIfModel(DOC)));
+
+  it('the document goes out lean, with its content intact', () => {
+    expect(SENT).toMatchObject({ title: 'Net', items: DOC.items, views: DOC.views });
+  });
+
+  it('a versioned backend: If-Match with the version this tab holds, then the new one is remembered', async () => {
+    const p = serverProvider();
+    const calls = script([
+      response(200, { title: 'Net', lastModified: 't0' }, { ETag: '"4"' }),
+      response(200, { proposal: { id: 'p1', status: 'approved' }, lastModified: 't1' }, { ETag: '"5"' }),
+      response(200, { success: true }, { ETag: '"6"' })
+    ]);
+    await p.loadDiagram('d1');
+    expect(await p.approveProposal('d1', 'p1', { applied: 2, document: DOC })).toEqual({ ok: true });
+    expect(calls[1]).toMatchObject({ url: `${BASE}/api/diagrams/d1/proposals/p1/approve`, method: 'POST' });
+    expect(calls[1].headers['if-match']).toBe('"4"');
+    expect(calls[1].body).toEqual({ applied: 2, document: SENT });
+    // This tab now holds version 5: it is what the sync hook compares and the next save goes out against.
+    expect(p.knownVersion('d1')).toBe(5);
+    await p.saveDiagram('d1', DOC);
+    expect(calls[2].headers['if-match']).toBe('"5"');
+  });
+
+  it('a backend without versions: the lastModified this tab loaded, then the new one is remembered', async () => {
+    const p = serverProvider();
+    const calls = script([
+      response(200, { title: 'Net', lastModified: '2026-11-12T01:00:00.000Z' }),
+      response(200, { proposal: { id: 'p1', status: 'approved' }, lastModified: '2026-11-12T02:00:00.000Z' })
+    ]);
+    await p.loadDiagram('d1');
+    expect(await p.approveProposal('d1', 'p1', { applied: 1, document: DOC })).toEqual({ ok: true });
+    expect(calls[1].headers['if-match']).toBeUndefined();
+    expect(calls[1].body).toEqual({ applied: 1, document: SENT, baseModified: '2026-11-12T01:00:00.000Z' });
+    expect(p.serverStamp('d1')).toBe('t2026-11-12T02:00:00.000Z');
+  });
+
+  it('the version a LISTING reported is not what this tab holds: it is never sent', async () => {
+    const p = serverProvider();
+    const calls = script([
+      response(200, { title: 'Net', lastModified: 't0' }, { ETag: '"4"' }),
+      response(200, [{ id: 'd1', name: 'Net', lastModified: 't9', version: 9 }]),
+      response(409, { error: 'Version conflict', currentVersion: 9 })
+    ]);
+    await p.loadDiagram('d1');
+    await p.listDiagrams();
+    expect(await p.approveProposal('d1', 'p1', { applied: 1, document: DOC })).toMatchObject({ ok: false });
+    expect(calls[2].headers['if-match']).toBe('"4"');
+    // Refused: one request, no retry against the newer version, nothing remembered.
+    expect(calls).toHaveLength(3);
+    expect(p.knownVersion('d1')).toBe(4);
+  });
+
+  it('changed elsewhere (409): the reason comes back and nothing is remembered', async () => {
+    const p = serverProvider();
+    script([
+      response(200, { title: 'Net', lastModified: 't0' }),
+      response(409, { error: 'Diagram was changed since it was loaded', reason: 'conflict' })
+    ]);
+    await p.loadDiagram('d1');
+    expect(await p.approveProposal('d1', 'p1', { applied: 1, document: DOC }))
+      .toEqual({ ok: false, reason: 'conflict', message: 'Diagram was changed since it was loaded' });
+    expect(p.serverStamp('d1')).toBe('tt0');
+  });
+
+  it('the network fails: an error, not an exception', async () => {
+    const p = serverProvider();
+    script([]);
+    expect(await p.approveProposal('d1', 'p1', { applied: 1, document: DOC })).toEqual({ ok: false, reason: 'error', message: 'Network error' });
+  });
 });
 
 it("reads and sets what this person's agent may do; Read only when unknown or unreachable", async () => {

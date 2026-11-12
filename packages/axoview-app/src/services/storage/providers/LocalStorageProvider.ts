@@ -966,22 +966,53 @@ export class LocalStorageProvider implements StorageProvider {
     return Array.isArray(body.proposals) ? body.proposals : [];
   }
 
-  async resolveProposal(
+  /**
+   * Approve = save (ADR 0059 addendum 2026-11-12). Unlike an ordinary save,
+   * which replaces whatever is stored (latest save wins), this one names the
+   * state the document was built on, the content this tab holds, and is
+   * refused if the diagram is no longer in it: its version where the backend
+   * versions diagrams (If-Match), else its lastModified.
+   */
+  async approveProposal(
     id: string,
     proposalId: string,
-    decision: 'approve' | 'reject',
-    applied?: number
+    change: { applied: number; document: unknown }
   ): Promise<ProposalDecision> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    const version = this.contentVersions.get(id);
+    const modified = this.serverModified.get(id);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (version !== undefined) headers['If-Match'] = `"${version}"`;
+    try {
+      const response = await apiFetch(
+        `${this.baseUrl}/api/diagrams/${id}/proposals/${encodeURIComponent(proposalId)}/approve`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            applied: change.applied,
+            document: leanIfModel(change.document),
+            ...(version === undefined && modified ? { baseModified: modified } : {})
+          }),
+          signal: timeoutSignal(15000)
+        }
+      );
+      if (!response.ok) return sharingFailure(response);
+      // The document is stored: this tab now holds that state.
+      this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async rejectProposal(id: string, proposalId: string): Promise<ProposalDecision> {
     if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
     try {
       const response = await apiFetch(
-        `${this.baseUrl}/api/diagrams/${id}/proposals/${encodeURIComponent(proposalId)}/${decision}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(decision === 'approve' && applied !== undefined ? { applied } : {}),
-          signal: timeoutSignal(15000)
-        }
+        `${this.baseUrl}/api/diagrams/${id}/proposals/${encodeURIComponent(proposalId)}/reject`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: timeoutSignal(15000) }
       );
       return response.ok ? { ok: true } : sharingFailure(response);
     } catch {

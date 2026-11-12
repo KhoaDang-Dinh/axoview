@@ -188,8 +188,16 @@ export interface StorageProvider {
   setAgentLevel?(level: AgentLevel): Promise<boolean>;
   // Proposals ("Change needs approval"), for the owner and Full admins.
   listProposals?(id: string): Promise<Proposal[]>;
-  /** Records the decision; `applied`: how many of its steps were made (approve). */
-  resolveProposal?(id: string, proposalId: string, decision: 'approve' | 'reject', applied?: number): Promise<ProposalDecision>;
+  /**
+   * Approves by saving: `document` is the diagram with the proposal's steps
+   * made (`applied` of them), built on the state this tab last loaded or
+   * saved. The server stores it only if the diagram is still in that state
+   * and records the approval only once it is stored; `reason: 'conflict'`
+   * means the diagram changed elsewhere and nothing was stored.
+   */
+  approveProposal?(id: string, proposalId: string, change: { applied: number; document: unknown }): Promise<ProposalDecision>;
+  /** Records that the person turned the proposal down; nothing changes. */
+  rejectProposal?(id: string, proposalId: string): Promise<ProposalDecision>;
 
   // Reserved for P3 — no-op stubs for now
   subscribe?(diagramId: string, callback: () => void): () => void;
