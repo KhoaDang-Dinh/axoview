@@ -35,6 +35,7 @@ import { createOAuthStore } from './src/oauth/store.js';
 import { createClientResolver } from './src/oauth/clientMetadata.js';
 import { createOAuthRouter, ISSUER_PATH, MCP_PATH } from './src/oauth/router.js';
 import { createWorkspaceMcpRouter } from './src/ai/workspaceMcp.js';
+import { createWorkspaceReader } from './src/ai/workspaceReader.js';
 import { createCognitoDirectory } from './src/cognitoDirectory.js';
 
 dotenv.config();
@@ -58,7 +59,10 @@ const ENABLE_GIT_BACKUP = process.env.ENABLE_GIT_BACKUP === 'true';
 // Express env exposed to route handlers (matches Worker `ctx.env`).
 // Phase 2 AI chat (src/ai/chat.js). Built once at startup; an invalid AI
 // setting only disables /api/ai. Its readiness is published in /api/config.
-const aiChatRouter = createAiChatRouter();
+// The agent loop reads the person's diagrams through workspaceReader, built
+// below once storage and sharing exist (read per message, never at startup).
+let chatWorkspaceReader = null;
+const aiChatRouter = createAiChatRouter({ workspaceReader: () => chatWorkspaceReader });
 
 const routeEnv = {
   STORAGE_ENABLED,
@@ -587,20 +591,25 @@ app.use(createOAuthRouter({
   resolveClient: oauthStore ? createClientResolver({ registeredClient: oauthStore.registeredClient }) : async () => null,
   publicBaseUrl: process.env.PUBLIC_BASE_URL || ''
 }));
+/** A diagram from a workspace, or null when it is not there. */
+async function loadDiagramFrom(workspace, id) {
+  try {
+    return (await routes.getDiagram(workspace, { params: { id } })).body;
+  } catch (err) {
+    if (err?.status === 404) return null;
+    throw err;
+  }
+}
+if (STORAGE_ENABLED) {
+  chatWorkspaceReader = createWorkspaceReader({ sharing, adapterFor: workspaceAdapter, loadDiagram: loadDiagramFrom });
+}
 app.use(MCP_PATH, createWorkspaceMcpRouter({
   enabled: agentsEnabled,
   store: oauthStore,
   sharing,
   adapterFor: workspaceAdapter,
   notify: (sub, change) => notify([sub], change),
-  loadDiagram: async (workspace, id) => {
-    try {
-      return (await routes.getDiagram(workspace, { params: { id } })).body;
-    } catch (err) {
-      if (err?.status === 404) return null;
-      throw err;
-    }
-  },
+  loadDiagram: loadDiagramFrom,
   publicBaseUrl: process.env.PUBLIC_BASE_URL || ''
 }));
 app.use('/api/mcp', createMcpRouter());

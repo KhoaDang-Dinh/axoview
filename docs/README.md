@@ -131,6 +131,8 @@ Deep snapshots cut on a date and left immutable. Read for the comprehensive narr
 | [0057](adr/0057-diagram-sharing-and-permissions.md) | Diagram sharing and permissions (membership list, owner/editor/viewer, agents capped at their person's role; the email field, Read only / Full admin, and agents on their person's account with "Changes need my approval" shipped 2026-11-10) — Accepted |
 | [0058](adr/0058-multiplayer-presence-ui.md) | Multiplayer presence UI (participants bar, follow mode, remote cursors and selections, live status line) — Proposed |
 | [0059](adr/0059-agent-sign-in-and-workspace-mcp.md) | Agent sign-in and the workspace MCP server (Axoview as OAuth server: CIMD/DCR clients, PKCE, resource-bound tokens, a grant per person and client; list/read/propose tools; proposals hold operations the person approves in the app) — Accepted |
+| [0060](adr/0060-assistant-agent-loop.md) | The assistant's agent loop (Strands): Nova may search the manual, read the person's diagrams and suggest changes through tools shared with the workspace MCP server; off unless `AI_NOVA_AGENT_ENABLED` — Proposed |
+| [0061](adr/0061-assistant-model-routing.md) | Model routing for the assistant (our own rules pick the configured Nova model or Nova Pro per message; a failing strong model falls back; off unless `AI_MODEL_ROUTING_ENABLED`) — Proposed |
 
 ---
 

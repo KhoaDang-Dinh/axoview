@@ -4,11 +4,14 @@
  */
 const KNOWN_STAGES = new Set(['input', 'retrieval', 'model', 'output', 'quota', 'storage', 'completed']);
 const KNOWN_RESULTS = new Set(['ok', 'blocked', 'rejected', 'error']);
+// Model routing (modelRouting.js): which model answered, and why.
+const KNOWN_MODELS = new Set(['fast', 'strong']);
+const KNOWN_ROUTES = new Set(['page', 'tools', 'long', 'plain', 'fallback']);
 
 export function emitAiTelemetry({
   requestId, stage, result,
   latencyMs = 0, inputTokens = 0, outputTokens = 0,
-  retrievedDocuments = 0
+  retrievedDocuments = 0, model, route
 }, write = (message) => console.log(message)) {
   const record = {
     event: 'ai.request',
@@ -19,6 +22,8 @@ export function emitAiTelemetry({
     inputTokens: Math.max(0, Math.round(Number(inputTokens) || 0)),
     outputTokens: Math.max(0, Math.round(Number(outputTokens) || 0)),
     retrievedDocuments: Math.min(10, Math.max(0, Math.round(Number(retrievedDocuments) || 0))),
+    // Only when model routing is on: the tier that answered and the rule that chose it.
+    ...(KNOWN_MODELS.has(model) && KNOWN_ROUTES.has(route) ? { model, route } : {}),
     ts: new Date().toISOString()
   };
   write(JSON.stringify(record));
@@ -37,7 +42,7 @@ const AGENT_OUTCOMES = new Set(['suggested', 'none', 'malformed']);
  * proposed some, all failed validation), none (an answer without edits).
  */
 export function emitAgentTelemetry({
-  requestId, suggestions = 0, dropped = 0, sources = 0, latencyMs = 0
+  requestId, suggestions = 0, dropped = 0, sources = 0, latencyMs = 0, toolCalls = 0
 }, write = (message) => console.log(message)) {
   const count = (value, max) => Math.min(max, Math.max(0, Math.round(Number(value) || 0)));
   const made = count(suggestions, 8);
@@ -50,6 +55,8 @@ export function emitAgentTelemetry({
     suggestions: made,
     dropped: failed,
     sources: count(sources, 10),
+    // Tool calls the agent loop made (novaAgent.js); 0 for a single model call.
+    toolCalls: count(toolCalls, 20),
     latencyMs: count(latencyMs, 600000),
     ts: new Date().toISOString()
   };

@@ -23,7 +23,7 @@
 import { Router } from 'express';
 import { AuthChallenge, createMcpEndpoint, RpcError } from './mcpProtocol.js';
 import { emitMcpTelemetry } from './observability.js';
-import { describeDiagram } from './describeDiagram.js';
+import { createWorkspaceReader } from './workspaceReader.js';
 import { validateSuggestion } from './suggestions.js';
 import { authenticateAgent, baseUrlOf, metadataFor, SCOPES } from '../oauth/router.js';
 import { SharingError } from '../sharing.js';
@@ -152,16 +152,7 @@ export function createWorkspaceMcpRouter({
     return `Bearer resource_metadata="${resourceMetadataUrl}"${extra}`;
   };
 
-  /** What this person may do on diagram `id`: { owner, access } or null. */
-  async function accessTo(sub, id) {
-    const own = await loadDiagram(adapterFor(sub), id);
-    if (own && !own.deletedAt) return { owner: sub, access: 'owner', document: own };
-    const shared = await sharing.accessTo(sub, id);
-    if (!shared) return null;
-    const document = await loadDiagram(adapterFor(shared.owner), id);
-    if (!document || document.deletedAt) return null;
-    return { owner: shared.owner, access: shared.role, document };
-  }
+  const reader = createWorkspaceReader({ sharing, adapterFor, loadDiagram });
 
   async function callTool(params, auth, req) {
     const name = params?.name;
@@ -174,14 +165,8 @@ export function createWorkspaceMcpRouter({
     const mayPropose = auth.scopes.includes(SCOPES.propose);
 
     if (name === 'list_diagrams') {
-      const own = (await adapterFor(auth.sub).listDiagramMeta())
-        .filter((row) => !row.deletedAt)
-        .map((row) => ({ id: row.id, name: row.name, lastModified: row.lastModified, access: 'owner', canPropose: mayPropose }));
-      const shared = (await sharing.sharedWithMe(auth.sub)).map((row) => ({
-        id: row.id, name: row.name, lastModified: row.lastModified, access: row.shared.role,
-        ownerEmail: row.shared.ownerEmail, canPropose: mayPropose && row.shared.role === 'admin'
-      }));
-      const diagrams = [...own, ...shared];
+      const diagrams = (await reader.list(auth.sub))
+        .map((d) => ({ ...d, canPropose: mayPropose && d.access !== 'viewer' }));
       const text = diagrams.length
         ? diagrams.map((d) => `- ${d.name} [${d.id}] (${d.access}${d.canPropose ? ', can propose' : ''})`).join('\n')
         : 'No diagrams yet.';
@@ -194,12 +179,12 @@ export function createWorkspaceMcpRouter({
     }
     const id = typeof args.id === 'string' ? args.id : '';
     if (!ID_RE.test(id)) return toolError('id must be a diagram id from list_diagrams');
-    const found = await accessTo(auth.sub, id);
+    const found = await reader.open(auth.sub, id);
     if (!found) return toolError(`No diagram ${id} that this user can open.`);
 
     if (name === 'read_diagram') {
       const page = typeof args.page === 'string' ? args.page : undefined;
-      const description = describeDiagram(found.document, { viewId: page });
+      const description = reader.describe(found, page);
       const canPropose = mayPropose && found.access !== 'viewer';
       const structured = { id, access: found.access, canPropose, description };
       return ok(`${UNTRUSTED}\n${JSON.stringify(structured)}`, structured);
