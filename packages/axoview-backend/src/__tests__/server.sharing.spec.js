@@ -258,11 +258,20 @@ test('an agent\'s proposal waits for its own person, not the owner; Read only en
   const bobHeard = (await bobHears.stop()).map((e) => [e.kind, e.action, e.id]);
   expect(bobHeard).toContainEqual(['proposal', 'resolve', id]);
   expect(bobHeard).toContainEqual(['diagram', 'save', id]);
-  const aliceHeard = (await aliceHears.stop()).map((e) => [e.kind, e.action, e.id]);
+  const aliceEvents = await aliceHears.stop();
+  const aliceHeard = aliceEvents.map((e) => [e.kind, e.action, e.id]);
   expect(aliceHeard).toContainEqual(['diagram', 'save', id]);
+  // Live notice: the save says whose change it carried (an agent's, not bob's own edit).
+  expect(aliceEvents.find((e) => e.kind === 'diagram' && e.action === 'save'))
+    .toMatchObject({ agent: 'Claude Code', diagramName: expect.any(String) });
+  expect(bobHears.events.find((e) => e.kind === 'proposal'))
+    .toMatchObject({ action: 'resolve', id, proposal: first.id, status: 'approved' });
   // The decision itself is between bob and his agent.
   expect(aliceHeard.filter(([kind]) => kind === 'proposal')).toEqual([]);
+  const rejectHears = await bob.listen(500);
   expect((await bob.post(`/api/diagrams/${id}/proposals/${second.id}/reject`, {})).body.proposal.status).toBe('rejected');
+  expect((await rejectHears.stop()).find((e) => e.kind === 'proposal'))
+    .toMatchObject({ action: 'resolve', id, proposal: second.id, status: 'rejected' });
   expect((await bob.get(`/api/diagrams/${id}/proposals`)).body.proposals).toEqual([]);
 
   // Read only on the diagram: bob (and so his agent) may no longer change it.
@@ -307,4 +316,28 @@ test('an unshared diagram gets no X-Axoview-Shared header', async () => {
   const { base } = await startServer();
   const { alice, id } = await aliceWithADiagram(base);
   expect((await alice.get(`/api/diagrams/${id}`)).headers.get('x-axoview-shared')).toBeNull();
+}, T);
+
+test('a save that carries an AI agent\'s change says so to the other devices; a plain save does not', async () => {
+  const { base } = await startServer();
+  const { alice, id } = await aliceWithADiagram(base);
+  const loaded = (await alice.get(`/api/diagrams/${id}`)).body;
+  const save = async (headers, title) => {
+    const hears = await alice.listen(500);
+    const res = await fetch(`${base}/api/diagrams/${id}`, {
+      method: 'PUT',
+      headers: { authorization: 'Bearer test-user:alice-1', 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ ...loaded, title, items: [{ id: `n${title.length}`, name: title }] })
+    });
+    expect(res.status).toBe(200);
+    return (await hears.stop()).find((e) => e.kind === 'diagram' && e.action === 'save');
+  };
+  expect(await save({ 'X-Axoview-Agent': 'Nova' }, 'With Nova')).toMatchObject({ agent: 'Nova', diagramName: 'Network' });
+  const plain = await save({}, 'By hand');
+  expect(plain).not.toHaveProperty('agent');
+  expect(plain).not.toHaveProperty('diagramName');
+  // Not a name: ignored, the save itself goes through.
+  for (const junk of ['<script>', 'x'.repeat(61), ' ', '../etc']) {
+    expect(await save({ 'X-Axoview-Agent': junk }, `Junk ${junk.length}`)).not.toHaveProperty('agent');
+  }
 }, T);

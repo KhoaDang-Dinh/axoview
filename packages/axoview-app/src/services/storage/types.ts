@@ -177,6 +177,12 @@ export interface StorageProvider {
   sharedState?(id: string): SharedState | undefined;
   /** This account's role on `id`, from its last load or save (X-Axoview-Role). */
   sharedRole?(id: string): DiagramRole | undefined;
+  /**
+   * The next save of `id` carries an AI agent's approved change (the in-app
+   * assistant's): it says so (X-Axoview-Agent), so the other devices and
+   * people get a notice naming the agent.
+   */
+  noteAgentChange?(id: string, agent: string): void;
   listMembers?(id: string): Promise<DiagramMember[]>;
   addMember?(id: string, email: string, role?: MemberRole): Promise<AddMemberResult>;
   setMemberRole?(id: string, sub: string, role: MemberRole): Promise<AddMemberResult>;

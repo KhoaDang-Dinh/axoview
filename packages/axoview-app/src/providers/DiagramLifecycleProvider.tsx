@@ -34,6 +34,7 @@ import { useAuthStore } from '../stores/authStore';
 import { fetchRuntimeConfig } from '../hooks/useRuntimeConfig';
 import { readDriveDisplayFile } from '../services/drive/drivePublicRead';
 import { useAutoSave, SaveStatus, type AutoSaveBatching } from '../hooks/useAutoSave';
+import type { SyncChange } from '../services/sync/realtimeSync';
 import { useRealtimeSync } from '../hooks/useRealtimeSync';
 import { DiagramManager } from '../components/DiagramManager';
 import { SaveDialog } from '../components/SaveDialog';
@@ -257,7 +258,11 @@ const DiagramLifecycleContext = createContext<DiagramLifecycleContextValue>(
  * reaches the server at most this long after it was made (and at once on
  * every flush point). See stores/draftStore.ts.
  */
+// The longest an upload could wait. Unused while every checkpoint uploads at
+// once (uploadNow below); kept as the hook's required bound.
 const UPLOAD_BATCH_MS = 30_000;
+/** The in-app assistant, as live notices name it to other devices and people. */
+const ASSISTANT_NAME = 'Nova';
 /** How many earlier checkpoints a tab message names (see tabChannel.ts). */
 const LINEAGE_LIMIT = 32;
 
@@ -488,11 +493,13 @@ export function DiagramLifecycleProvider({
     if (!batchingEnabled) return null;
     return {
       maxDelayMs: UPLOAD_BATCH_MS,
-      // At once while another browser has the workspace open, or when other
-      // people have this diagram (shared either way, ADR 0057): they should
-      // see the edit within a second or two, not after the batch window.
-      uploadNow: (id) => othersPresent() ||
-        (storageRef.current as { sharedState?: (id: string) => string | undefined } | null)?.sharedState?.(id) !== undefined,
+      // Every checkpoint uploads at once (owner decision 2026-11-13, ADR 0054
+      // addendum): every change reaches the person's other devices and the
+      // people the diagram is shared with live, a second or two after a pause,
+      // whether or not anyone else is watching right now. The checkpoint in
+      // the browser stays: it is what survives a crash or a failed upload,
+      // and what other tabs of this browser show at once.
+      uploadNow: () => true,
       checkpoint: async (id, model) => {
         const userKey = userKeyRef.current;
         const baseVersion = knownVersionOfRef.current(id);
@@ -658,7 +665,16 @@ export function DiagramLifecycleProvider({
       ? { model: currentModelRef.current as unknown as Model, viewId: axoviewRef.current?.getActiveViewId() }
       : null));
     setPageAccess(
-      (operations, viewId) => axoviewRef.current?.applyAgentOperations(operations, { viewId }) ?? [],
+      (operations, viewId) => {
+        const outcomes = axoviewRef.current?.applyAgentOperations(operations, { viewId }) ?? [];
+        // Approved in the chat: the save that carries it names the assistant,
+        // so the other devices and people hear whose change it was.
+        const id = currentDiagramRef.current?.id;
+        if (id && outcomes.some((step) => step.status === 'ready')) {
+          storageRef.current?.noteAgentChange?.(id, ASSISTANT_NAME);
+        }
+        return outcomes;
+      },
       () => {
         const id = currentDiagramRef.current?.id;
         if (!id || !currentModelRef.current || isReadonlyUrlRef.current) return false;
@@ -2111,6 +2127,15 @@ export function DiagramLifecycleProvider({
     if (currentDiagramRef.current) await autoSaveSaveNowRef.current();
   }), []);
 
+  // Defined further down; the live notices' buttons call them.
+  const openDiagramByIdRef = useRef<(id: string, name: string) => Promise<void>>(async () => undefined);
+  /** Review on a "proposes changes" notice: open that diagram and its waiting proposals. */
+  const reviewProposalsRef = useRef((change: SyncChange) => {
+    const id = change.id;
+    if (!id) return;
+    useAssistantPageStore.getState().setReviewProposalsOf(id);
+    if (currentDiagramRef.current?.id !== id) void openDiagramByIdRef.current(id, change.diagramName ?? '');
+  });
   useRealtimeSync({
     enabled: serverStorageAvailable && storage?.id === 'local' && !isReadonlyUrl,
     baseUrl: apiBaseUrl(),
@@ -2131,6 +2156,40 @@ export function DiagramLifecycleProvider({
       return true;
     },
     refreshTree: () => setFileTreeRefreshToken((n) => n + 1),
+    // Live notices of AI agents' work (ADR 0059 addendum 2026-11-13).
+    onAgentProposal: (change) => {
+      const steps = change.steps ?? 1;
+      notificationStore.push({
+        severity: 'info',
+        message: t('agents.proposed', {
+          agent: change.agent,
+          count: steps,
+          diagram: change.diagramName ?? t('agents.aDiagram', 'a diagram'),
+          defaultValue: steps === 1
+            ? '{{agent}} proposes 1 change to “{{diagram}}”'
+            : '{{agent}} proposes {{count}} changes to “{{diagram}}”'
+        }),
+        autoDismiss: 10_000,
+        action: { label: t('agents.review', 'Review'), onClick: () => reviewProposalsRef.current(change) }
+      });
+    },
+    onAgentChange: (change, open) => {
+      const id = change.id!;
+      notificationStore.push({
+        severity: 'info',
+        message: open
+          ? t('agents.changedOpen', { agent: change.agent, defaultValue: '{{agent}}’s approved changes were added to this diagram' })
+          : t('agents.changedOther', {
+            agent: change.agent,
+            diagram: change.diagramName ?? t('agents.aDiagram', 'a diagram'),
+            defaultValue: '{{agent}}’s approved changes were added to “{{diagram}}”'
+          }),
+        autoDismiss: 6_000,
+        ...(open ? {} : {
+          action: { label: t('agents.open', 'Open'), onClick: () => void openDiagramByIdRef.current(id, change.diagramName ?? '') }
+        })
+      });
+    },
     // The hook warns ("deleted in another tab or on another device") and
     // refreshes the tree.
     onOpenDeleted: notifyDiagramDeletedFromTree,
@@ -2268,6 +2327,7 @@ export function DiagramLifecycleProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.saveNow/resetStatus; whole autoSave churns on every save-status change
     [storage, storageManager, setActiveProviderId, remoteStorageActive, autoSave.saveNow, autoSave.resetStatus, handleDiagramManagerLoad, navigate]
   );
+  openDiagramByIdRef.current = openDiagramById;
 
   const handlePreviewClick = useCallback(async () => {
     if (!currentDiagram || !storage) return;

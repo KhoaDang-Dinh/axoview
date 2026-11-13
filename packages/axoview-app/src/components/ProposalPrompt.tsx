@@ -74,15 +74,17 @@ export function ProposalPrompt({
   const tRef = useRef(t);
   tRef.current = t;
 
-  const refresh = useCallback(async () => {
+  // `quiet`: the arrival was already announced, naming the agent (the live
+  // notice, DiagramLifecycleProvider), so no second pop-up for it.
+  const refresh = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}): Promise<Proposal[]> => {
     if (!mayReview || !storage.listProposals) {
       setProposals([]);
-      return;
+      return [];
     }
     const waiting = await storage.listProposals(diagramId).catch(() => [] as Proposal[]);
     const fresh = waiting.filter((p) => !announcedRef.current.has(p.id));
     for (const p of fresh) announcedRef.current.add(p.id);
-    if (fresh.length > 0) {
+    if (fresh.length > 0 && !quiet) {
       notificationStore.push({
         severity: 'info',
         message: tRef.current('proposals.arrived', {
@@ -94,6 +96,7 @@ export function ProposalPrompt({
       });
     }
     setProposals(waiting);
+    return waiting;
   }, [diagramId, mayReview, storage]);
 
   useEffect(() => {
@@ -104,11 +107,26 @@ export function ProposalPrompt({
 
   useEffect(() => {
     const onChanged = (event: Event) => {
-      if ((event as CustomEvent<{ id?: string }>).detail?.id === diagramId) void refresh();
+      const detail = (event as CustomEvent<{ id?: string; announced?: boolean }>).detail;
+      if (detail?.id === diagramId) void refresh({ quiet: detail.announced === true });
     };
     window.addEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
   }, [diagramId, refresh]);
+
+  // Review on a live "proposes changes" notice: once this diagram shows,
+  // open its waiting proposals (re-read first: the notice may be newer).
+  const reviewOf = useAssistantPageStore((state) => state.reviewProposalsOf);
+  const shownIdRef = useRef(diagramId);
+  shownIdRef.current = diagramId;
+  useEffect(() => {
+    if (reviewOf !== diagramId) return;
+    useAssistantPageStore.getState().setReviewProposalsOf(null);
+    void refresh({ quiet: true }).then((waiting) => {
+      // Still this diagram on screen (another may have opened meanwhile).
+      if (shownIdRef.current === diagramId && waiting.length > 0) setOpen(true);
+    });
+  }, [reviewOf, diagramId, refresh]);
 
   /** The proposal's steps checked against the page as it is now. */
   const planOf = useCallback((proposal: Proposal): PlanStep[] => {

@@ -122,3 +122,25 @@ in the backend routes. This ADR decides **how often** a browser uploads. It depe
   addendum; the server's `X-Axoview-Shared` header) uploads every checkpoint at once, like a
   workspace another browser has open.
 
+## Addendum 2026-11-13: every change uploads at once again (owner decision)
+
+**Decision:** decision 2 is reverted. Every checkpoint uploads at once, a second or two after the
+pause, whether or not another browser is present (`uploadNow` always true in
+`DiagramLifecycleProvider`). Every change to a diagram reaches the person's other devices, and the
+people it is shared with, live again.
+
+**Kept:**
+- the checkpoint in the browser (decision 1), what comes back after a crash or a failed upload;
+- recovery on open (5), checkpoints shared between tabs (4), sign-out wiping drafts (6);
+- the flush on hide and `pagehide`.
+
+**Status:** "Saved in this browser" now shows only while an upload is on its way.
+
+**Cost:** the upload count of decision 2's measurement returns to one per pause (the session's 11
+uploads). Each save stays cheap: one metadata read, and nothing written for an unchanged one.
+
+**Tests:**
+- `tests-agents/live-edits.spec.ts`: one device alone uploads within seconds, and two devices see
+  each other's changes by themselves.
+- `tests-docker/batched-upload.spec.ts`: rewritten for uploads at once.
+

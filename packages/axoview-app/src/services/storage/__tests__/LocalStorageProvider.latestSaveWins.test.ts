@@ -13,6 +13,7 @@ interface Call {
   method: string;
   ifMatch: string | null;
   device: string | null;
+  agent: string | null;
 }
 
 function response(status: number, body: unknown, etag?: string): Response {
@@ -33,7 +34,8 @@ function script(responses: Response[]): Call[] {
       url: String(input),
       method: (init.method || 'GET').toUpperCase(),
       ifMatch: headers.get('If-Match'),
-      device: headers.get('X-Axoview-Device')
+      device: headers.get('X-Axoview-Device'),
+      agent: headers.get('X-Axoview-Agent')
     });
     return responses[index++] ?? response(500, { error: 'no more mocks' });
   };
@@ -132,6 +134,27 @@ it('behind CloudFront: a weak ETag (W/"7") is a version like "7"', async () => {
   expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['GET -', 'PUT "6"', 'PUT -', 'GET -', 'PUT "9"']);
   expect(p.knownVersion('d4')).toBe(7);
   expect(p.knownVersion('d5')).toBe(10);
+});
+
+it('the save after an assistant change is approved names the assistant, once, retries included', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { ok: true }, '"2"'),
+    response(409, { currentVersion: 5 }),
+    response(200, { ok: true }, '"6"'),
+    response(200, { ok: true }, '"7"'),
+    response(500, {}),
+    response(200, { ok: true }, '"8"')
+  ]);
+  await p.saveDiagram('d6', { title: 'mine' });
+  p.noteAgentChange('d6', 'Nova');
+  await p.saveDiagram('d6', { title: 'with Nova' });
+  await p.saveDiagram('d6', { title: 'mine again' });
+  // A failed save keeps the note for the save that gets through.
+  p.noteAgentChange('d6', 'Nova');
+  await expect(p.saveDiagram('d6', { title: 'fails' })).rejects.toThrow('500');
+  await p.saveDiagram('d6', { title: 'gets through' });
+  expect(calls.map((c) => c.agent)).toEqual([null, 'Nova', 'Nova', null, 'Nova', 'Nova']);
 });
 
 it('retries once only: a second conflict is an error the autosave reports', async () => {

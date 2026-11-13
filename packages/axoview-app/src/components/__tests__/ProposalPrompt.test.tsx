@@ -221,3 +221,30 @@ it('after the last one is decided, a later proposal shows the chip, not an open 
   expect(chip()?.textContent).toBe('1 to approve');
   expect(document.querySelector('[data-axoview-id="proposal"]')).toBeNull();
 });
+
+it('an arrival already announced live (naming the agent) does not pop up a second time', async () => {
+  const s = storage([[], [proposal('p1')]]);
+  await show('owner', s);
+  const before = pushes.length;
+  await act(async () => { window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, { detail: { id: 'd1', announced: true } })); });
+  expect(chip()?.textContent).toBe('1 to approve');
+  expect(pushes.length).toBe(before);
+});
+
+it('Review on a live notice opens this diagram\'s waiting proposals once', async () => {
+  const s = storage([[proposal('p1')]]);
+  await show('owner', s);
+  expect(document.querySelector('[data-axoview-id="proposal"]')).toBeNull();
+  await act(async () => { useAssistantPageStore.getState().setReviewProposalsOf('d1'); });
+  expect(document.querySelector('[data-axoview-id="proposal"]')).not.toBeNull();
+  expect(useAssistantPageStore.getState().reviewProposalsOf).toBeNull();
+});
+
+it('Review for another diagram leaves this one alone', async () => {
+  const s = storage([[proposal('p1')]]);
+  await show('owner', s);
+  await act(async () => { useAssistantPageStore.getState().setReviewProposalsOf('d2'); });
+  expect(document.querySelector('[data-axoview-id="proposal"]')).toBeNull();
+  expect(useAssistantPageStore.getState().reviewProposalsOf).toBe('d2');
+  useAssistantPageStore.getState().setReviewProposalsOf(null);
+});

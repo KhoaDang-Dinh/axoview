@@ -186,6 +186,10 @@ export class StorageManager implements StorageProvider {
     return this.active?.sharedRole?.(id);
   }
 
+  noteAgentChange(id: string, agent: string): void {
+    this.active?.noteAgentChange?.(id, agent);
+  }
+
   async addMember(id: string, email: string, role?: MemberRole): Promise<AddMemberResult> {
     const provider = this.getActiveProvider();
     if (!provider.addMember) return { ok: false, reason: 'error', message: 'Sharing is not available here' };

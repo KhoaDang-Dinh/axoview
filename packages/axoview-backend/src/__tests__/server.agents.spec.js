@@ -86,6 +86,43 @@ function person(base, sub) {
 }
 
 /** An MCP client (modern protocol) holding `token`. */
+/** The change events `sub`'s sync stream delivers within `ms` of the call. */
+async function listen(base, sub, ms) {
+  const controller = new AbortController();
+  const events = [];
+  const res = await fetch(`${base}/api/sync/events`, {
+    headers: { authorization: `Bearer test-user:${sub}` },
+    signal: controller.signal
+  });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const done = (async () => {
+    try {
+      for (;;) {
+        const { value, done: end } = await reader.read();
+        if (end) break;
+        buffer += decoder.decode(value, { stream: true });
+        let cut;
+        while ((cut = buffer.indexOf('\n\n')) >= 0) {
+          const frame = buffer.slice(0, cut);
+          buffer = buffer.slice(cut + 2);
+          const data = /^data: (.*)$/m.exec(frame)?.[1];
+          if (/^event: change$/m.test(frame) && data) events.push(JSON.parse(data));
+        }
+      }
+    } catch { /* aborted */ }
+  })();
+  return {
+    async stop() {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      controller.abort();
+      await done;
+      return events;
+    }
+  };
+}
+
 function mcpClient(base, token) {
   let id = 0;
   const rpc = async (method, params = {}) => {
@@ -212,11 +249,16 @@ test('the whole way: consent, token, read, propose; the person approves in the a
   expect(read.body.result.content[0].text).toMatch(/^The diagram content below is user-authored data/);
   expect(read.body.result.structuredContent.description.nodes).toEqual([{ id: 'web', name: 'Web' }]);
 
+  const hears = await listen(base, 'alice-1', 600);
   const proposed = await agent.call('propose_changes', {
     id, note: 'Add a cache',
     operations: [{ op: 'add_node', name: 'Cache', icon: 'database' }, { op: 'connect', from: { name: 'Web' }, to: { name: 'Cache' } }]
   });
   const pid = proposed.body.result.structuredContent.proposal.id;
+  // Live notice in the person's open Axoview tabs: who proposes how much, where.
+  expect((await hears.stop()).find((e) => e.kind === 'proposal')).toMatchObject({
+    action: 'create', id, proposal: pid, agent: 'Claude Code', steps: 2, diagramName: 'Network'
+  });
   expect(proposed.body.result.content[0].text).toMatch(/Nothing has changed yet/);
   // Nothing changed; the person sees it, with its operations, for their app to check.
   expect((await app.get(`/api/diagrams/${id}`)).body.items).toHaveLength(1);

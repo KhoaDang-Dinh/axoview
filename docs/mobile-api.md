@@ -245,6 +245,9 @@ is stored and the proposal keeps waiting. A decision is final: the other one aft
 with `reason: "already-decided"`; the same one again returns the recorded proposal.
 
 A new one sends `kind: "proposal"` `create`, and deciding one `resolve`, to that person's sync stream.
+`create` also names the agent (`agent`), the number of steps (`steps`), the diagram (`diagramName`)
+and the proposal (`proposal`); `resolve` names the proposal and its `status` (`approved` or
+`rejected`). Show a notice for `create`: "Claude Code proposes 2 changes to “Network”".
 
 ### The diagram document
 
@@ -304,6 +307,18 @@ data: {"seq":42,"kind":"diagram","action":"save","id":"diagram_…","version":7,
 | `folder` *, `tree` | refresh the folder tree |
 | `resync` | changes were missed: refresh everything shown |
 | `presence` `join` / `renew` / `here` / `leave` | another app has the workspace open (`origin`, `browser`); nothing to refresh |
+| `proposal` `create` / `resolve` | an AI agent proposed changes, or they were decided: refresh the waiting proposals; for `create`, show a notice naming `agent` |
+
+A `diagram` `save` that carries an AI agent's approved change also has `agent` (whose change it
+was) and `diagramName`. Do what the table says, and say whose it was: "Claude Code's approved
+changes were added to this diagram". When your app saves a change it applied for an AI agent (the
+person approved it there), send the agent's name with that save, so the other devices can say so:
+
+```http
+X-Axoview-Agent: Nova
+```
+
+Letters, digits, spaces and `. _ ( ) ' -`, at most 60 characters; anything else is ignored.
 
 - Every change arrives, in order. A stream that is a few changes behind (several
   saves inside one poll, a reconnect with `Last-Event-ID`) is sent each of them

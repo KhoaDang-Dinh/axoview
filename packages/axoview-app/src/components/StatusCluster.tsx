@@ -63,9 +63,9 @@ export function StatusCluster() {
         );
       }
       if (saveStatus === 'local') {
-        // Saved as a draft in this browser; the batched upload follows within
-        // seconds, or at once when the tab is hidden or someone else opens the
-        // workspace (stores/draftStore.ts).
+        // Saved as a draft in this browser while its upload is on the way
+        // (every change uploads at once: ADR 0054 addendum 2026-11-13); the
+        // draft is what comes back if that upload fails (stores/draftStore.ts).
         return (
           <Typography
             variant="caption"
