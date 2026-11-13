@@ -146,7 +146,9 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
         // `announced` tells the prompt not to pop up a second time for it.
         const announced = change.action === 'create' && typeof change.agent === 'string' && !!change.id &&
           !!optionsRef.current.onAgentProposal;
-        window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, { detail: { id: change.id, announced } }));
+        window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, {
+          detail: { id: change.id, announced, action: change.action }
+        }));
         if (announced) optionsRef.current.onAgentProposal!(change);
         return;
       }

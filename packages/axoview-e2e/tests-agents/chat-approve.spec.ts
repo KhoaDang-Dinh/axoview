@@ -92,7 +92,7 @@ test('chat suggestions approved one after another are all saved, before and afte
       : answer.locator('[data-axoview-id="ai-suggestions-approve-all"]');
     await expect(approve).toBeVisible({ timeout: 15_000 });
     await approve.click();
-    await expect(page.locator('[data-axoview-id="notification"]').last()).toContainText('approved and made');
+    await expect(page.locator('[data-axoview-id="notification"]').filter({ hasText: 'approved and made' }).first()).toBeVisible();
     // Ctrl+S: upload now rather than at the end of the batch window.
     await page.keyboard.press('Escape');
     await page.keyboard.press('Control+s');

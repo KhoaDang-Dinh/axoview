@@ -154,7 +154,11 @@ describe('live notices of AI agents\' work', () => {
     window.removeEventListener('axoview-proposals-changed', listener);
     expect(onAgentProposal).toHaveBeenCalledTimes(1);
     expect(onAgentProposal).toHaveBeenCalledWith(expect.objectContaining({ agent: 'Claude Code', steps: 3, id: 'd9' }));
-    expect(heard).toEqual([{ id: 'd9', announced: true }, { id: 'd9', announced: false }, { id: 'd9', announced: false }]);
+    expect(heard).toEqual([
+      { id: 'd9', announced: true, action: 'create' },
+      { id: 'd9', announced: false, action: 'resolve' },
+      { id: 'd9', announced: false, action: 'create' }
+    ]);
   });
 
   it('an agent\'s change saved elsewhere: a notice, with the diagram open (after its reload) or not', async () => {

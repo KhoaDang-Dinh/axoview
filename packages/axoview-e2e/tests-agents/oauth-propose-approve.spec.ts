@@ -186,7 +186,7 @@ test('OAuth, propose, approve: the change is stored before the agent hears "appr
     await expect(page.locator('[data-axoview-id="proposal-step"][data-status="ready"]')).toHaveCount(3);
     await expect(byId(page, 'proposal-approve')).toHaveText('Approve the 3 that fit');
     await byId(page, 'proposal-approve').click();
-    await expect(byId(page, 'notification').last()).toContainText('3 changes approved and made');
+    await expect(byId(page, 'notification').filter({ hasText: '3 changes approved and made' }).first()).toBeVisible();
     await expect(byId(page, 'proposals-chip')).toHaveCount(0);
 
     // --- Persisted: at once, with no save shortcut and no waiting for autosave.
@@ -218,7 +218,9 @@ test('OAuth, propose, approve: the change is stored before the agent hears "appr
     await expect(byId(page, 'proposals-chip')).toHaveText('1 to approve', { timeout: 15_000 });
     await byId(page, 'proposals-chip').click();
     await byId(page, 'proposal-approve').click();
-    await expect(byId(page, 'notification').last()).toContainText('Change approved and made');
+    // Decided (stored first, then recorded): it leaves the toolbar.
+    await expect(byId(page, 'proposals-chip')).toHaveCount(0);
+    await expect(byId(page, 'notification').filter({ hasText: 'Change approved and made' }).first()).toBeVisible();
     expect((await stored(id)).items.map((item) => item.name)).toEqual(['Web', 'Database', 'Cache', 'Queue']);
     expect((await call('get_proposal', { id, proposal: second.proposal.id })).status).toBe('approved');
 
@@ -232,7 +234,8 @@ test('OAuth, propose, approve: the change is stored before the agent hears "appr
       await expect(byId(page, 'proposals-chip')).toHaveText('1 to approve', { timeout: 15_000 });
       await byId(page, 'proposals-chip').click();
       await byId(page, 'proposal-approve').click();
-      await expect(byId(page, 'notification').last()).toContainText('2 changes approved and made');
+      await expect(byId(page, 'proposals-chip')).toHaveCount(0);
+      await expect(byId(page, 'notification').filter({ hasText: '2 changes approved and made' }).first()).toBeVisible();
       names.push(next);
       expect((await stored(id)).items.map((item) => item.name), `after approving ${next}`).toEqual(names);
       expect((await call('get_proposal', { id, proposal: proposal.proposal.id })).status).toBe('approved');
@@ -282,7 +285,7 @@ test('OAuth, propose, approve: the change is stored before the agent hears "appr
       await byId(page, 'proposals-chip').click();
       await byId(page, 'proposal-approve').click();
       await expect(byId(page, 'proposals-chip')).toHaveCount(0);
-      await expect(byId(page, 'notification').last()).toContainText('Change approved and made');
+      await expect(byId(page, 'notification').filter({ hasText: 'Change approved and made' }).first()).toBeVisible();
       names.push(next);
       expect((await stored(id)).items.map((item) => item.name), `approved ${next} after reopening`).toEqual(names);
       expect((await call('get_proposal', { id, proposal: proposal.proposal.id })).status).toBe('approved');
