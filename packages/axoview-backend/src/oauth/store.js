@@ -8,7 +8,8 @@
  *   oauth/codes/<sha256(code)>         an authorization code (2 min, used once)
  *   oauth/tokens/<sha256(token)>       an access token (1 h) or refresh token (30 days)
  *   oauth/grants/<sub>/<grantId>       what a person let one client do
- *   oauth/used/<sha256(credential)>    a one-time credential that was used
+ *   oauth/used/<sha256(credential)>    a one-time credential that was used (also the
+ *                                      jti of a client assertion, clientAssertion.js)
  *
  * Codes and tokens are stored only as hashes: a copy of the bucket gives no
  * usable credential. A token is valid only while its grant exists, so
@@ -143,10 +144,11 @@ export function createOAuthStore({ adapter, now = Date.now }) {
 
     // --- tokens ------------------------------------------------------------
     /** A fresh access token and refresh token for a grant. */
-    async issueTokens({ sub, clientId, grantId, scope, resource }) {
+    async issueTokens({ sub, clientId, grantId, scope, resource, tokenAuth = 'none' }) {
       const access = randomToken();
       const refresh = randomToken();
-      const base = { sub, clientId, grantId, scope, resource };
+      // tokenAuth: how the client must authenticate to refresh (router.js).
+      const base = { sub, clientId, grantId, scope, resource, tokenAuth };
       await write(`oauth/tokens/${sha256(access)}`, { ...base, kind: 'access', expires: now() + ACCESS_TTL_MS });
       await write(`oauth/tokens/${sha256(refresh)}`, { ...base, kind: 'refresh', expires: now() + REFRESH_TTL_MS });
       return { access, refresh, expiresIn: ACCESS_TTL_MS / 1000 };
@@ -166,6 +168,9 @@ export function createOAuthStore({ adapter, now = Date.now }) {
       await remove(`oauth/tokens/${sha256(token)}`);
       return true;
     },
+
+    /** Use up a client assertion's jti: true the first time, false ever after (until it expires). */
+    useAssertion: (clientId, jti, expires) => claim(`assertion:${clientId}\n${jti}`, expires),
 
     // --- grants ------------------------------------------------------------
     async saveGrant(sub, { clientId, clientName, scopes, redirectHost }) {

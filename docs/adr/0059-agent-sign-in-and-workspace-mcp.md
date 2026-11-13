@@ -200,3 +200,34 @@ Four weaknesses in what shipped, and what replaced them. Nothing here changes wh
   that serves an fs store. Several API pods need the AWS adapter, whose check is a conditional
   write.
 
+## Addendum 2026-11-13: ChatGPT signs its token requests (private_key_jwt)
+
+**Problem:** ChatGPT could not sign in. Its metadata document declares
+`token_endpoint_auth_method: "private_key_jwt"` with a `jwks_uri`, and Axoview refused every
+client that was not public: "only public clients (token_endpoint_auth_method "none") are
+supported".
+
+**Decision:** a metadata-document client may authenticate with `private_key_jwt`
+([oauth/clientAssertion.js](../../packages/axoview-backend/src/oauth/clientAssertion.js)).
+- **Which method:** a document may offer several (`token_endpoint_auth_methods_supported`, plus
+  the older singular field). The client uses one Axoview also offers. If that set includes
+  `"none"` the client may sign or not; otherwise it must sign. A client that offers neither is
+  refused, naming what it offered.
+- **Keys:** a `jwks_uri` on the client's own origin (fetched in the same SSRF fence, 32 KB,
+  cached for its max-age, refetched at most once a minute when a signature does not verify), or
+  inline `jwks`.
+- **The assertion:** RS256, PS256, ES256 or EdDSA, never `none` or HMAC, and no keys or `crit`
+  in the header. RSA keys must be at least 2048 bits. `iss` and `sub` are the `client_id`; `aud`
+  is the issuer or the endpoint. It expires within 5 minutes, with 60 s leeway. Its `jti` is
+  used once, claimed like any one-time credential.
+- **Where it is checked:** the token endpoint (code exchange and refresh) and revocation. Codes
+  and tokens record how their client authenticates, so a refresh token issued to a signing client
+  is useless without its key.
+- **Discovery:** `token_endpoint_auth_methods_supported` is now `["none", "private_key_jwt"]`,
+  with `token_endpoint_auth_signing_alg_values_supported`. `"none"` stays listed because Claude
+  uses its metadata document only when it is.
+
+**Not changed:** public clients (Claude, Claude Code, CLIs) sign in exactly as before. DCR still
+registers public clients only. Client secrets (`client_secret_*`) are still refused: a metadata
+document cannot hold a secret.
+

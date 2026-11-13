@@ -13,6 +13,12 @@
  *   POST /api/oauth/token       authorization_code (PKCE S256, resource-bound)
  *                               and refresh_token (rotated on every use)
  *   POST /api/oauth/revoke
+ *
+ * Clients are public ("none": Claude, Claude Code) or sign each token and
+ * revocation request with a key they publish ("private_key_jwt": ChatGPT;
+ * clientAssertion.js). A client whose metadata does not offer "none" must
+ * sign; one that offers both may. Codes and tokens remember which it was, so
+ * a token issued to a signing client cannot be refreshed without a signature.
  * Signed in (the app's Cognito session, req.user):
  *   GET  /api/oauth/requests/:id     what the consent page shows
  *   POST /api/oauth/requests/:id     { approve, scopes } -> { redirect }
@@ -23,7 +29,8 @@
  * redirect); every redirect back carries `iss` (RFC 9207).
  */
 import express, { Router } from 'express';
-import { ClientError, isAcceptableRedirect, isLoopbackRedirect, redirectMatches } from './clientMetadata.js';
+import { ClientError, SIGNING_ALGS, TOKEN_AUTH_METHODS, isAcceptableRedirect, isLoopbackRedirect, redirectMatches } from './clientMetadata.js';
+import { ASSERTION_TYPE, claimedClient } from './clientAssertion.js';
 import { pkceMatches } from './store.js';
 
 export const SCOPES = Object.freeze({
@@ -56,8 +63,11 @@ export function metadataFor(base) {
       response_modes_supported: ['query'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
-      token_endpoint_auth_methods_supported: ['none'],
-      revocation_endpoint_auth_methods_supported: ['none'],
+      // "none" stays listed: Claude uses a metadata document only when it is.
+      token_endpoint_auth_methods_supported: [...TOKEN_AUTH_METHODS],
+      token_endpoint_auth_signing_alg_values_supported: [...SIGNING_ALGS],
+      revocation_endpoint_auth_methods_supported: [...TOKEN_AUTH_METHODS],
+      revocation_endpoint_auth_signing_alg_values_supported: [...SIGNING_ALGS],
       scopes_supported: [...SCOPES_SUPPORTED],
       client_id_metadata_document_supported: true,
       authorization_response_iss_parameter_supported: true
@@ -110,11 +120,15 @@ const tokenError = (res, status, error, description) =>
  * @param {object} deps
  * @param {ReturnType<import('./store.js').createOAuthStore>} deps.store
  * @param {(clientId: string) => Promise<object>} deps.resolveClient
+ * @param {(client: object, assertion: string, audiences: string[]) => Promise<void>} [deps.verifyAssertion]
+ *        private_key_jwt (clientAssertion.js); without it, signing clients are refused
  * @param {string} [deps.publicBaseUrl]
  * @param {boolean} [deps.enabled]
  * @param {() => number} [deps.now]
  */
-export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', enabled = true, now = Date.now, log = console }) {
+export function createOAuthRouter({
+  store, resolveClient, verifyAssertion = null, publicBaseUrl = '', enabled = true, now = Date.now, log = console
+}) {
   const router = Router();
   const registrations = new Map(); // ip -> [timestamps]
   const form = express.urlencoded({ extended: false, limit: '16kb' });
@@ -126,6 +140,40 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
     res.set('Cache-Control', 'no-store');
     next();
   };
+
+  /**
+   * The client a token or revocation request is from, authenticated as its
+   * record requires. `required`: the client must sign ("private_key_jwt").
+   * Resolves { clientId } or { error } (an invalid_client description).
+   */
+  async function authenticateClient(req, { required, audience }) {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const assertion = body.client_assertion;
+    const signed = assertion !== undefined || body.client_assertion_type !== undefined;
+    const clientId = typeof body.client_id === 'string' ? body.client_id : (signed ? claimedClient(assertion) : undefined);
+    if (!signed) return required ? { error: 'This client must authenticate with private_key_jwt' } : { clientId };
+    if (body.client_assertion_type !== ASSERTION_TYPE || typeof assertion !== 'string') {
+      return { error: `client_assertion_type must be ${ASSERTION_TYPE}` };
+    }
+    if (typeof clientId !== 'string') return { error: 'client_assertion names no client' };
+    if (!verifyAssertion) return { error: 'private_key_jwt is not available here' };
+    let client;
+    try {
+      client = await resolveClient(clientId);
+    } catch (error) {
+      return { error: error instanceof ClientError ? error.message : 'the client could not be identified' };
+    }
+    if (!client?.jwksUri && !client?.jwks) return { error: 'This client publishes no keys to sign with' };
+    const { authorizationServer } = metadataFor(baseUrlOf(req, publicBaseUrl));
+    try {
+      await verifyAssertion(client, assertion, [authorizationServer.issuer, authorizationServer[audience]]);
+    } catch (error) {
+      if (error?.oauthError === 'invalid_client') return { error: error.message };
+      throw error;
+    }
+    return { clientId };
+  }
+  const clientError = (res, description) => tokenError(res.set('WWW-Authenticate', 'Bearer'), 401, 'invalid_client', description);
 
   // ---------------------------------------------------------------- discovery
   const asMetadata = (req, res) => res.json(metadataFor(baseUrlOf(req, publicBaseUrl)).authorizationServer);
@@ -204,6 +252,7 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
       clientId: client.client_id,
       clientName: client.client_name,
       registration: client.registration,
+      tokenAuth: client.tokenAuth ?? 'none',
       redirectUri,
       state: state ?? null,
       codeChallenge: challenge,
@@ -263,7 +312,8 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
       redirectUri: request.redirectUri,
       codeChallenge: request.codeChallenge,
       resource: request.resource,
-      scope: scopes.join(' ')
+      scope: scopes.join(' '),
+      tokenAuth: request.tokenAuth ?? 'none'
     });
     res.json({ redirect: withParams(request.redirectUri, { code, state: request.state, iss }) });
   });
@@ -278,7 +328,8 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
       if (!grant) return tokenError(res, 400, 'invalid_grant', 'This app was disconnected');
       const scope = record.scope.split(' ').filter((s) => grant.scopes.includes(s)).join(' ');
       const tokens = await store.issueTokens({
-        sub: record.sub, clientId: record.clientId, grantId: record.grantId, scope, resource: record.resource
+        sub: record.sub, clientId: record.clientId, grantId: record.grantId, scope, resource: record.resource,
+        tokenAuth: record.tokenAuth ?? 'none'
       });
       res.set('Cache-Control', 'no-store').json({
         access_token: tokens.access,
@@ -292,7 +343,9 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
       if (grantType === 'authorization_code') {
         const record = await store.takeCode(body.code);
         if (!record) return tokenError(res, 400, 'invalid_grant', 'The code is unknown, used or expired');
-        if (body.client_id !== record.clientId) return tokenError(res, 400, 'invalid_grant', 'The code was issued to another client');
+        const auth = await authenticateClient(req, { required: record.tokenAuth === 'private_key_jwt', audience: 'token_endpoint' });
+        if (auth.error) return clientError(res, auth.error);
+        if (auth.clientId !== record.clientId) return tokenError(res, 400, 'invalid_grant', 'The code was issued to another client');
         if (body.redirect_uri !== record.redirectUri) return tokenError(res, 400, 'invalid_grant', 'redirect_uri does not match');
         if (!pkceMatches(body.code_verifier, record.codeChallenge)) return tokenError(res, 400, 'invalid_grant', 'PKCE verification failed');
         if (body.resource !== undefined && !sameResource(body.resource, record.resource)) {
@@ -303,7 +356,9 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
       if (grantType === 'refresh_token') {
         const record = await store.readToken(body.refresh_token);
         if (!record || record.kind !== 'refresh') return tokenError(res, 400, 'invalid_grant', 'The refresh token is unknown or expired');
-        if (body.client_id !== record.clientId) return tokenError(res, 400, 'invalid_grant', 'The token was issued to another client');
+        const auth = await authenticateClient(req, { required: record.tokenAuth === 'private_key_jwt', audience: 'token_endpoint' });
+        if (auth.error) return clientError(res, auth.error);
+        if (auth.clientId !== record.clientId) return tokenError(res, 400, 'invalid_grant', 'The token was issued to another client');
         if (body.resource !== undefined && !sameResource(body.resource, record.resource)) {
           return tokenError(res, 400, 'invalid_target', `resource must be ${protectedResource.resource}`);
         }
@@ -325,10 +380,21 @@ export function createOAuthRouter({ store, resolveClient, publicBaseUrl = '', en
   });
 
   router.post(`${ISSUER_PATH}/revoke`, guard, form, async (req, res) => {
-    const token = req.body?.token;
-    const record = await store.readToken(token).catch(() => null);
-    if (record && (!req.body?.client_id || req.body.client_id === record.clientId)) await store.dropToken(token);
-    res.status(200).end();
+    try {
+      const token = req.body?.token;
+      const record = await store.readToken(token).catch(() => null);
+      // A signing client signs its revocations too (RFC 7009 §2.1); an
+      // unknown token is still answered 200, so this tells nothing about it.
+      const auth = await authenticateClient(req, {
+        required: record?.tokenAuth === 'private_key_jwt', audience: 'revocation_endpoint'
+      });
+      if (auth.error) return clientError(res, auth.error);
+      if (record && (auth.clientId === undefined || auth.clientId === record.clientId)) await store.dropToken(token);
+      res.status(200).end();
+    } catch (error) {
+      log.error?.('[oauth] revocation failed: %s', error?.name || 'unknown');
+      return tokenError(res, 500, 'server_error');
+    }
   });
 
   // ---------------------------------------------------------------- grants (signed in)

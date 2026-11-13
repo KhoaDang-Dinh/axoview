@@ -23,15 +23,59 @@ describe('Client ID Metadata Documents', () => {
     ]) expect([id, isMetadataUrl(id)]).toEqual([id, false]);
   });
 
-  it('the document must name itself, the client and https or loopback redirects; only public clients', () => {
+  it('the document must name itself, the client and https or loopback redirects', () => {
     expect(clientFromDocument(CIMD, doc())).toEqual({
-      client_id: CIMD, client_name: 'Claude Code', redirect_uris: ['http://localhost/callback'], registration: 'metadata'
+      client_id: CIMD, client_name: 'Claude Code', redirect_uris: ['http://localhost/callback'], registration: 'metadata', tokenAuth: 'none'
     });
     expect(() => clientFromDocument(CIMD, doc({ client_id: 'https://evil.example/client.json' }))).toThrow(/does not match/);
     expect(() => clientFromDocument(CIMD, doc({ client_name: '' }))).toThrow(/client_name/);
     expect(() => clientFromDocument(CIMD, doc({ redirect_uris: ['http://evil.example/cb'] }))).toThrow(/redirect_uris/);
-    expect(() => clientFromDocument(CIMD, doc({ token_endpoint_auth_method: 'client_secret_basic' }))).toThrow(/public clients/);
+    expect(() => clientFromDocument(CIMD, doc({ token_endpoint_auth_method: 'client_secret_basic' })))
+      .toThrow('the client authenticates with "client_secret_basic"; Axoview supports "none" and "private_key_jwt"');
     expect(() => clientFromDocument(CIMD, 'not json')).toThrow(/not JSON/);
+  });
+
+  describe('how the client authenticates at the token endpoint', () => {
+    const KEYS = 'https://claude.example/oauth/jwks.json';
+    const auth = (fields) => {
+      const { tokenAuth, jwksUri, jwks, signingAlg } = clientFromDocument(CIMD, doc(fields));
+      return { tokenAuth, jwksUri, jwks, signingAlg };
+    };
+
+    it('public when it says "none" or nothing (Claude, Claude Code)', () => {
+      expect(auth({})).toEqual({ tokenAuth: 'none' });
+      expect(auth({ token_endpoint_auth_method: 'none' })).toEqual({ tokenAuth: 'none' });
+      expect(auth({ token_endpoint_auth_methods_supported: ['none'] })).toEqual({ tokenAuth: 'none' });
+    });
+
+    it('must sign when it offers only private_key_jwt (ChatGPT), with keys on its own origin', () => {
+      expect(auth({ token_endpoint_auth_method: 'private_key_jwt', jwks_uri: KEYS }))
+        .toEqual({ tokenAuth: 'private_key_jwt', jwksUri: KEYS });
+      expect(auth({ token_endpoint_auth_methods_supported: ['private_key_jwt', 'client_secret_basic'], jwks_uri: KEYS, token_endpoint_auth_signing_alg: 'RS256' }))
+        .toEqual({ tokenAuth: 'private_key_jwt', jwksUri: KEYS, signingAlg: 'RS256' });
+      const jwks = { keys: [{ kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }] };
+      expect(auth({ token_endpoint_auth_method: 'private_key_jwt', jwks })).toEqual({ tokenAuth: 'private_key_jwt', jwks });
+    });
+
+    it('may go either way when it offers both: Axoview never requires a signature it could do without', () => {
+      expect(auth({ token_endpoint_auth_method: 'private_key_jwt', token_endpoint_auth_methods_supported: ['private_key_jwt', 'none'], jwks_uri: KEYS }))
+        .toEqual({ tokenAuth: 'none', jwksUri: KEYS });
+      // Without keys it can only be public.
+      expect(auth({ token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'] })).toEqual({ tokenAuth: 'none' });
+    });
+
+    it('refuses what it cannot check', () => {
+      const refused = (fields) => () => clientFromDocument(CIMD, doc(fields));
+      expect(refused({ token_endpoint_auth_method: 'private_key_jwt' })).toThrow(/needs a jwks_uri/);
+      expect(refused({ token_endpoint_auth_method: 'private_key_jwt', jwks_uri: 'https://evil.example/jwks.json' })).toThrow(/own origin/);
+      expect(refused({ token_endpoint_auth_method: 'private_key_jwt', jwks_uri: 'http://claude.example/jwks.json' })).toThrow(/own origin/);
+      expect(refused({ token_endpoint_auth_method: 'private_key_jwt', jwks: { keys: [] } })).toThrow(/1 to 10 keys/);
+      expect(refused({ token_endpoint_auth_method: 'private_key_jwt', jwks_uri: KEYS, token_endpoint_auth_signing_alg: 'HS256' })).toThrow(/signing_alg/);
+      expect(refused({ token_endpoint_auth_methods_supported: 'none' })).toThrow(/list of strings/);
+      expect(refused({ token_endpoint_auth_method: 7 })).toThrow(/not a string/);
+      expect(refused({ token_endpoint_auth_methods_supported: ['client_secret_post', 'tls_client_auth'] }))
+        .toThrow('the client authenticates with "client_secret_post", "tls_client_auth"; Axoview supports "none" and "private_key_jwt"');
+    });
   });
 
   it('fetches once and caches for the max-age asked, at least a minute', async () => {
