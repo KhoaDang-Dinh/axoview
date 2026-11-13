@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 import * as routes from './src/routes.js';
+import { createAnalyticsRouter } from './src/analytics.js';
 import { createAiChatRouter } from './src/ai/chat.js';
 import { createMcpRouter } from './src/ai/mcp.js';
 import { createFsAdapter } from './src/adapters/fs.js';
@@ -574,6 +575,8 @@ app.get('/healthz', async (req, res) => {
 
 // Config — never gated by STORAGE_ENABLED; sole boot probe per ADR 0009 D2
 app.get('/api/config', adapt(routes.getConfig, { requireStorage: false }));
+// Only authenticated, opted-in browsers send fixed-vocabulary product events.
+app.use('/api/analytics', createAnalyticsRouter());
 app.post('/api/auth/callback', adapt(exchangeCognitoCode, { requireStorage: false }));
 app.post('/api/auth/refresh', adapt(refreshCognitoSession, { requireStorage: false }));
 app.post('/api/auth/logout', adapt(revokeCognitoSession, { requireStorage: false }));

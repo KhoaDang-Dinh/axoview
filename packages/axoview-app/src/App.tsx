@@ -19,6 +19,8 @@ import {
 } from 'axoview';
 import { scanIconUsage } from './services/iconUsage';
 import { AppStorageProvider, useAppStorage } from './providers/AppStorageContext';
+import { AnalyticsConsentBanner } from './components/AnalyticsConsentBanner';
+import { trackProductEvent } from './services/productAnalytics';
 import { AuthProvider } from './providers/AuthProvider';
 import { CognitoSessionProvider } from './providers/CognitoSessionProvider';
 import { AssistantProvider } from './providers/AssistantProvider';
@@ -133,6 +135,7 @@ function EditorPage() {
           <CognitoSessionProvider>
             <DiagramLifecycleProvider>
               <EditorShell />
+              <AnalyticsConsentBanner />
             </DiagramLifecycleProvider>
           </CognitoSessionProvider>
         </AssistantProvider>
@@ -182,6 +185,10 @@ function EditorShell() {
     closeProjectExport,
     currentModel
   } = useDiagramLifecycle();
+
+  useEffect(() => {
+    if (currentDiagram?.id && !isReadonlyUrl) trackProductEvent('diagram_opened');
+  }, [currentDiagram?.id, isReadonlyUrl]);
 
   // When the perf-monitoring overlay is on, also expose the lib's read-only
   // store bridge (window.__axoview__) so DiagnosticsOverlay can read live
