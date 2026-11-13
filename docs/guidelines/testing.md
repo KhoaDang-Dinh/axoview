@@ -1,6 +1,6 @@
 # Regression Test Suite Reference
 
-**Last updated:** 2026-11-12 (rev 4 — the agent end-to-end test against the built app and the real backend; previous rev 2026-11-06 the live-update Docker specs and their DOM signals, scripting the API on the dev server; previous rev 2026-10-04 re-measured totals after view rotation, ADRs 0049–0051; previous rev 2026-09-30 re-measured totals; the Worker's `app.spec.ts` probe-input block now expects `404` for unknown `/api/*` paths in every auth mode, including shared-token with no secret; previous rev 2026-09-24 added the contract "Testing against the Docker image" (ADR 0048))
+**Last updated:** 2026-11-13 (rev 5 — the agent end-to-end test on AWS-style storage behind a CloudFront-like proxy; rev 4 2026-11-12 the agent end-to-end test against the built app and the real backend; previous rev 2026-11-06 the live-update Docker specs and their DOM signals, scripting the API on the dev server; previous rev 2026-10-04 re-measured totals after view rotation, ADRs 0049–0051; previous rev 2026-09-30 re-measured totals; the Worker's `app.spec.ts` probe-input block now expects `404` for unknown `/api/*` paths in every auth mode, including shared-token with no secret; previous rev 2026-09-24 added the contract "Testing against the Docker image" (ADR 0048))
 **Unit / integration totals** (measured 2026-10-04 via `npm test` per workspace):
 
 | Workspace | Passing | Suites |
@@ -311,10 +311,17 @@ approved ([ADR 0059](../adr/0059-agent-sign-in-and-workspace-mcp.md), addendum
 and its own directory, `tests-agents/`:
 
 - **Stack:** [`agents/stack.mjs`](../../packages/axoview-e2e/agents/stack.mjs)
-  serves the built app and proxies `/api` to the real backend on one origin
-  (`127.0.0.1:8089`, backend on `3189`, storage in a fresh temp directory). The
-  backend starts with the `fakeCognito` test hook, so `test-user:<sub>` is a
-  signed-in person. Nothing else is faked.
+  serves the built app and proxies `/api` to the real backend on one origin.
+  The backend starts with the `fakeCognito` test hook, so `test-user:<sub>` is a
+  signed-in person.
+- **Two storages, one spec:** project `agents-fs` (`127.0.0.1:8089`, files in a
+  fresh temp directory, no versions) and `agents-aws` (`127.0.0.1:8090`, the
+  real AWS adapter and DynamoDB sync cursor on in-memory S3 and DynamoDB through
+  the `fakeAws` test hook: versions, If-Match and ETags as on dev and prod).
+- **Like CloudFront:** the proxy gzips API answers of 1,000 bytes to 10 MB and
+  weakens their ETag (`W/"7"`), as CloudFront does on `/api/*`. A client that
+  reads only `"7"` loses the version of any diagram that is not tiny; this
+  caught exactly that (2026-11-13).
 - **Client:** the official MCP SDK (`@modelcontextprotocol/sdk`, a dev
   dependency of the e2e package) does discovery, registration, PKCE and the
   tool calls. The spec only plays the person: consent, then Approve.

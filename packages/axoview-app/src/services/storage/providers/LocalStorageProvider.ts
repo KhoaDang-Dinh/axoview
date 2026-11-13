@@ -112,6 +112,19 @@ async function sharingFailure(response: Response): Promise<{ ok: false; reason: 
   return { ok: false, reason: body?.reason || 'error', message: body?.error || `Sharing failed (${response.status})` };
 }
 
+/**
+ * The diagram version an API answer carries in its ETag: `"7"`, or `W/"7"`.
+ * CloudFront compresses API answers of 1,000 bytes or more and, doing so,
+ * turns a strong ETag into a weak one (W/"7"): a diagram's load comes back
+ * that way as soon as the diagram is not tiny. Reading only the strong form
+ * left this tab without a version, so every save and approval went out
+ * without If-Match and the versioned store refused it (428) for good.
+ */
+export function versionFromETag(etag: string | null | undefined): number | undefined {
+  const match = etag?.match(/^(?:W\/)?"([1-9][0-9]*)"$/);
+  return match ? Number(match[1]) : undefined;
+}
+
 export class LocalStorageProvider implements StorageProvider {
   readonly id = 'local' as const;
   readonly displayName = 'Local Storage';
@@ -176,11 +189,10 @@ export class LocalStorageProvider implements StorageProvider {
     });
     if (!response.ok) throw new Error(`Failed to load diagram: ${response.status}`);
     this.rememberShared(id, response);
-    const version = response.headers?.get('ETag');
-    const match = version?.match(/^"([1-9][0-9]*)"$/);
-    if (match) {
-      this.diagramVersions.set(id, Number(match[1]));
-      this.contentVersions.set(id, Number(match[1]));
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version !== undefined) {
+      this.diagramVersions.set(id, version);
+      this.contentVersions.set(id, version);
     }
     const data = await response.json();
     this.rememberStamp(id, data);
@@ -276,10 +288,10 @@ export class LocalStorageProvider implements StorageProvider {
    * learn the version, and saved again.
    */
   private rememberVersion(id: string, response: Response): void {
-    const match = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (!match) return;
-    this.diagramVersions.set(id, Number(match[1]));
-    this.contentVersions.set(id, Number(match[1]));
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version === undefined) return;
+    this.diagramVersions.set(id, version);
+    this.contentVersions.set(id, version);
   }
 
   /**
@@ -310,8 +322,8 @@ export class LocalStorageProvider implements StorageProvider {
       signal: timeoutSignal(10000)
     });
     if (!response.ok) return;
-    const match = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (match) this.diagramVersions.set(id, Number(match[1]));
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version !== undefined) this.diagramVersions.set(id, version);
     else this.diagramVersions.delete(id);
   }
 
@@ -335,10 +347,10 @@ export class LocalStorageProvider implements StorageProvider {
     if (!response.ok) throw new Error(`Failed to create diagram: ${response.status}`);
     const result = await response.json();
     this.rememberStamp(result.id, result);
-    const version = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (version) {
-      this.diagramVersions.set(result.id, Number(version[1]));
-      this.contentVersions.set(result.id, Number(version[1]));
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version !== undefined) {
+      this.diagramVersions.set(result.id, version);
+      this.contentVersions.set(result.id, version);
     }
     return result.id;
   }

@@ -112,6 +112,28 @@ it('on 428 (version never learned), learns it and saves', async () => {
   expect(p.knownVersion('d2')).toBe(8);
 });
 
+// CloudFront compresses answers of 1,000 bytes or more and weakens their
+// ETag. Reading only "7" left a tab whose diagram is not tiny without a
+// version: every save went out without If-Match and failed (2026-11-13).
+it('behind CloudFront: a weak ETag (W/"7") is a version like "7"', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { title: 'big' }, 'W/"6"'),
+    response(200, { ok: true }, '"7"'),
+    response(428, { code: 'IF_MATCH_REQUIRED' }),
+    response(200, {}, 'W/"9"'),
+    response(200, { ok: true }, '"10"')
+  ]);
+  await p.loadDiagram('d4');
+  expect(p.knownVersion('d4')).toBe(6);
+  await p.saveDiagram('d4', { title: 'x' });
+  // And when the version must be re-read, the weak answer is enough.
+  await p.saveDiagram('d5', { title: 'y' });
+  expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['GET -', 'PUT "6"', 'PUT -', 'GET -', 'PUT "9"']);
+  expect(p.knownVersion('d4')).toBe(7);
+  expect(p.knownVersion('d5')).toBe(10);
+});
+
 it('retries once only: a second conflict is an error the autosave reports', async () => {
   const p = await serverProvider();
   script([

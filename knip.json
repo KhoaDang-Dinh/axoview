@@ -48,6 +48,8 @@
         "src/**/__tests__/**/*.spec.js",
         "src/__tests__/helpers/fakeCognito.register.mjs",
         "src/__tests__/helpers/fakeCognito.hooks.mjs",
+        "src/__tests__/helpers/fakeAws.register.mjs",
+        "src/__tests__/helpers/fakeAws.hooks.mjs",
         "jest.config.js"
       ]
     },
