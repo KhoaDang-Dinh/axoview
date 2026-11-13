@@ -93,3 +93,11 @@ server.
   ([`presence.test.ts`](../../packages/axoview-app/src/services/sync/__tests__/presence.test.ts)).
 - **Browser test:** a second browser opening the workspace makes the first upload its next edit
   at once (`tests-docker/batched-upload.spec.ts`).
+
+## Addendum 2026-11-13
+
+[ADR 0054](0054-local-drafts-and-batched-uploads.md) no longer holds uploads while one browser is
+alone (its addendum 2026-11-13): every change uploads at once. Presence still drives the "who is
+here" UI ([ADR 0058](0058-multiplayer-presence-ui.md)); it no longer changes how often a browser
+uploads.
+

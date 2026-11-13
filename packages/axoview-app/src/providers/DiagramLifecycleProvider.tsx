@@ -258,6 +258,8 @@ const DiagramLifecycleContext = createContext<DiagramLifecycleContextValue>(
  * reaches the server at most this long after it was made (and at once on
  * every flush point). See stores/draftStore.ts.
  */
+// The longest an upload could wait. Unused while every checkpoint uploads at
+// once (uploadNow below); kept as the hook's required bound.
 const UPLOAD_BATCH_MS = 30_000;
 /** The in-app assistant, as live notices name it to other devices and people. */
 const ASSISTANT_NAME = 'Nova';
@@ -491,11 +493,13 @@ export function DiagramLifecycleProvider({
     if (!batchingEnabled) return null;
     return {
       maxDelayMs: UPLOAD_BATCH_MS,
-      // At once while another browser has the workspace open, or when other
-      // people have this diagram (shared either way, ADR 0057): they should
-      // see the edit within a second or two, not after the batch window.
-      uploadNow: (id) => othersPresent() ||
-        (storageRef.current as { sharedState?: (id: string) => string | undefined } | null)?.sharedState?.(id) !== undefined,
+      // Every checkpoint uploads at once (owner decision 2026-11-13, ADR 0054
+      // addendum): every change reaches the person's other devices and the
+      // people the diagram is shared with live, a second or two after a pause,
+      // whether or not anyone else is watching right now. The checkpoint in
+      // the browser stays: it is what survives a crash or a failed upload,
+      // and what other tabs of this browser show at once.
+      uploadNow: () => true,
       checkpoint: async (id, model) => {
         const userKey = userKeyRef.current;
         const baseVersion = knownVersionOfRef.current(id);

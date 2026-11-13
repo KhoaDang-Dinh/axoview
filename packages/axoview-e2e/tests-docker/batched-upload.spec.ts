@@ -1,23 +1,22 @@
 /**
- * batched-upload.spec.ts — fewer writes while one browser has the workspace
- * open (stores/draftStore.ts, hooks/useAutoSave.ts, services/sync/presence.ts):
+ * batched-upload.spec.ts — every change uploads at once, and the browser keeps
+ * a copy (stores/draftStore.ts, hooks/useAutoSave.ts). Uploads were held for
+ * up to 30 s while one browser had the workspace open (ADR 0054); the owner
+ * reverted that on 2026-11-13 so every change goes live (ADR 0054 addendum):
  *
- *   - alone, each 2 s pause is a checkpoint saved in the browser ("Saved in
- *     this browser"); the upload follows once per batch window with the latest;
- *   - hiding the tab, or another browser opening the workspace, uploads at once;
+ *   - each pause uploads, alone or not; closing the tab right after an edit
+ *     still uploads it (keepalive);
  *   - a second tab of the same browser shows the edit at once, with no
  *     download of the diagram;
- *   - edits whose upload never got out (the tab closed with the network down)
- *     come back on the next open: restored when the server still has the
- *     version they were made from, offered when it has moved on.
+ *   - edits whose upload never got out (the network down) come back on the
+ *     next open: restored when the server still has the version they were
+ *     made from, offered when it has moved on.
  *
  * DOM only, through nginx with storage ON, like the rest of tests-docker.
  */
 import type { APIRequestContext, Page } from '@playwright/test';
 import { byAxoviewId } from '../helpers/selectors';
-import { placeFirstIcon, seedOnboardingFlags, test, expect, waitForApi, waitForAppReady } from './fixtures';
-
-const BATCH_MS = 30_000;
+import { placeFirstIcon, test, expect, waitForApi } from './fixtures';
 
 /** PUT /api/diagrams/<id> requests from `page`, as they are sent. */
 function countPuts(page: Page, id: () => string): { count: () => number } {
@@ -42,13 +41,14 @@ const savedInBrowser = (page: Page) => byAxoviewId(page, 'status-saved-in-browse
 const notice = (page: Page, text: RegExp) => page.getByRole('alert').filter({ hasText: text });
 
 /**
- * The tab closes with the network down for uploads: every PUT the page sends
- * fails, the keepalive flush on `pagehide` included. (Page or context routing
- * cannot stand in: a keepalive request outlives the page, and Chromium sends
- * it once the context is back online. A renderer crash takes this headless
- * browser down whole.)
+ * The network goes down for uploads: every PUT the page sends from now on
+ * fails, the keepalive flush on `pagehide` included. Installed BEFORE the edit,
+ * since an edit now uploads within seconds. (Page or context routing cannot
+ * stand in: a keepalive request outlives the page, and Chromium sends it once
+ * the context is back online. A renderer crash takes this headless browser
+ * down whole.)
  */
-async function closeWithUploadsFailing(page: Page): Promise<void> {
+async function failUploads(page: Page): Promise<void> {
   await page.evaluate(() => {
     const original = window.fetch.bind(window);
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) =>
@@ -56,6 +56,11 @@ async function closeWithUploadsFailing(page: Page): Promise<void> {
         ? Promise.reject(new TypeError('Failed to fetch'))
         : original(input, init);
   });
+}
+
+/** The edit is kept in the browser and its upload failed ("Save failed"); then the tab closes. */
+async function closeWithEditsUnsent(page: Page): Promise<void> {
+  await expect(page.getByText('Save failed')).toBeVisible({ timeout: 8_000 });
   await page.close({ runBeforeUnload: true });
 }
 
@@ -65,83 +70,29 @@ async function itemsOnServer(api: APIRequestContext, id: string): Promise<number
   return ((await res.json()) as { items: unknown[] }).items.length;
 }
 
-test.describe('batched uploads while one browser has the workspace open', () => {
-  test('edits are saved in the browser and uploaded once per batch window', async ({ page, api }) => {
-    test.setTimeout(90_000);
+test.describe('every change uploads at once; the browser keeps a copy', () => {
+  test('alone in the workspace, each edit is on the server within seconds', async ({ page, api }) => {
     let id = '';
     const puts = countPuts(page, () => id);
     id = await createDiagram(page);
 
-    // Three edits, each followed by a pause long enough for an autosave.
-    for (const x of [340, 430, 520]) {
+    // Three edits, each followed by its upload: no 30 s batch any more.
+    for (const [n, x] of [340, 430, 520].entries()) {
       await placeFirstIcon(page, x, 280);
-      await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
-      await page.waitForTimeout(2_500);
+      await expect.poll(() => itemsOnServer(api, id), { timeout: 6_000, intervals: [250] }).toBe(n + 1);
+      await expect(savedInBrowser(page)).toBeHidden({ timeout: 6_000 });
     }
-    expect(puts.count(), 'nothing uploaded yet: three checkpoints in the browser').toBe(0);
-    expect(await itemsOnServer(api, id)).toBe(0);
-
-    // One upload, with the latest checkpoint, by the end of the window.
-    await expect.poll(() => puts.count(), { timeout: BATCH_MS + 5_000, intervals: [500] }).toBe(1);
-    await expect(savedInBrowser(page)).toBeHidden();
-    expect(await itemsOnServer(api, id)).toBe(3);
+    expect(puts.count()).toBeGreaterThanOrEqual(3);
   });
 
-  test('hiding the tab uploads at once', async ({ page, api }) => {
-    let id = '';
-    const puts = countPuts(page, () => id);
-    id = await createDiagram(page);
-    await placeFirstIcon(page);
-    await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
-    expect(puts.count()).toBe(0);
-
-    const uploaded = waitForApi(page, 'PUT', `/api/diagrams/${id}`, 5_000);
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    expect((await uploaded).status()).toBe(200);
-    expect(await itemsOnServer(api, id)).toBe(1);
-  });
-
-  test('closing the tab uploads what is queued (keepalive)', async ({ page, context, api }) => {
+  test('closing the tab right after an edit uploads it (keepalive)', async ({ page, context, api }) => {
     const id = await createDiagram(page);
     // A second page keeps the context (and its network) alive after the first closes.
     const keeper = await context.newPage();
     await placeFirstIcon(page);
-    await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
-    expect(await itemsOnServer(api, id)).toBe(0);
     await page.close({ runBeforeUnload: true });
     await expect.poll(() => itemsOnServer(api, id), { timeout: 10_000 }).toBe(1);
     await keeper.close();
-  });
-
-  test('another browser opening the workspace: edits upload at once again', async ({ page, browser, api, apiLog }) => {
-    let id = '';
-    const puts = countPuts(page, () => id);
-    id = await createDiagram(page);
-
-    const other = await browser.newContext();
-    try {
-      apiLog.watchContext(other);
-      await seedOnboardingFlags(other);
-      const phone = await other.newPage();
-      const joined = waitForApi(phone, 'GET', '/api/sync/events', 20_000);
-      await phone.goto('/app');
-      await waitForAppReady(phone);
-      await joined;
-      // The phone's join reaches this tab over the stream; give it a moment.
-      await page.waitForTimeout(1_500);
-
-      const uploaded = waitForApi(page, 'PUT', `/api/diagrams/${id}`, 8_000);
-      await placeFirstIcon(page);
-      expect((await uploaded).status()).toBe(200);
-      await expect(savedInBrowser(page)).toBeHidden();
-      expect(puts.count()).toBe(1);
-      expect(await itemsOnServer(api, id)).toBe(1);
-    } finally {
-      await other.close();
-    }
   });
 
   test('a second tab of the same browser shows the edit at once, without downloading it', async ({ page, context }) => {
@@ -159,18 +110,18 @@ test.describe('batched uploads while one browser has the workspace open', () => 
 
     await expect(second.getByText('Page 2', { exact: true })).toHaveCount(0);
     await byAxoviewId(page, 'view-tabs-add').click();
-    // The checkpoint reaches the second tab over the tab channel within the
-    // autosave pause, long before any batched upload.
+    // The checkpoint reaches the second tab over the tab channel; the upload's
+    // sync event that follows carries content it already shows.
     await expect(second.getByText('Page 2', { exact: true }).first()).toBeVisible({ timeout: 6_000 });
     expect(downloads).toBe(0);
   });
 
   test('a tab closed before its upload got out: the edits come back on the next open', async ({ page, context, api }) => {
     const id = await createDiagram(page);
+    await failUploads(page);
     await placeFirstIcon(page);
     await placeFirstIcon(page, 460, 300);
-    await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
-    await closeWithUploadsFailing(page);
+    await closeWithEditsUnsent(page);
     expect(await itemsOnServer(api, id)).toBe(0);
 
     const reopened = await context.newPage();
@@ -183,9 +134,9 @@ test.describe('batched uploads while one browser has the workspace open', () => 
 
   test('the diagram changed elsewhere meanwhile: the edits are offered, not forced', async ({ page, context, api }) => {
     const id = await createDiagram(page);
+    await failUploads(page);
     await placeFirstIcon(page);
-    await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
-    await closeWithUploadsFailing(page);
+    await closeWithEditsUnsent(page);
 
     // Another device saves a different change (a new version).
     const current = await api.get(`/api/diagrams/${id}`);
@@ -212,7 +163,8 @@ test.describe('batched uploads while one browser has the workspace open', () => 
   // Regression (2026-11-09, "the page keeps creating a new id for an unsaved
   // page"): while edits wait in the browser, the server copy lacks them. A
   // new diagram is stored without pages there, and a new page is missing, so
-  // each reload used to land on a freshly minted page id.
+  // each reload used to land on a freshly minted page id. Uploads now go at
+  // once, so the edits are held back here by failing them.
   test.describe('a page that has not reached the server keeps its id', () => {
     const pageId = (page: Page) => new URL(page.url()).searchParams.get('page');
     const selectedTab = (page: Page) =>
@@ -228,6 +180,7 @@ test.describe('batched uploads while one browser has the workspace open', () => 
     }
 
     test('a new diagram, not uploaded yet: the same page id on every reload', async ({ page, api }) => {
+      await failUploads(page);
       const id = await createDiagram(page);
       await expect.poll(() => pageId(page), { timeout: 10_000 }).toBeTruthy();
       const first = pageId(page) as string;
@@ -241,9 +194,11 @@ test.describe('batched uploads while one browser has the workspace open', () => 
       const id = await createDiagram(page);
       await expect.poll(() => pageId(page), { timeout: 10_000 }).toBeTruthy();
       const first = pageId(page);
+      await failUploads(page);
       await byAxoviewId(page, 'view-tabs-add').click();
       await expect.poll(() => pageId(page)).not.toBe(first);
       const added = pageId(page) as string;
+      await expect(page.getByText('Save failed')).toBeVisible({ timeout: 8_000 });
 
       await expectPageAfterReload(page, id, added);
       await expect(byAxoviewId(page, 'view-tab')).toHaveCount(2);
@@ -253,12 +208,12 @@ test.describe('batched uploads while one browser has the workspace open', () => 
       const id = await createDiagram(page);
       await expect.poll(() => pageId(page), { timeout: 10_000 }).toBeTruthy();
       const first = pageId(page);
+      await failUploads(page);
       await byAxoviewId(page, 'view-tabs-add').click();
       await expect.poll(() => pageId(page)).not.toBe(first);
       const added = pageId(page) as string;
-      await expect(savedInBrowser(page)).toBeVisible({ timeout: 6_000 });
       const link = page.url();
-      await closeWithUploadsFailing(page);
+      await closeWithEditsUnsent(page);
       const stored = (await (await api.get(`/api/diagrams/${id}`)).json()) as { views: { id: string }[] };
       expect(stored.views.map((v) => v.id), 'the server never got the new page').not.toContain(added);
 
