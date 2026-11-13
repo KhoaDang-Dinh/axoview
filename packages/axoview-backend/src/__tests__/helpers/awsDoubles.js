@@ -1,5 +1,5 @@
 /** In-memory S3 and DynamoDB doubles for the AWS adapter (aws.js). */
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -45,8 +45,23 @@ export function makeAwsDoubles() {
       }
       if (command instanceof QueryCommand) {
         const values = input.ExpressionAttributeValues;
-        const Items = [...rows.values()].filter((row) => row.PK === values[':pk'] && row.SK.startsWith(values[':prefix']));
+        const inRange = input.KeyConditionExpression?.includes('BETWEEN')
+          ? (sk) => sk >= values[':from'] && sk <= values[':to']
+          : values[':prefix'] !== undefined
+            ? (sk) => sk.startsWith(values[':prefix'])
+            : () => true;
+        const Items = [...rows.values()]
+          .filter((row) => row.PK === values[':pk'] && inRange(row.SK))
+          .sort((a, b) => (a.SK < b.SK ? -1 : a.SK > b.SK ? 1 : 0))
+          .slice(0, input.Limit ?? Infinity);
         return { Items };
+      }
+      // The sync cursor's bump: SET #change = :change ADD #seq :one.
+      if (command instanceof UpdateCommand && input.UpdateExpression === 'SET #change = :change ADD #seq :one') {
+        const current = rows.get(key) ?? { ...input.Key };
+        const next = { ...current, change: input.ExpressionAttributeValues[':change'], seq: (current.seq || 0) + 1 };
+        rows.set(key, next);
+        return { Attributes: { change: next.change, seq: next.seq } };
       }
       throw new Error(`Unexpected DynamoDB command: ${command.constructor.name}`);
     }

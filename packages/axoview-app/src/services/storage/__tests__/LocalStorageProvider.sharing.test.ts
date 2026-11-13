@@ -4,7 +4,7 @@
  * uploads its saves at once), lists shared diagrams with their owner, and
  * turns the members API's answers into results the share field shows.
  */
-import { LocalStorageProvider } from '../providers/LocalStorageProvider';
+import { LocalStorageProvider, versionFromETag } from '../providers/LocalStorageProvider';
 import { leanIfModel } from '../leanModel';
 
 const BASE = 'http://localhost:3001';
@@ -157,6 +157,23 @@ describe('approving a proposal is a save that names the state it was built on', 
     expect(calls[2].headers['if-match']).toBe('"5"');
   });
 
+  it('behind CloudFront: a load with a weak ETag (W/"4") still gives this tab its version', async () => {
+    const p = serverProvider();
+    const calls = script([
+      response(200, { title: 'Net', lastModified: 't0' }, { ETag: 'W/"4"' }),
+      response(200, { proposal: { id: 'p1', status: 'approved' }, lastModified: 't1' }, { ETag: 'W/"5"' }),
+      response(200, { success: true }, { ETag: '"6"' })
+    ]);
+    await p.loadDiagram('d1');
+    expect(p.knownVersion('d1')).toBe(4);
+    expect(await p.approveProposal('d1', 'p1', { applied: 1, document: DOC })).toEqual({ ok: true });
+    expect(calls[1].headers['if-match']).toBe('"4"');
+    expect(calls[1].body).not.toHaveProperty('baseModified');
+    expect(p.knownVersion('d1')).toBe(5);
+    await p.saveDiagram('d1', DOC);
+    expect(calls[2].headers['if-match']).toBe('"5"');
+  });
+
   it('a backend without versions: the lastModified this tab loaded, then the new one is remembered', async () => {
     const p = serverProvider();
     const calls = script([
@@ -219,4 +236,14 @@ it("reads and sets what this person's agent may do; Read only when unknown or un
   expect(await p.setAgentLevel('admin' as never)).toBe(false);
   expect(await p.agentLevel()).toBe('viewer');
   expect(await p.agentLevel()).toBe('viewer'); // network down
+});
+
+describe('versionFromETag', () => {
+  it('reads a diagram version from a strong or weak ETag, and nothing else', () => {
+    expect(versionFromETag('"7"')).toBe(7);
+    expect(versionFromETag('W/"7"')).toBe(7);
+    for (const other of [null, undefined, '', '7', '"0"', 'W/"41-fW3B1hbGLE7nGvdIlhE7oxWEmLw"', '"abc"']) {
+      expect([other, versionFromETag(other)]).toEqual([other, undefined]);
+    }
+  });
 });

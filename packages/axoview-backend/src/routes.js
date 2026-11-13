@@ -306,6 +306,16 @@ export async function createDiagram(adapter, ctx) {
   };
 }
 
+/**
+ * The version an If-Match names: "7", or W/"7" from a client that echoes the
+ * ETag it got. CloudFront weakens the ETag of every answer it compresses, so
+ * a client may only ever have seen the weak form. Anything else: no version.
+ */
+export function versionFromIfMatch(header) {
+  const match = /^(?:W\/)?"([1-9][0-9]*)"$/.exec(typeof header === 'string' ? header.trim() : '');
+  return match ? Number(match[1]) : undefined;
+}
+
 export async function saveDiagram(adapter, ctx) {
   const id = assertId(ctx.params.id);
   const body = stripServerOwnedFields(ctx.body);

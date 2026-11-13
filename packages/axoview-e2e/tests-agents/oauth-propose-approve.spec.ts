@@ -222,12 +222,71 @@ test('OAuth, propose, approve: the change is stored before the agent hears "appr
     expect((await stored(id)).items.map((item) => item.name)).toEqual(['Web', 'Database', 'Cache', 'Queue']);
     expect((await call('get_proposal', { id, proposal: second.proposal.id })).status).toBe('approved');
 
+    // --- And again, and again: each approval in this window is stored, the
+    // way a person works through an agent's suggestions one after another.
+    const names = ['Web', 'Database', 'Cache', 'Queue'];
+    for (const next of ['Worker', 'Search', 'CDN']) {
+      const proposal = await call('propose_changes', {
+        id, operations: [{ op: 'add_node', name: next }, { op: 'connect', from: { name: 'Web' }, to: { name: next } }]
+      });
+      await expect(byId(page, 'proposals-chip')).toHaveText('1 to approve', { timeout: 15_000 });
+      await byId(page, 'proposals-chip').click();
+      await byId(page, 'proposal-approve').click();
+      await expect(byId(page, 'notification').last()).toContainText('2 changes approved and made');
+      names.push(next);
+      expect((await stored(id)).items.map((item) => item.name), `after approving ${next}`).toEqual(names);
+      expect((await call('get_proposal', { id, proposal: proposal.proposal.id })).status).toBe('approved');
+      // The autosave of the change on screen settles without conflict or duplicates.
+      await page.waitForTimeout(2500);
+      expect((await stored(id)).items.map((item) => item.name), `settled after ${next}`).toEqual(names);
+    }
+    expect(edges(await stored(id))).toEqual([
+      'Cache > Database', 'Web > CDN', 'Web > Cache', 'Web > Search', 'Web > Worker'
+    ]);
+
+    // --- Several waiting at once, the later ones naming items the earlier
+    // ones add, approved back to back with no pause.
+    const batch = [];
+    for (const [node, from] of [['Auth', 'Web'], ['Users', 'Auth'], ['Audit', 'Users']]) {
+      batch.push((await call('propose_changes', {
+        id, operations: [{ op: 'add_node', name: node }, { op: 'connect', from: { name: from }, to: { name: node } }]
+      })).proposal.id as string);
+    }
+    await expect(byId(page, 'proposals-chip')).toHaveText('3 to approve', { timeout: 15_000 });
+    await byId(page, 'proposals-chip').click();
+    for (const [i, node] of ['Auth', 'Users', 'Audit'].entries()) {
+      // Oldest last in the list: approve from the bottom up, in the order they were made.
+      await page.locator('[data-axoview-id="proposal-approve"]').last().click();
+      // Decided: it leaves the list (the toast reads the same for each one).
+      await expect(page.locator('[data-axoview-id="proposal-approve"]')).toHaveCount(2 - i);
+      names.push(node);
+      expect((await stored(id)).items.map((item) => item.name), `batch ${i}`).toEqual(names);
+    }
+    for (const pid of batch) expect((await call('get_proposal', { id, proposal: pid })).status).toBe('approved');
+    await page.waitForTimeout(2500);
+    expect((await stored(id)).items.map((item) => item.name)).toEqual(names);
+
     // --- After a reload the window shows the stored diagram and nothing waits.
     await page.reload();
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 30_000 });
     await page.waitForTimeout(1500);
     await expect(byId(page, 'proposals-chip')).toHaveCount(0);
-    expect((await stored(id)).items.map((item) => item.name)).toEqual(['Web', 'Database', 'Cache', 'Queue']);
+    expect((await stored(id)).items.map((item) => item.name)).toEqual(names);
+
+    // --- Approving in the reopened window. The diagram is big enough now
+    // that its load comes back compressed, with a weak ETag (W/"n"); the
+    // window must still know its version, or every approval is refused (428).
+    for (const next of ['Billing', 'Reports']) {
+      const proposal = await call('propose_changes', { id, operations: [{ op: 'add_node', name: next }] });
+      await expect(byId(page, 'proposals-chip')).toHaveText('1 to approve', { timeout: 15_000 });
+      await byId(page, 'proposals-chip').click();
+      await byId(page, 'proposal-approve').click();
+      await expect(byId(page, 'proposals-chip')).toHaveCount(0);
+      await expect(byId(page, 'notification').last()).toContainText('Change approved and made');
+      names.push(next);
+      expect((await stored(id)).items.map((item) => item.name), `approved ${next} after reopening`).toEqual(names);
+      expect((await call('get_proposal', { id, proposal: proposal.proposal.id })).status).toBe('approved');
+    }
 
     // --- The refresh token rotates: the old one stops working.
     const used = kept.tokens.refresh_token as string;

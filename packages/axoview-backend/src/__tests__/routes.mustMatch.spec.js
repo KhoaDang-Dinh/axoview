@@ -8,7 +8,7 @@
  *   store without versions (fs):     the lastModified the author loaded
  */
 import { createAwsWorkspaceAdapter } from '../adapters/aws.js';
-import { createDiagram, getDiagram, saveDiagram } from '../routes.js';
+import { createDiagram, getDiagram, saveDiagram, versionFromIfMatch } from '../routes.js';
 import { makeAwsDoubles } from './helpers/awsDoubles.js';
 import { createMemoryAdapter, makeCtx } from './helpers/memoryAdapter.js';
 
@@ -120,4 +120,13 @@ describe('a store without versions: the lastModified that was loaded', () => {
     expect(new Set(stamps).size).toBe(30);
     expect([...stamps].sort()).toEqual(stamps);
   });
+});
+
+test('If-Match names a version strong or weak (CloudFront weakens the ETags it compresses)', () => {
+  expect(versionFromIfMatch('"7"')).toBe(7);
+  expect(versionFromIfMatch('W/"7"')).toBe(7);
+  expect(versionFromIfMatch(' "12" ')).toBe(12);
+  for (const other of [undefined, '', '*', '7', '"0"', '"07"', 'W/7', 'W/"41-fW3B1hbGLE7nGvdIlhE7oxWEmLw"', '"1", "2"']) {
+    expect([other, versionFromIfMatch(other)]).toEqual([other, undefined]);
+  }
 });

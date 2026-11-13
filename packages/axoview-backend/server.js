@@ -395,9 +395,7 @@ function makeCtx(req) {
     query: req.query,
     env: routeEnv,
     user: req.user || null,
-    ifMatch: /^\"([1-9][0-9]*)\"$/.test(req.headers['if-match'] || '')
-      ? Number(req.headers['if-match'].slice(1, -1))
-      : undefined,
+    ifMatch: routes.versionFromIfMatch(req.headers['if-match']),
     refreshToken: getCookie(req, cognitoRefreshCookieName),
     publicBaseUrl: getPublicBaseUrl(req)
   };
