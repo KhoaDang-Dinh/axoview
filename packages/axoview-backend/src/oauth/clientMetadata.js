@@ -87,10 +87,17 @@ export function isPrivateAddress(address) {
 }
 
 /** dns.lookup that refuses private addresses, used at connect time. */
-function safeLookup(hostname, options, callback) {
-  dns.lookup(hostname, { ...options, all: false }, (error, address, family) => {
+export function safeLookup(hostname, options, callback) {
+  // Node's family autoselection requests all:true and expects an array.
+  // Preserve that contract while checking every candidate at connect time.
+  dns.lookup(hostname, options, (error, address, family) => {
     if (error) return callback(error);
-    if (isPrivateAddress(address)) return callback(new Error('address not allowed'));
+    const addresses = options.all ? address : [{ address, family }];
+    if (!Array.isArray(addresses) || addresses.length === 0 ||
+        addresses.some((entry) => !entry || isPrivateAddress(entry.address))) {
+      return callback(new Error('address not allowed'));
+    }
+    if (options.all) return callback(null, addresses);
     callback(null, address, family);
   });
 }
