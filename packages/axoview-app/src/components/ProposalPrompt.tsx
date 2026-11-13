@@ -33,6 +33,7 @@ import {
   Typography
 } from '@mui/material';
 import { diagramAgent } from 'axoview';
+import { trackProductEvent } from '../services/productAnalytics';
 import { notificationStore } from '../stores/notificationStore';
 import { useAssistantPageStore } from '../stores/assistantPageStore';
 import { PROPOSALS_CHANGED_EVENT } from '../hooks/useRealtimeSync';
@@ -164,6 +165,7 @@ export function ProposalPrompt({
         }
       );
       if (outcome.status === 'made') {
+        trackProductEvent('agent_proposal_approved');
         const made = outcome.steps.filter((step) => step.status === 'ready').length;
         forget(proposal);
         notificationStore.push({

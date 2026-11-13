@@ -6,6 +6,7 @@ import { AutoAwesome, Add, KeyboardArrowDown, ArrowBack, OpenInNew, Send, SmartT
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAppStorage } from '../../providers/AppStorageContext';
 import { apiFetch } from '../../services/apiFetch';
+import { trackProductEvent } from '../../services/productAnalytics';
 import { useCognitoSessionStore } from '../../stores/cognitoSessionStore';
 import { useAssistantPageStore } from '../../stores/assistantPageStore';
 import { SuggestionChecklist } from './SuggestionChecklist';
@@ -189,6 +190,7 @@ export function AssistantWidget() {
       const plan = page && suggestions.length
         ? diagramAgent.planOperations(page.model, page.viewId ?? diagram?.page.id, suggestions)
         : undefined;
+      trackProductEvent('ai_message_sent');
       setConversationId(body.conversationId);
       setLiveMessages((current) => [
         ...current,
