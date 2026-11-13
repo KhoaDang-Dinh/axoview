@@ -66,3 +66,12 @@ test('acknowledges only after S3 accepted the batch; storage errors return 503',
     putObject: async () => { throw new Error('bad'); }, log: { error() {} } });
   expect((await request(bad)).status).toBe(503);
 });
+
+test('rate-limits excessive authenticated batches before writing more objects', async () => {
+  let count = 0;
+  const router = createAnalyticsRouter({ enabled: true, bucket: 'test', authMode: 'cognito',
+    putObject: async () => { count += 1; } });
+  for (let i = 0; i < 12; i++) expect((await request(router)).status).toBe(202);
+  expect((await request(router)).status).toBe(429);
+  expect(count).toBe(12);
+});
