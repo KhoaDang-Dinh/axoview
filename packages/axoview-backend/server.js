@@ -33,6 +33,7 @@ import { createSharing, SharingError } from './src/sharing.js';
 import { createAgentSettings } from './src/agentSettings.js';
 import { createOAuthStore } from './src/oauth/store.js';
 import { createClientResolver } from './src/oauth/clientMetadata.js';
+import { createAssertionVerifier } from './src/oauth/clientAssertion.js';
 import { createOAuthRouter, ISSUER_PATH, MCP_PATH } from './src/oauth/router.js';
 import { createWorkspaceMcpRouter } from './src/ai/workspaceMcp.js';
 import { createWorkspaceReader } from './src/ai/workspaceReader.js';
@@ -589,6 +590,7 @@ app.use(createOAuthRouter({
   enabled: agentsEnabled,
   store: oauthStore,
   resolveClient: oauthStore ? createClientResolver({ registeredClient: oauthStore.registeredClient }) : async () => null,
+  verifyAssertion: oauthStore ? createAssertionVerifier({ useAssertion: oauthStore.useAssertion }) : null,
   publicBaseUrl: process.env.PUBLIC_BASE_URL || ''
 }));
 /** A diagram from a workspace, or null when it is not there. */
