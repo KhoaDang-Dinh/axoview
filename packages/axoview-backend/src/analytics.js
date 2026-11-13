@@ -21,6 +21,7 @@ export const ANALYTICS_EVENTS = Object.freeze([
 const VALID_EVENT = new Set(ANALYTICS_EVENTS);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_BATCH = 20;
+const MAX_BATCHES_PER_MINUTE = 12; // per authenticated account per API pod
 
 export function validateAnalyticsBatch(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('Invalid batch');
@@ -66,6 +67,7 @@ export function createAnalyticsRouter({
 } = {}) {
   const router = Router();
   let client;
+  const perActor = new Map();
   const usable = enabled && authMode === 'cognito' && !!bucket;
   router.get('/status', (_req, res) => res.json({ enabled: !!usable }));
   router.post('/events', async (req, res) => {
@@ -77,6 +79,16 @@ export function createAnalyticsRouter({
     } catch {
       return res.status(400).json({ error: 'Invalid analytics event batch' });
     }
+    // Bound S3 write amplification even if a signed-in client loops.
+    // This is an additional per-pod guard, not a global WAF/DynamoDB quota.
+    const now = Date.now();
+    const actor = req.user.sub;
+    const record = perActor.get(actor);
+    const windowStart = record && now - record.windowStart < 60_000 ? record.windowStart : now;
+    const count = record && windowStart === record.windowStart ? record.count : 0;
+    if (count >= MAX_BATCHES_PER_MINUTE) return res.status(429).json({ error: 'Analytics rate limit' });
+    if (perActor.size > 5000) perActor.clear();
+    perActor.set(actor, { windowStart, count: count + 1 });
     try {
       const object = archiveAnalyticsBatch(batch);
       if (putObject) await putObject({ Bucket: bucket, ...object });
