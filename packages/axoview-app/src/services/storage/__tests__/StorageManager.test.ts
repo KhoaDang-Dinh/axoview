@@ -101,3 +101,17 @@ describe('version tracking reaches the active provider', () => {
     expect(() => manager.noteVersion('d1', 1)).not.toThrow();
   });
 });
+
+// The app holds the manager: without forwarding, a chat-approved change was
+// saved without naming the assistant, and no other device heard whose it was.
+test('an agent change noted on the manager reaches the active provider; one without it is fine', () => {
+  const noted: Array<[string, string]> = [];
+  const manager = new StorageManager();
+  manager.registerProvider({ ...fakeProvider('local'), noteAgentChange: (id: string, agent: string) => { noted.push([id, agent]); } } as StorageProvider);
+  manager.registerProvider(fakeProvider('google-drive'));
+  manager.setActiveProvider('local');
+  manager.noteAgentChange('d1', 'Nova');
+  expect(noted).toEqual([['d1', 'Nova']]);
+  manager.setActiveProvider('google-drive');
+  expect(() => manager.noteAgentChange('d1', 'Nova')).not.toThrow();
+});

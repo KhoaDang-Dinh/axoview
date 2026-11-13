@@ -134,6 +134,12 @@ const ok = (text, structured) => ({ content: [{ type: 'text', text }], structure
  * @param {(sub: string, change: object) => Promise<void>} deps.notify  tell the person's sync stream
  * @param {(adapter: object, id: string) => Promise<object|null>} deps.loadDiagram
  */
+/** A diagram's name as people see it, short enough for a notice. */
+function diagramNameOf(document) {
+  const name = typeof document?.name === 'string' && document.name.trim() ? document.name : document?.title;
+  return typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : 'Untitled';
+}
+
 export function createWorkspaceMcpRouter({
   store,
   sharing,
@@ -233,7 +239,16 @@ export function createWorkspaceMcpRouter({
       const proposal = await sharing.propose(found.owner, id, { sub: auth.sub, agent: auth.clientName }, {
         viewId: viewId ?? views[0]?.id ?? null, operations, note
       });
-      await notify(auth.sub, { kind: 'proposal', action: 'create', id });
+      // Live notice (useRealtimeSync): which agent, how much, on which diagram.
+      await notify(auth.sub, {
+        kind: 'proposal',
+        action: 'create',
+        id,
+        proposal: proposal.id,
+        agent: auth.clientName,
+        steps: operations.length,
+        diagramName: diagramNameOf(found.document)
+      });
       return ok(
         `Proposed ${operations.length} change${operations.length === 1 ? '' : 's'} (proposal ${proposal.id}). Nothing has changed yet: ` +
         'the user approves or rejects it in Axoview, where it shows as waiting for approval.',

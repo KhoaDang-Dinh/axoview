@@ -11,7 +11,7 @@ Endpoints: `/api/mcp`, the public manual (below), and `/api/mcp/workspace`, a pe
 
 ## Workspace tools (live; `AI_MCP_ENABLED`)
 
-[ADR 0059](../adr/0059-agent-sign-in-and-workspace-mcp.md). An agent works as its person after they approve it on Axoview's consent page. Clients are public (Claude, Claude Code, CLIs) or sign their token requests with a key they publish (`private_key_jwt`: ChatGPT; ADR 0059 addendum 2026-11-13). The client discovers sign-in from the `401`'s `WWW-Authenticate` (`resource_metadata`) and Axoview's OAuth server (issuer `/api/oauth`: CIMD or DCR clients, PKCE S256, `resource` required).
+[ADR 0059](../adr/0059-agent-sign-in-and-workspace-mcp.md). An agent works as its person after they approve it on Axoview's consent page. Clients are public (Claude, Claude Code, CLIs) or sign their token requests with a key they publish (`private_key_jwt`: ChatGPT; ADR 0059 addendum 2026-11-13). A proposal is announced live in the person's open Axoview tabs, naming the agent, and an approved change is announced to their other devices and to the people the diagram is shared with (ADR 0059 addendum 2026-11-13 (2)). The client discovers sign-in from the `401`'s `WWW-Authenticate` (`resource_metadata`) and Axoview's OAuth server (issuer `/api/oauth`: CIMD or DCR clients, PKCE S256, `resource` required).
 
 | Tool | Scope | Returns |
 |---|---|---|

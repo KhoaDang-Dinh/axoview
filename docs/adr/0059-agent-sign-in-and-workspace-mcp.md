@@ -231,3 +231,27 @@ supported".
 registers public clients only. Client secrets (`client_secret_*`) are still refused: a metadata
 document cannot hold a secret.
 
+## Addendum 2026-11-13 (2): live notices of agents' work
+
+**Problem:** an agent's work was silent. A proposal only lit the toolbar chip, and only on the
+diagram it was for, if that was open. An approved change reached other devices and the people the
+diagram is shared with as an ordinary reload, with no word of whose change it was.
+
+**Decision:** the sync stream carries who did it, and the app says so.
+- **Proposed:** the `proposal` `create` event names the agent, the number of steps, the diagram and
+  the proposal. Every open Axoview tab of that person shows "Claude Code proposes 2 changes to
+  “Network”", wherever they are. **Review** opens that diagram with its waiting proposals. The
+  prompt's own "waiting for your approval" pop-up is skipped for an arrival announced this way.
+- **Added:** a `diagram` `save` that carries an agent's approved change names the agent, and its
+  diagram. The person's other devices and the people the diagram is shared with see "Claude
+  Code's approved changes were added to this diagram" (or "to “Network”", with **Open**). This
+  covers two kinds of change:
+  - an outside agent's: the approve route knows the agent from the proposal;
+  - the in-app assistant's, approved in the chat: the save that carries it sends
+    `X-Axoview-Agent: Nova` once.
+  The tab that made the change shows no such notice.
+- **Placement:** notices sit above the assistant's bubble, which shares the bottom-right corner.
+  Before, the bubble covered a notice's button.
+
+**Not changed:** what an agent may do, and the agent's side: it still asks with `get_proposal`.
+

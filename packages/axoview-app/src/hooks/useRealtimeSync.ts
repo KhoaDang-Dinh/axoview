@@ -85,6 +85,13 @@ export interface UseRealtimeSyncOptions {
    * tab's upload of a checkpoint this tab took over the tab channel): skip it.
    */
   alreadyHave?: (change: SyncChange) => boolean;
+  /** An AI agent proposed changes to one of this person's diagrams (live notice). */
+  onAgentProposal?: (change: SyncChange) => void;
+  /**
+   * An AI agent's approved change was saved by another device or person:
+   * `open` when it is the diagram this tab shows (reloaded already).
+   */
+  onAgentChange?: (change: SyncChange, open: boolean) => void;
 }
 
 /** Hidden this long, the stream closes (resumed on show). */
@@ -135,13 +142,23 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
       }
       if (change.kind === 'proposal') {
         // components/ProposalPrompt.tsx re-reads the waiting proposals.
-        window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, { detail: { id: change.id } }));
+        // A new one named by its agent gets the live notice (onAgentProposal);
+        // `announced` tells the prompt not to pop up a second time for it.
+        const announced = change.action === 'create' && typeof change.agent === 'string' && !!change.id &&
+          !!optionsRef.current.onAgentProposal;
+        window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, { detail: { id: change.id, announced } }));
+        if (announced) optionsRef.current.onAgentProposal!(change);
         return;
       }
       const current = optionsRef.current;
       if (current.alreadyHave?.(change)) return;
       const state = current.getState();
       const reaction = planSyncReaction(change, state);
+      // Whose change it was, unless this tab already holds it.
+      if (change.kind === 'diagram' && change.action === 'save' && typeof change.agent === 'string' && change.id) {
+        const open = change.id === state.openDiagramId;
+        if (!(open && reaction.type === 'ignore')) current.onAgentChange?.(change, open);
+      }
       switch (reaction.type) {
         case 'ignore':
           return;

@@ -140,6 +140,47 @@ it('other diagrams: content saves are ignored, structure changes refresh the tre
   expect(options.reloadOpenDiagram).not.toHaveBeenCalled();
 });
 
+describe('live notices of AI agents\' work', () => {
+  it('a new proposal named by its agent: one notice, and the prompt is told not to pop up again', () => {
+    const onAgentProposal = jest.fn();
+    setup({}, { onAgentProposal });
+    const heard: unknown[] = [];
+    const listener = (e: Event) => heard.push((e as CustomEvent).detail);
+    window.addEventListener('axoview-proposals-changed', listener);
+    send({ kind: 'proposal', action: 'create', id: 'd9', agent: 'Claude Code', steps: 3, diagramName: 'Network' });
+    // A decision, or a proposal with no agent named (an older server): the list refreshes, no notice.
+    send({ kind: 'proposal', action: 'resolve', id: 'd9', status: 'approved' });
+    send({ kind: 'proposal', action: 'create', id: 'd9' });
+    window.removeEventListener('axoview-proposals-changed', listener);
+    expect(onAgentProposal).toHaveBeenCalledTimes(1);
+    expect(onAgentProposal).toHaveBeenCalledWith(expect.objectContaining({ agent: 'Claude Code', steps: 3, id: 'd9' }));
+    expect(heard).toEqual([{ id: 'd9', announced: true }, { id: 'd9', announced: false }, { id: 'd9', announced: false }]);
+  });
+
+  it('an agent\'s change saved elsewhere: a notice, with the diagram open (after its reload) or not', async () => {
+    const onAgentChange = jest.fn();
+    const { options, finishReload } = setup({}, { onAgentChange });
+    send({ action: 'save', id: 'd1', version: 4, agent: 'Claude Code' });
+    expect(options.reloadOpenDiagram).toHaveBeenCalledTimes(1);
+    await finishReload();
+    send({ action: 'save', id: 'd2', version: 9, agent: 'Nova', diagramName: 'Other' });
+    expect(onAgentChange.mock.calls).toEqual([
+      [expect.objectContaining({ id: 'd1', agent: 'Claude Code' }), true],
+      [expect.objectContaining({ id: 'd2', agent: 'Nova', diagramName: 'Other' }), false]
+    ]);
+  });
+
+  it('no notice for a change this tab already holds, or a save no agent made', () => {
+    const onAgentChange = jest.fn();
+    setup({}, { onAgentChange, alreadyHave: (c) => c.version === 7 });
+    send({ action: 'save', id: 'd1', version: 3, agent: 'Claude Code' });
+    send({ action: 'save', id: 'd1', version: 7, agent: 'Claude Code' });
+    send({ action: 'save', id: 'd2', version: 9 });
+    send({ action: 'update', id: 'd2', name: 'Renamed', agent: 'Nova' });
+    expect(onAgentChange).not.toHaveBeenCalled();
+  });
+});
+
 it('the latest options are used without reopening the stream', () => {
   const { options, hook } = setup();
   const refreshTree = jest.fn();

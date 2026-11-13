@@ -241,10 +241,18 @@ export class LocalStorageProvider implements StorageProvider {
     this.contentVersions.set(id, version);
   }
 
-  private async putDiagram(id: string, body: string): Promise<Response> {
+  /** Per diagram: the AI agent whose approved change the next save carries. */
+  private agentChanges = new Map<string, string>();
+
+  noteAgentChange(id: string, agent: string): void {
+    this.agentChanges.set(id, agent);
+  }
+
+  private async putDiagram(id: string, body: string, agent?: string): Promise<Response> {
     const version = this.diagramVersions.get(id);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (version !== undefined) headers['If-Match'] = `"${version}"`;
+    if (agent) headers['X-Axoview-Agent'] = agent;
     return apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
       method: 'PUT',
       headers,
@@ -258,8 +266,10 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   private async serverSaveDiagram(id: string, data: unknown): Promise<void> {
+    // Noted before this save started: this save carries the agent's change.
+    const agent = this.agentChanges.get(id);
     const body = JSON.stringify(leanIfModel(data));
-    let response = await this.putDiagram(id, body);
+    let response = await this.putDiagram(id, body, agent);
     // Latest save wins (multi-device sync): another device saved this diagram
     // since this tab loaded it (409), or this tab never learned its version
     // (428). Learn the current version and save again, once, so this edit
@@ -273,9 +283,13 @@ export class LocalStorageProvider implements StorageProvider {
         : null;
       if (typeof conflict?.currentVersion === 'number') this.diagramVersions.set(id, conflict.currentVersion);
       else await this.refreshVersion(id);
-      response = await this.putDiagram(id, body);
+      response = await this.putDiagram(id, body, agent);
     }
     if (!response.ok) throw new Error(`Failed to save diagram: ${response.status}`);
+    // Said once: later saves are the person's own edits. (A save that was
+    // already on its way when the change was noted leaves the note for the
+    // save that carries it.)
+    if (agent && this.agentChanges.get(id) === agent) this.agentChanges.delete(id);
     this.rememberShared(id, response);
     this.rememberVersion(id, response);
     this.rememberStamp(id, await response.json().catch(() => null));

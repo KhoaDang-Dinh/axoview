@@ -42,6 +42,12 @@ interface AssistantPageState {
    */
   storeThenApplyToPage: StoreThenApply | null;
   setStoreThenApply: (run: StoreThenApply | null) => void;
+  /**
+   * The person chose Review on a "proposes changes" notice: the diagram whose
+   * waiting proposals components/ProposalPrompt.tsx opens once it shows them.
+   */
+  reviewProposalsOf: string | null;
+  setReviewProposalsOf: (id: string | null) => void;
 }
 
 /**
@@ -67,5 +73,7 @@ export const useAssistantPageStore = create<AssistantPageState>((set) => ({
   canChangePage: null,
   setPageAccess: (apply, canChange) => set({ applyToPage: apply, canChangePage: canChange }),
   storeThenApplyToPage: null,
-  setStoreThenApply: (run) => set({ storeThenApplyToPage: run })
+  setStoreThenApply: (run) => set({ storeThenApplyToPage: run }),
+  reviewProposalsOf: null,
+  setReviewProposalsOf: (id) => set({ reviewProposalsOf: id })
 }));

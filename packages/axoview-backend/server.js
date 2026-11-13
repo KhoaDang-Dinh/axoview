@@ -338,6 +338,10 @@ const SYNC_MAX_STREAM_MS = Number(process.env.SYNC_MAX_STREAM_MS) || 5 * 60_000;
 const SYNC_GAP_MS = Number(process.env.SYNC_GAP_MS) || 3_000;
 // The device (browser tab) that made a change, so it can ignore its own echo.
 const DEVICE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+// An agent's name as a client may state it on a save (X-Axoview-Agent): letters,
+// digits, spaces and a little punctuation, at most 60 characters.
+const AGENT_NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} ._()'-]{0,59}$/u;
+const agentNameFrom = (value) => (typeof value === 'string' && AGENT_NAME_RE.test(value.trim()) ? value.trim() : null);
 // Presence (who else has the workspace open) rides the sync stream; 'off'
 // stops the announcements (the app then always batches its uploads).
 const SYNC_PRESENCE = process.env.SYNC_PRESENCE !== 'off';
@@ -422,7 +426,7 @@ async function diagramAudience(owner, id) {
  * diagram everyone else who has it. Never fails the write: a missed bump only
  * delays the other devices until their next reconnect or focus check.
  */
-async function publishChange(req, route, result, target) {
+async function publishChange(req, route, result, target, extra = {}) {
   const change = describeChange({
     method: req.method,
     route,
@@ -433,6 +437,15 @@ async function publishChange(req, route, result, target) {
   if (!change) return;
   const device = req.headers['x-axoview-device'];
   if (typeof device === 'string' && DEVICE_ID_RE.test(device)) change.origin = device;
+  // A save that carries an AI agent's change (the in-app assistant's, approved
+  // in the chat: X-Axoview-Agent on that save; an outside agent's, approved in
+  // Axoview: `extra`). The other devices and people say whose it was.
+  const agent = extra.agent ?? agentNameFrom(req.headers['x-axoview-agent']);
+  if (change.kind === 'diagram' && change.action === 'save' && agent) {
+    change.agent = agent;
+    const name = extra.diagramName ?? req.body?.name ?? req.body?.title;
+    if (typeof name === 'string' && name.trim()) change.diagramName = name.trim().slice(0, 100);
+  }
   change.at = new Date().toISOString();
   const workspaces = change.kind === 'diagram' && target?.owner
     ? await diagramAudience(target.owner, change.id)
@@ -868,14 +881,14 @@ app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req, re
   for (const [name, value] of Object.entries(saved.headers || {})) res.setHeader(name, value);
   if (saved.sync !== false) {
     await publishChange({ method: 'PUT', params: { id }, body: document, headers: req.headers, user: req.user },
-      '/api/diagrams/:id', saved, target);
+      '/api/diagrams/:id', saved, target, { agent: proposal.by?.agent || 'An AI agent' });
   }
   const version = /^"([1-9][0-9]*)"$/.exec(saved.headers?.ETag || '')?.[1];
   const resolved = await sharing.resolveProposal(owner, id, pid, 'approved', req.user.sub, {
     applied,
     version: version ? Number(version) : null
   });
-  await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id });
+  await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id, proposal: pid, status: 'approved' });
   return { status: 200, body: { proposal: resolved, lastModified: saved.body?.lastModified ?? null } };
 }));
 app.post('/api/diagrams/:id/proposals/:pid/reject', sharingRoute(async (req) => {
@@ -883,7 +896,7 @@ app.post('/api/diagrams/:id/proposals/:pid/reject', sharingRoute(async (req) => 
   const owner = await sharing.managedBy(req.user.sub, id);
   if (!SHARING_ID_RE.test(req.params.pid || '')) return { status: 400, body: { error: 'Invalid proposal' } };
   const resolved = await sharing.resolveProposal(owner, id, req.params.pid, 'rejected', req.user.sub);
-  await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id });
+  await notify([req.user.sub], { kind: 'proposal', action: 'resolve', id, proposal: req.params.pid, status: 'rejected' });
   return { status: 200, body: { proposal: resolved } };
 }));
 

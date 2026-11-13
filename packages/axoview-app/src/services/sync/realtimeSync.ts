@@ -21,6 +21,17 @@ export interface SyncChange {
   origin?: string;
   /** Presence only: the browser that tab belongs to (services/sync/browserId.ts). */
   browser?: string;
+  /**
+   * An AI agent's work (live notices): on a proposal `create`, the agent that
+   * proposed; on a diagram `save`, the agent whose approved change it carries.
+   */
+  agent?: string;
+  /** The diagram's name, for a notice about a diagram that is not open. */
+  diagramName?: string;
+  /** Proposal events: which proposal, how many steps, and (resolve) the decision. */
+  proposal?: string;
+  steps?: number;
+  status?: 'approved' | 'rejected';
   at?: string;
 }
 
