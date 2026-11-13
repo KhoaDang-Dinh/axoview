@@ -248,3 +248,14 @@ it('Review for another diagram leaves this one alone', async () => {
   expect(useAssistantPageStore.getState().reviewProposalsOf).toBe('d2');
   useAssistantPageStore.getState().setReviewProposalsOf(null);
 });
+
+it('the refresh after a decision is quiet, even when it finds a proposal made a moment ago', async () => {
+  // The CI race (2026-11-13): a resolve event's refresh saw the next proposal
+  // before that proposal's named notice arrived, and popped up a nameless one.
+  const s = storage([[], [proposal('p2')]]);
+  await show('owner', s);
+  const before = pushes.length;
+  await act(async () => { window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, { detail: { id: 'd1', action: 'resolve' } })); });
+  expect(chip()?.textContent).toBe('1 to approve');
+  expect(pushes.length).toBe(before);
+});

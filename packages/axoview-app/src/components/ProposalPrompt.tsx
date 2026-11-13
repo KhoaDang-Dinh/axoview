@@ -107,8 +107,11 @@ export function ProposalPrompt({
 
   useEffect(() => {
     const onChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{ id?: string; announced?: boolean }>).detail;
-      if (detail?.id === diagramId) void refresh({ quiet: detail.announced === true });
+      const detail = (event as CustomEvent<{ id?: string; announced?: boolean; action?: string }>).detail;
+      // Only an arrival nobody announced pops up. A decision's refresh is
+      // quiet too: it can see a proposal made a moment ago, whose own named
+      // notice is on its way, and would announce it a second time.
+      if (detail?.id === diagramId) void refresh({ quiet: detail.announced === true || detail.action === 'resolve' });
     };
     window.addEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
@@ -188,7 +191,7 @@ export function ProposalPrompt({
                 : t('proposals.notSaved', "Couldn't save the change, so nothing was approved: try again")
       });
       if (decided) forget(proposal);
-      void refresh();
+      void refresh({ quiet: true });
     } finally {
       setBusy(null);
     }
@@ -204,7 +207,7 @@ export function ProposalPrompt({
       notificationStore.push(result.ok
         ? { severity: 'success', message: t('proposals.rejected', 'Change rejected') }
         : { severity: 'error', message: t('proposals.failed', "Couldn't record your decision: try again") });
-      if (!result.ok) void refresh();
+      if (!result.ok) void refresh({ quiet: true });
     } finally {
       setBusy(null);
     }
