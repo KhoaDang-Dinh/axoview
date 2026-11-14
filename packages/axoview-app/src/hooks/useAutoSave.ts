@@ -81,9 +81,8 @@ export interface UseAutoSaveResult {
   resetStatus: () => void;
 }
 
-// How long after the last edit a save starts (owner decision 2026-11-10: 1 s,
-// down from 2 s, so shared diagrams reach the other people sooner).
-export const DEBOUNCE_MS = 1000;
+// Idle checkpoint delay. Live Yjs edits travel independently of this timer.
+export const DEBOUNCE_MS = 2500;
 
 interface Pending {
   diagramId: string;

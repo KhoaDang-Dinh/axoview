@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Box, Button, Checkbox, FormControlLabel, IconButton, Paper, TextField, Typography } from '@mui/material';
+import { Box, Button, Checkbox, FormControlLabel, IconButton, Paper, TextField, Tooltip, Typography } from '@mui/material';
 import { diagramAgent } from 'axoview';
 import { AutoAwesome, Add, KeyboardArrowDown, ArrowBack, OpenInNew, Send, SmartToy } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -259,8 +259,22 @@ export function AssistantWidget() {
   const chat = (
     <Box data-axoview-id="ai-assistant-root" sx={{ position: 'fixed', zIndex: 1400, pointerEvents: 'none', inset: 0 }}>
       {!open ? (
-        <button
+        <Tooltip title="AI help" arrow placement={position.x < 120 ? 'right' :
+          position.x > window.innerWidth - 160 ? 'left' :
+          position.y < 100 ? 'bottom' : 'top'}
+          slotProps={{ popper: { modifiers: [{ name: 'flip', enabled: true }, { name: 'preventOverflow', options: { padding: 8 } }] } }}>
+        <Box component="button"
           type="button"
+          sx={{
+            isolation: 'isolate',
+            '&::before': { content: '""', position: 'absolute', inset: 0, borderRadius: '50%', padding: '3px',
+              background: 'conic-gradient(from 0deg, #60a5fa33 0deg, #93c5fd 80deg, #ffffff 115deg, #a78bfa 145deg, #60a5fa33 190deg)',
+              mask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)', maskComposite: 'exclude',
+              pointerEvents: 'none', animation: 'ai-orbit 3s linear infinite' },
+            '@keyframes ai-orbit': { to: { transform: 'rotate(360deg)' } },
+            '@media (prefers-reduced-motion: reduce)': { '&::before': { animation: 'none' } },
+            '&:focus-visible': { outline: '2px solid #fff', outlineOffset: '4px' }
+          }}
           aria-label="Open Axoview AI"
           data-axoview-id="ai-bubble"
           onPointerDown={startDrag}
@@ -272,7 +286,8 @@ export function AssistantWidget() {
             height: BUBBLE_SIZE, borderRadius: '50%', border: 'none', background: '#2563eb',
             color: '#fff', display: 'grid', placeItems: 'center', cursor: 'grab',
             touchAction: 'none', pointerEvents: 'auto', boxShadow: '0 8px 24px #0003' }}
-        ><AutoAwesome /></button>
+        ><AutoAwesome /></Box>
+        </Tooltip>
       ) : (
         <Paper
           data-axoview-id="ai-chat-window"

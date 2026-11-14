@@ -74,6 +74,7 @@ export interface SceneStoreWithHistory extends Omit<SceneStore, 'actions'> {
 const MAX_HISTORY_SIZE = 50;
 
 export interface EditSession {
+  collaborationHistory?: { undo: () => void; redo: () => void; canUndo: () => boolean; canRedo: () => boolean };
   transactionInProgress: boolean;
   dragInProgress: boolean;
   /** The reducers' `State` while a transaction batches writes; typed loosely so the store stays reducer-agnostic. */

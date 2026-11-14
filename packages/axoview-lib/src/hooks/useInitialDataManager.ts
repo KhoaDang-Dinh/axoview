@@ -1,3 +1,4 @@
+import { useSceneStoreApi } from 'src/stores/sceneStore';
 import { useCallback, useState } from 'react';
 import { InitialData, IconCollectionState } from 'src/types';
 import type { LoadOptions } from 'src/types/axoviewProps';
@@ -35,6 +36,7 @@ import {
 const LARGE_PACK_THRESHOLD = 100;
 
 export const useInitialDataManager = () => {
+  const sceneStoreApi = useSceneStoreApi();
   const [isReady, setIsReady] = useState(false);
   const modelActions = useModelStore((state) => state.actions);
   const modelIcons = useModelStore((state) => state.icons);
@@ -223,6 +225,7 @@ export const useInitialDataManager = () => {
         // so the side dock always has the full catalog regardless of what was saved.
         const merged = mergeBundledFixtures(initialData);
 
+        sceneStoreApi.getState().actions.editSession.collaborationHistory = options?.collaborationHistory;
         modelActions.set(merged, true);
         modelActions.clearHistory();
 
@@ -242,8 +245,10 @@ export const useInitialDataManager = () => {
         // delete path then threw on it, and the properties panel rendered
         // "open but blank"). The layer-context invalidation prunes dead refs
         // as a backstop; the load path states its intent explicitly.
-        uiStateActions.setSelectedIds([]);
-        uiStateActions.setItemControls(null);
+        if (!options?.collaborationHistory) {
+          uiStateActions.setSelectedIds([]);
+          uiStateActions.setItemControls(null);
+        }
 
         const activeViewId = uiStateStoreApi.getState().view;
         const requestedView =

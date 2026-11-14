@@ -6,8 +6,9 @@ ENV NODE_ENV=production \
     BACKEND_PORT=3001 \
     ENABLE_SERVER_STORAGE=false
 
+COPY packages/axoview-collaboration /axoview-collaboration
 COPY packages/axoview-backend/package.json packages/axoview-backend/package-lock.json ./
-RUN npm ci --omit=dev --workspaces=false && npm cache clean --force
+RUN npm ci --omit=dev --workspaces=false --install-links && npm cache clean --force
 
 COPY packages/axoview-backend/server.js ./server.js
 COPY packages/axoview-backend/src ./src

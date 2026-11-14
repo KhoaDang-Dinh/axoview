@@ -4,6 +4,7 @@
   "private": true,
   "description": "Progressive Web App for creating isometric diagrams",
   "dependencies": {
+    "@axoview/collaboration": "file:../axoview-collaboration",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@isoflow/isopacks": "^0.0.10",
@@ -15,6 +16,7 @@
     "i18next-browser-languagedetector": "^8.2.1",
     "i18next-http-backend": "^4.0.6",
     "jszip": "^3.10.1",
+    "lib0": "^0.2.120",
     "react": "^19.2.4",
     "react-arborist": "^3.4.3",
     "react-dom": "^19.2.4",
@@ -22,6 +24,8 @@
     "react-i18next": "^17.0.2",
     "react-quill-new": "^3.8.3",
     "react-router-dom": "^7.13.2",
+    "y-indexeddb": "^9.0.12",
+    "yjs": "^13.6.33",
     "zustand": "^5.0.14"
   },
   "scripts": {

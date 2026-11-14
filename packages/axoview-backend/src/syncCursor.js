@@ -123,6 +123,7 @@ export function createDynamoSyncCursor({ tableName, region, ddbClient }) {
       const result = await ddb.send(new GetCommand({
         TableName: tableName,
         Key: key(workspaceId),
+        ConsistentRead: true,
         ProjectionExpression: '#seq, #change',
         ExpressionAttributeNames: { '#seq': 'seq', '#change': 'change' }
       }));

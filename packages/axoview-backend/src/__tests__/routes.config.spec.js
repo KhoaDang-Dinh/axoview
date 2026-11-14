@@ -13,6 +13,7 @@ describe('getConfig', () => {
       authMode: 'none',
       cognito: null,
       serverStorage: true,
+      collaborationEnabled: false,
       sharing: false,
       publicBaseUrl: null,
       ai: {

@@ -160,11 +160,11 @@ test('without batching, the 2 s autosave uploads directly as before', async () =
   expect(uploads).toEqual(['a']);
 });
 
-test('a save starts 1 s after the last edit (owner decision 2026-11-10)', async () => {
-  expect(DEBOUNCE_MS).toBe(1000);
+test('a save starts 2.5 s after the last edit', async () => {
+  expect(DEBOUNCE_MS).toBe(2500);
   const { hook, checkpoints } = setup();
   act(() => hook.result.current.scheduleSave('d1', MODEL('a')));
-  await pause(999);
+  await pause(2499);
   expect(checkpoints).toEqual([]);
   await pause(1);
   expect(checkpoints).toEqual(['a']);

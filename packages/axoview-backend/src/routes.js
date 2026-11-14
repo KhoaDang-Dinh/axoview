@@ -215,6 +215,7 @@ export function getConfig(_adapter, ctx) {
           }
         : null,
       serverStorage: env.STORAGE_ENABLED !== false,
+      collaborationEnabled: env.COLLABORATION_ENABLED === true,
       // Sharing a diagram with another account by email (ADR 0057; the Express
       // target with Cognito only: server.js decides and sets SHARING_ENABLED).
       sharing: env.SHARING_ENABLED === true,

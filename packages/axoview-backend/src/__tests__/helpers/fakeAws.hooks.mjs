@@ -4,6 +4,9 @@
  * doubles instead. Everything else in those modules is the shipped code.
  */
 const SWAPS = {
+  '/axoview-backend/src/collaboration.js': [
+    ['ddbClient || tableName && DynamoDBDocumentClient.from(', 'ddbClient || globalThis.__axoviewFakeAws.ddbClient || tableName && DynamoDBDocumentClient.from(']
+  ],
   '/axoview-backend/src/adapters/aws.js': [
     ['s3Client || new S3Client({ region })', 's3Client || globalThis.__axoviewFakeAws.s3Client'],
     ['ddbClient || DynamoDBDocumentClient.from(', 'ddbClient || globalThis.__axoviewFakeAws.ddbClient || DynamoDBDocumentClient.from(']

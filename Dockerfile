@@ -9,6 +9,7 @@ COPY package*.json ./
 COPY packages/axoview-lib/package*.json ./packages/axoview-lib/
 COPY packages/axoview-app/package*.json ./packages/axoview-app/
 COPY packages/axoview-backend/package*.json ./packages/axoview-backend/
+COPY packages/axoview-collaboration ./packages/axoview-collaboration/
 
 #Update NPM
 RUN npm install -g npm@11.5.2
@@ -19,7 +20,7 @@ RUN npm ci
 
 # Install backend production deps via npm ci into the backend dir (workspace-isolated,
 # reproducible, offline-safe at container boot) — see DP2-B4(a) in v1.1-tech-debt.md.
-RUN cd packages/axoview-backend && npm ci --omit=dev --workspaces=false
+RUN cd packages/axoview-backend && npm ci --omit=dev --workspaces=false --install-links
 
 # Copy the entire monorepo code
 COPY . .

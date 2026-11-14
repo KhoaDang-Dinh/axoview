@@ -341,3 +341,20 @@ test('a save that carries an AI agent\'s change says so to the other devices; a 
     expect(await save({ 'X-Axoview-Agent': junk }, `Junk ${junk.length}`)).not.toHaveProperty('agent');
   }
 }, T);
+
+test('collaboration uses diagram membership for reads, updates and WebRTC signaling', async () => {
+  const { base } = await startServer();
+  const alice = as(base, 'alice-1'), bob = as(base, 'bob-2');
+  const made = await alice.post('/api/diagrams', { title: 'Live', items: [], views: [{ id: 'v', name: 'Page', items: [] }], colors: [], icons: [] });
+  const root = `/api/diagrams/${made.body.id}`;
+  expect((await bob.get(`${root}/collaboration`)).status).toBe(404);
+  expect((await alice.post(`${root}/members`, { email: 'bob@example.com', role: 'viewer' })).status).toBe(201);
+  const viewer = await bob.get(`${root}/collaboration`);
+  expect(viewer.status).toBe(200); expect(viewer.body.writable).toBe(false);
+  expect((await bob.post(`${root}/collaboration`, { update: viewer.body.update })).status).toBe(403);
+  expect((await bob.post(`${root}/collaboration/signal`, { signal: { type: 'hello' } })).status).toBe(403);
+  await alice.patch(`${root}/members/bob-2`, { role: 'admin' });
+  expect((await bob.post(`${root}/collaboration`, { update: viewer.body.update, generation: viewer.body.generation })).status).toBe(200);
+  await alice.del(`${root}/members/bob-2`);
+  expect((await bob.get(`${root}/collaboration`)).status).toBe(404);
+}, T);

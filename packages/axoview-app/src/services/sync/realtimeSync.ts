@@ -1,3 +1,4 @@
+import { receiveCollaboration } from './collaboration';
 import { apiFetch } from '../apiFetch';
 import { getBrowserId } from './browserId';
 import { getDeviceId } from './deviceId';
@@ -11,7 +12,11 @@ export interface SyncChange {
   seq: number;
   // proposal: a save under "Change needs approval" was made or decided
   // (ADR 0057); the owner's and admins' apps refresh their waiting list.
-  kind: 'diagram' | 'folder' | 'tree' | 'resync' | 'presence' | 'proposal';
+  kind: 'diagram' | 'folder' | 'tree' | 'resync' | 'presence' | 'proposal' | 'collaboration' | 'signal';
+  update?: string;
+  generation?: string;
+  signal?: unknown;
+  to?: string;
   action?: 'create' | 'save' | 'update' | 'move' | 'delete' | 'join' | 'renew' | 'here' | 'leave' | 'resolve';
   id?: string;
   version?: number;
@@ -167,6 +172,13 @@ export function connectRealtimeSync(options: RealtimeSyncOptions): RealtimeSyncC
           try {
             change = JSON.parse(frame.data) as SyncChange;
           } catch {
+            continue;
+          }
+          if (change.kind === 'collaboration' || change.kind === 'signal') {
+            const open = receiveCollaboration(change);
+            if (!open && change.kind === 'collaboration' && change.agent && change.origin !== deviceId) {
+              options.onChange({ ...change, kind: 'diagram', action: 'save' });
+            }
             continue;
           }
           if (change.origin && change.origin === deviceId) continue;

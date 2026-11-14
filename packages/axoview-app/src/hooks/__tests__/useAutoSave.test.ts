@@ -13,7 +13,7 @@ import { useAutoSave } from '../useAutoSave';
 import type { StorageProvider } from '../../services/storage/types';
 import type { DiagramData } from '../../diagramUtils';
 
-const DEBOUNCE_MS = 2000;
+const DEBOUNCE_MS = 2500;
 
 const MODEL = (title: string): DiagramData =>
   ({ title, icons: [], colors: [], items: [], views: [], fitToScreen: true }) as DiagramData;

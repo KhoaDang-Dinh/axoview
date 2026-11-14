@@ -1,3 +1,5 @@
+import { createCollaboration, createJournal } from './src/collaboration.js';
+import { withRedisSync } from './src/redisSync.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -68,6 +70,7 @@ const aiChatRouter = createAiChatRouter({ workspaceReader: () => chatWorkspaceRe
 
 const routeEnv = {
   STORAGE_ENABLED,
+  COLLABORATION_ENABLED: STORAGE_ENABLED && process.env.COLLABORATION_ENABLED !== 'off',
   ENABLE_GIT_BACKUP,
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || null,
   AUTH_MODE: process.env.AUTH_MODE || 'none',
@@ -317,7 +320,7 @@ routeEnv.SHARING_ENABLED = !!sharing;
 // (src/sharing.js). The owner and a Full admin may do everything, except that
 // the folder a diagram sits in belongs to the owner's own file tree.
 const OWNER_FOLDER_ROUTES = new Set(['PATCH /api/diagrams/:id/move']);
-const READ_ROUTES = new Set(['GET /api/diagrams/:id']);
+const READ_ROUTES = new Set(['GET /api/diagrams/:id', 'GET /api/diagrams/:id/collaboration']);
 // What each person lets their AI agents do (src/agentSettings.js): needs a
 // signed-in person's workspace, with or without sharing.
 const agentSettings = STORAGE_ENABLED ? createAgentSettings({ adapterFor: workspaceAdapter }) : null;
@@ -325,9 +328,15 @@ const agentSettings = STORAGE_ENABLED ? createAgentSettings({ adapterFor: worksp
 // Realtime multi-device sync (src/syncCursor.js): every write bumps the
 // workspace's change cursor; /api/sync/events streams it to the other devices.
 // AWS: a DynamoDB item every API pod reads. fs (one process): in memory.
-const syncCursor = STORAGE_ADAPTER === 'aws'
+const syncCursor = withRedisSync(STORAGE_ADAPTER === 'aws'
   ? createDynamoSyncCursor({ tableName: DYNAMODB_TABLE, region: AWS_REGION })
-  : createMemorySyncCursor();
+  : createMemorySyncCursor(), process.env.REDIS_URL);
+const collaboration = createCollaboration({
+  cache: syncCursor,
+  journal: createJournal({ tableName: STORAGE_ADAPTER === 'aws' ? DYNAMODB_TABLE : null, region: AWS_REGION }),
+  notify: async (target, change) => notify(target.owner
+    ? await diagramAudience(target.owner, change.id) : [SHARED_WORKSPACE], change)
+});
 const SYNC_POLL_MS = Number(process.env.SYNC_POLL_MS) || 1000;
 const SYNC_HEARTBEAT_MS = Number(process.env.SYNC_HEARTBEAT_MS) || 15_000;
 // Streams end after this long and the client reconnects (Last-Event-ID), so
@@ -501,7 +510,24 @@ function adapt(handler, { requireStorage = true, sync = null } = {}) {
     }
     try {
       const target = await requestTarget(req);
-      const result = await handler(target.adapter, makeCtx(req));
+      let result;
+      if (handler === routes.saveDiagram && await collaboration.active(target, req.params.id)) {
+        result = await collaboration.replace(target, req.params.id, req.body,
+          routes.versionFromIfMatch(req.headers['if-match']), idHeader(req, 'x-axoview-device'),
+          agentNameFrom(req.headers['x-axoview-agent']));
+      } else {
+        if (req.body && typeof req.body === 'object') delete req.body._collab;
+        result = await handler(target.adapter, makeCtx(req));
+        if (handler === routes.getDiagram && await collaboration.active(target, req.params.id)) {
+          const state = await collaboration.state(target, req.params.id);
+          result.body = { ...result.body, ...state.model };
+        }
+      }
+      if (handler === routes.patchDiagram && typeof req.body?.name === 'string' &&
+          await collaboration.active(target, req.params.id)) {
+        await collaboration.rename(target, req.params.id, req.body.name, idHeader(req, 'x-axoview-device'));
+      }
+      if (result.body && typeof result.body === 'object') delete result.body._collab;
       // `sync: false`: a write that changed nothing (an unchanged save) has
       // nothing to tell the other devices.
       if (sync && result.sync !== false && result.status >= 200 && result.status < 300) {
@@ -699,7 +725,11 @@ app.get('/api/sync/events', async (req, res) => {
     // ended (its maximum age, a shutdown) is reconnected at once: no 'leave'.
     if (!res.writableEnded && !shuttingDown) void announce('leave');
   });
-  const write = (chunk) => { if (!closed) res.write(chunk); };
+  const write = (chunk) => {
+    if (closed) return;
+    if (res.writableLength > 1024 * 1024) { closed = true; res.end(); return; }
+    res.write(chunk);
+  };
 
   res.status(200).set({
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -774,6 +804,38 @@ app.get('/api/sync/events', async (req, res) => {
   openSyncStreams.delete(res);
   if (!closed && !res.writableEnded) res.end();
 });
+
+// The existing authentication middleware covers these routes; requestTarget
+// enforces the same owner/admin permissions as ordinary diagram writes.
+const collaborationRoute = action => async (req, res) => {
+  if (!STORAGE_ENABLED) return res.status(503).json({ error: 'Server storage is disabled' });
+  try {
+    const target = await requestTarget(req);
+    const result = await action(target, req);
+    res.json(result);
+  } catch (err) { res.status(err.status || 500).json(err.body || { error: 'Collaboration unavailable' }); }
+};
+app.get('/api/diagrams/:id/collaboration', collaborationRoute(async (target, req) => {
+  const state = await collaboration.state(target, req.params.id, req.query.vector);
+  delete state.model;
+  return state;
+}));
+app.post('/api/diagrams/:id/collaboration', collaborationRoute((target, req) =>
+  collaboration.update(target, req.params.id, req.body?.update,
+    idHeader(req, 'x-axoview-device'), agentNameFrom(req.headers['x-axoview-agent']), req.body?.generation)));
+app.post('/api/diagrams/:id/collaboration/signal', collaborationRoute(async (target, req) => {
+  await routes.getDiagram(target.adapter, { params: req.params });
+  const origin = idHeader(req, 'x-axoview-device');
+  if (!origin || JSON.stringify(req.body?.signal || {}).length > 16000) {
+    throw Object.assign(new Error('Invalid signal'), { status: 400 });
+  }
+  const audience = target.owner ? await diagramAudience(target.owner, req.params.id) : [SHARED_WORKSPACE];
+  await notify(audience, { kind: 'signal', id: req.params.id, origin, signal: req.body.signal,
+    ...(typeof req.body.to === 'string' ? { to: req.body.to } : {}) });
+  return { ok: true };
+}));
+app.post('/api/diagrams/:id/collaboration/flush', collaborationRoute((target, req) =>
+  collaboration.snapshot(target, req.params.id)));
 
 // Share
 // People a diagram is shared with and their permission levels (ADR 0057 §5):
@@ -864,6 +926,7 @@ app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req, re
   if (!document || typeof document !== 'object' || Array.isArray(document)) {
     return { status: 400, body: { error: 'The diagram with the approved changes is required', reason: 'no-document' } };
   }
+  delete document._collab;
   const applied = Number.isInteger(req.body?.applied) && req.body.applied >= 0 ? req.body.applied : null;
   const target = {
     adapter: workspaceAdapter(owner),
@@ -871,13 +934,25 @@ app.post('/api/diagrams/:id/proposals/:pid/approve', sharingRoute(async (req, re
     shared: owner !== req.user.sub,
     role: owner === req.user.sub ? 'owner' : 'admin'
   };
-  const saved = await routes.saveDiagram(target.adapter, {
+  const saved = await (async () => {
+    if (await collaboration.active(target, id)) {
+      if (!req.headers['if-match'] && STORAGE_ADAPTER === 'aws') throw new SharingError(428, 'precondition-required', 'If-Match is required');
+      if (STORAGE_ADAPTER !== 'aws') {
+        if (typeof req.body.baseModified !== 'string') throw new SharingError(428, 'precondition-required', 'baseModified is required');
+        const current = await routes.getDiagram(target.adapter, { params: { id } });
+        if (current.body.lastModified !== req.body.baseModified) throw new SharingError(409, 'conflict', 'Reload before approving this change');
+      }
+      return collaboration.replace(target, id, document, routes.versionFromIfMatch(req.headers['if-match']),
+        idHeader(req, 'x-axoview-device'), proposal.by?.agent || 'An AI agent');
+    }
+    return routes.saveDiagram(target.adapter, {
     ...makeCtx(req),
     params: { id },
     body: document,
     mustMatch: true,
     ifUnmodified: typeof req.body.baseModified === 'string' ? req.body.baseModified : undefined
-  });
+    });
+  })();
   // Stored. The app learns the new version whatever happens next, and the
   // person's other devices and the people the diagram is shared with hear of
   // the save as of any other.

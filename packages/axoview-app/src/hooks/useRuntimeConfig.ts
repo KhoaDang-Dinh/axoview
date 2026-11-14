@@ -21,6 +21,7 @@ export interface RuntimeConfig {
   authMode: 'none' | 'shared-token' | 'cf-access' | 'cognito';
   cognito: CognitoAuthConfig | null;
   serverStorage: boolean;
+  collaborationEnabled?: boolean;
   /**
    * Sharing a diagram with another account by email (ADR 0057): the server
    * has accounts (Cognito) and storage. Missing → false.
@@ -137,6 +138,7 @@ export async function fetchRuntimeConfig(): Promise<RuntimeConfig> {
         ...data,
         // Missing/malformed capability values fail closed.
         sharing: data.sharing === true,
+        collaborationEnabled: data.collaborationEnabled === true,
         ai: {
           chatEnabled: data.ai?.chatEnabled === true,
           liveChat: data.ai?.chatEnabled === true && data.ai?.liveChat === true,

@@ -1,3 +1,4 @@
+import { activeCollaboration } from '../../sync/collaboration';
 import {
   DiagramMeta,
   FolderMeta,
@@ -206,9 +207,9 @@ export class LocalStorageProvider implements StorageProvider {
    * whether the diagram changed elsewhere since the draft was made.
    */
   serverStamp(id: string): string | undefined {
-    const version = this.contentVersions.get(id);
+    const version = activeCollaboration(id)?.serverVersion ?? this.contentVersions.get(id);
     if (version !== undefined) return `v${version}`;
-    const modified = this.serverModified.get(id);
+    const modified = activeCollaboration(id)?.serverModified ?? this.serverModified.get(id);
     return modified ? `t${modified}` : undefined;
   }
 
@@ -228,7 +229,7 @@ export class LocalStorageProvider implements StorageProvider {
    * it with the version another device saved.
    */
   knownVersion(id: string): number | undefined {
-    return this.contentVersions.get(id);
+    return activeCollaboration(id)?.serverVersion ?? this.contentVersions.get(id);
   }
 
   /**
@@ -245,7 +246,9 @@ export class LocalStorageProvider implements StorageProvider {
   private agentChanges = new Map<string, string>();
 
   noteAgentChange(id: string, agent: string): void {
-    this.agentChanges.set(id, agent);
+    const session = activeCollaboration(id);
+    if (session) session.noteAgentChange(agent);
+    else this.agentChanges.set(id, agent);
   }
 
   private async putDiagram(id: string, body: string, agent?: string): Promise<Response> {
@@ -551,6 +554,13 @@ export class LocalStorageProvider implements StorageProvider {
 
   async saveDiagram(id: string, data: unknown): Promise<void> {
     if (this.usingServer) {
+      const collaboration = activeCollaboration(id);
+      if (collaboration) {
+        await collaboration.flush();
+        if (collaboration.serverVersion !== undefined) this.noteVersion(id, collaboration.serverVersion);
+        if (collaboration.serverModified) this.serverModified.set(id, collaboration.serverModified);
+        return;
+      }
       await this.serverSaveDiagram(id, data);
     } else {
       this.sessionSaveDiagram(id, data);
@@ -1005,8 +1015,8 @@ export class LocalStorageProvider implements StorageProvider {
     change: { applied: number; document: unknown }
   ): Promise<ProposalDecision> {
     if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
-    const version = this.contentVersions.get(id);
-    const modified = this.serverModified.get(id);
+    const version = activeCollaboration(id)?.serverVersion ?? this.contentVersions.get(id);
+    const modified = activeCollaboration(id)?.serverModified ?? this.serverModified.get(id);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (version !== undefined) headers['If-Match'] = `"${version}"`;
     try {

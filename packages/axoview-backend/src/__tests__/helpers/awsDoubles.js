@@ -1,5 +1,5 @@
 /** In-memory S3 and DynamoDB doubles for the AWS adapter (aws.js). */
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { BatchWriteCommand, TransactWriteCommand, DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -17,6 +17,22 @@ export function makeAwsDoubles() {
       calls.push(command.constructor.name);
       const input = command.input;
       const key = `${input.Key?.PK}|${input.Key?.SK}`;
+      if (command instanceof TransactWriteCommand) {
+        for (const { Put: put } of input.TransactItems) {
+          const current = rows.get(`${put.Item.PK}|${put.Item.SK}`);
+          const failed = put.ConditionExpression === 'attribute_not_exists(PK)' ? !!current :
+            put.ConditionExpression?.includes('#seq') && current && current.seq !== put.ExpressionAttributeValues[':previous'];
+          if (failed) { const error = new Error('transaction condition'); error.name = 'TransactionCanceledException'; throw error; }
+        }
+        for (const { Put: put } of input.TransactItems) rows.set(`${put.Item.PK}|${put.Item.SK}`, put.Item);
+        return {};
+      }
+      if (command instanceof BatchWriteCommand) {
+        for (const requests of Object.values(input.RequestItems)) for (const request of requests) {
+          const key = request.DeleteRequest.Key; rows.delete(`${key.PK}|${key.SK}`);
+        }
+        return {};
+      }
       if (command instanceof GetCommand) return { Item: rows.get(key) };
       if (command instanceof PutCommand) {
         const current = rows.get(`${input.Item.PK}|${input.Item.SK}`);
@@ -46,7 +62,7 @@ export function makeAwsDoubles() {
       if (command instanceof QueryCommand) {
         const values = input.ExpressionAttributeValues;
         const inRange = input.KeyConditionExpression?.includes('BETWEEN')
-          ? (sk) => sk >= values[':from'] && sk <= values[':to']
+          ? (sk) => sk >= (values[':from'] ?? values[':start']) && sk <= (values[':to'] ?? values[':end'])
           : values[':prefix'] !== undefined
             ? (sk) => sk.startsWith(values[':prefix'])
             : () => true;

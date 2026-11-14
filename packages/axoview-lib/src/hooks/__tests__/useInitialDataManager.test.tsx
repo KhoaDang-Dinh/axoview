@@ -31,6 +31,9 @@ afterAll(() => {
   window.alert = originalAlert;
 });
 
+const mockEditSession = {};
+jest.mock('src/stores/sceneStore', () => ({ useSceneStoreApi: () => ({ getState: () => ({ actions: { editSession: mockEditSession } }) }) }));
+
 // Mock dependencies
 jest.mock('src/stores/modelStore');
 jest.mock('src/stores/uiStateStore');
