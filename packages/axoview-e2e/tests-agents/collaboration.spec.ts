@@ -24,8 +24,8 @@ test('SSE-only concurrent edits converge and undo preserves the other author', a
   const left = await device(leftContext), right = await device(rightContext);
   await Promise.all([left.goto(`${baseURL}/app/d/${id}`), right.goto(`${baseURL}/app/d/${id}`)]);
   for (const page of [left, right]) {
-    await expect(page.locator('[data-axoview-id="toolbar-share"]')).toBeEnabled();
-    await expect.poll(async () => page.evaluate(() => indexedDB.databases().then(dbs => dbs.some(db => db.name?.startsWith('axoview:yjs:'))))).toBe(true);
+    await expect(page.locator('[data-axoview-id="toolbar-share"]')).toBeEnabled({ timeout: 30_000 });
+    await expect.poll(async () => page.evaluate(() => indexedDB.databases().then(dbs => dbs.some(db => db.name?.startsWith('axoview:yjs:')))), { timeout: 15_000 }).toBe(true);
   }
   await Promise.all([left.locator('[data-axoview-id="view-tabs-add"]').click(), right.locator('[data-axoview-id="view-tabs-add"]').click()]);
   const stored = () => api('GET', `/api/diagrams/${id}`);

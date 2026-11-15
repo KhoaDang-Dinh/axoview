@@ -1,4 +1,4 @@
-import { activeCollaboration } from '../../sync/collaboration';
+import { activeCollaboration } from '../../sync/collaborationRegistry';
 import {
   DiagramMeta,
   FolderMeta,

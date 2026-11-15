@@ -11,6 +11,10 @@ whole-document checkpoint broadcasts are suppressed for active Yjs sessions.
 - WebRTC data channels use `stun:stun.l.google.com:19302` and
   `stun:stun.cloudflare.com:3478`. Authenticated HTTP/SSE exchanges signaling.
   There is no dependency on a public signaling service or TURN subscription.
+- Signals are separate requests, so an ICE candidate can arrive before the
+  offer or answer it belongs to; it is kept until that description is set. An
+  attempt that has not connected after 12 seconds is dropped and retried on the
+  next `hello` (every 15 seconds).
 - SSE remains connected alongside WebRTC. Peers behind restrictive NAT, blocked
   UDP, or unavailable STUN continue through HTTP uploads plus SSE downloads.
   SSE is one-way: writes always use authenticated HTTP.
@@ -58,6 +62,20 @@ Document generations isolate recreated IDs and their IndexedDB/tab/peer state.
 Native diagram/agent writes enter the same Yjs journal. Metadata such as folders,
 trash state, timestamps and share identifiers is not owned by the CRDT.
 
+## Approving an agent's proposal in a live session
+
+Approval is still a save that must succeed before the agent is told "approved"
+(ADR 0059). In a live session the app first asks the server for a snapshot, so
+the approval is checked against the version holding every edit so far. The
+server then writes the approved change into the shared document. The editor
+receives it as that document's update, like every other device, and does not
+apply it a second time locally (two concurrent edits of the same text would
+double it). It is therefore not on the approver's own undo stack.
+
+Yjs is loaded on demand when a server diagram opens
+(`services/sync/collaborationRegistry.ts` answers "is this diagram live?"
+without it), which keeps it out of the app's first chunk.
+
 ## Validation and rollout
 
 Build both app and backend images together, then deploy the infrastructure and
@@ -66,8 +84,9 @@ application to dev before production. The backend Docker lockfile uses
 
 The tests cover independent-field/character merges, concurrent insertion and
 deletion, replay, restart-before-snapshot recovery, failed durable writes,
-membership enforcement, two-device updates, SSE-only concurrent editing and
-selective undo. The AI button test checks the animated 3px border, adaptive help
+membership enforcement, two-device updates, SSE-only concurrent editing,
+selective undo, and a WebRTC data channel opening and carrying an edit on
+both storage kinds. The AI button test checks the animated 3px border, adaptive help
 bubble and reduced-motion preference.
 
 Run the agent Playwright suite against both `fs` and simulated `aws` storage.

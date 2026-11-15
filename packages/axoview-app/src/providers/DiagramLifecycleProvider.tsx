@@ -1,4 +1,4 @@
-import { DiagramCollaboration, activeCollaboration } from '../services/sync/collaboration';
+import { activeCollaboration, type LiveSession } from '../services/sync/collaborationRegistry';
 import { leanIfModel } from '../services/storage/leanModel';
 import {
   createContext,
@@ -785,6 +785,15 @@ export function DiagramLifecycleProvider({
       // sent for approval is built on exactly what the server holds, so the
       // server can refuse it if the diagram changes elsewhere meanwhile.
       if ((await autoSaveSaveNowRef.current()) === 'error') return { status: 'unsaved', steps: [] };
+      // A live (Yjs) session: have the server assemble its snapshot now, so the
+      // approval is checked against the version that holds every edit so far
+      // (the server also snapshots on its own a few seconds after an edit,
+      // which would otherwise make this tab's version stale).
+      try {
+        await activeCollaboration(id)?.flush();
+      } catch {
+        return { status: 'unsaved', steps: [] };
+      }
       if (currentDiagramRef.current?.id !== id) return { status: 'nothing', steps: [] };
       const prepared = axoviewRef.current?.prepareAgentOperations(operations, { viewId });
       if (!prepared) return { status: 'nothing', steps: [] };
@@ -794,6 +803,16 @@ export function DiagramLifecycleProvider({
       // Stored. If another diagram was opened meanwhile, it is not this
       // editor's to show: the stored diagram has the change when reopened.
       if (currentDiagramRef.current?.id !== id) return { status: 'made', steps: prepared.steps };
+      // A live (Yjs) session: the server wrote the approved change into the
+      // shared document, and it reaches this editor as that document's update,
+      // like everyone else's. Putting it in the editor here as well would be a
+      // second, concurrent edit of the same fields (names would double), so
+      // pull the update now instead of waiting for the stream.
+      const live = activeCollaboration(id);
+      if (live) {
+        await live.sync().catch(() => {});
+        return { status: 'made', steps: prepared.steps };
+      }
       return { status: 'made', steps: prepared.commit() };
     });
     return () => setStoreThenApply(null);
@@ -2146,6 +2165,7 @@ export function DiagramLifecycleProvider({
     useAssistantPageStore.getState().setReviewProposalsOf(id);
     if (currentDiagramRef.current?.id !== id) void openDiagramByIdRef.current(id, change.diagramName ?? '');
   });
+  const agentNoticeAtRef = useRef(new Map<string, number>());
   useRealtimeSync({
     enabled: serverStorageAvailable && storage?.id === 'local' && !isReadonlyUrl,
     baseUrl: apiBaseUrl(),
@@ -2189,6 +2209,12 @@ export function DiagramLifecycleProvider({
     },
     onAgentChange: (change, open) => {
       const id = change.id!;
+      // One approval can arrive twice (the save's event and the live
+      // session's update): say it once.
+      const said = `${id}\n${change.agent}`;
+      const last = agentNoticeAtRef.current.get(said) ?? 0;
+      if (Date.now() - last < 4000) return;
+      agentNoticeAtRef.current.set(said, Date.now());
       notificationStore.push({
         severity: 'info',
         message: open
@@ -2509,7 +2535,13 @@ export function DiagramLifecycleProvider({
     const id = currentDiagram?.id;
     if (!id || !batchingEnabled || runtimeConfig?.collaborationEnabled !== true) return;
     let attachedHistory = false;
-    const session = new DiagramCollaboration(id, signedInSub ?? 'workspace', raw => {
+    let session: LiveSession | null = null;
+    let left = false;
+    // Yjs loads on demand, off the app's first chunk. An edit made before it
+    // arrives goes out as an ordinary save, which the server turns into a delta.
+    void import('../services/sync/collaboration').then(({ DiagramCollaboration }) => {
+      if (left) return;
+      session = new DiagramCollaboration(id, signedInSub ?? 'workspace', raw => {
       if (currentDiagramRef.current?.id !== id) return;
       const data = raw as DiagramData;
       const model = { ...data, icons: [
@@ -2521,8 +2553,13 @@ export function DiagramLifecycleProvider({
       setCurrentModel(model);
       isAfterLoadRef.current = true;
       axoviewRef.current?.load(model as InitialData, { preserveViewport: true, collaborationHistory: activeCollaboration(id)?.history });
-    }, message => notificationStore.push({ severity: 'info', message, autoDismiss: 5000 }));
-    return () => { void session.flush().catch(() => {}).finally(() => session.close()); };
+      }, message => notificationStore.push({ severity: 'info', message, autoDismiss: 5000 }));
+    }).catch(() => { /* offline: ordinary saves carry on */ });
+    return () => {
+      left = true;
+      const open = session;
+      if (open) void open.flush().catch(() => {}).finally(() => open.close());
+    };
   // The callbacks read live refs; changing a title must not reconnect the room.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentDiagram?.id, batchingEnabled, signedInSub, runtimeConfig?.collaborationEnabled]);

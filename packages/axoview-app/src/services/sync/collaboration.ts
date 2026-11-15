@@ -6,9 +6,8 @@ import { apiFetch } from '../apiFetch';
 import { apiBaseUrl } from '../../utils/apiBaseUrl';
 import { getDeviceId } from './deviceId';
 import type { SyncChange } from './realtimeSync';
+import { liveSessions as sessions, type LiveSession } from './collaborationRegistry';
 
-const sessions = new Map<string, DiagramCollaboration>();
-export const activeCollaboration = (id: string) => sessions.get(id);
 const encode = (bytes: Uint8Array) => { let text = ''; bytes.forEach(b => { text += String.fromCharCode(b); }); return btoa(text); };
 const decode = (text: string) => Uint8Array.from(atob(text), c => c.charCodeAt(0));
 const REMOTE = Symbol('remote');
@@ -17,15 +16,17 @@ export const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.cloudflare.com:3478' }
 ];
 
-export function receiveCollaboration(change: SyncChange): boolean {
-  const session = change.id ? sessions.get(change.id) : undefined;
-  session?.receive(change);
-  return !!session;
+/** What peers exchange over the authenticated signal route to open a data channel. */
+interface PeerSignal {
+  type?: 'hello';
+  generation?: string;
+  description?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
 }
 
 /** One Y.Doc owns diagram data across HTTP/SSE, RTC and the provider's tab
  * channel. The application BroadcastChannel only carries account/lifecycle data. */
-export class DiagramCollaboration {
+export class DiagramCollaboration implements LiveSession {
   readonly doc = new Y.Doc();
   private persistence: IndexeddbPersistence | null = null;
   private undoManager = new Y.UndoManager(this.doc.getMap('fields'), { trackedOrigins: new Set(['local']), captureTimeout: 500 });
@@ -186,16 +187,18 @@ export class DiagramCollaboration {
     if (change.kind === 'collaboration' && change.update && change.generation === this.generation) {
       try { Y.applyUpdate(this.doc, decode(change.update), REMOTE); } catch { void this.sync().catch(() => {}); }
       if (change.origin !== this.device && Date.now() - this.lastNotice > 5000) {
-        this.lastNotice = Date.now(); this.onNotice(change.agent ? `${change.agent} updated this diagram` : 'A collaborator updated this diagram');
+        this.lastNotice = Date.now();
+        // An agent's change is always one a person approved (ADR 0059).
+        this.onNotice(change.agent ? `${change.agent}’s approved changes were added to this diagram` : 'A collaborator updated this diagram');
       }
     }
     if (change.kind === 'signal' && change.origin !== this.device && (!change.to || change.to === this.device)) {
-      void this.onSignal(change.origin!, change.signal).catch(() => {});
+      void this.onSignal(change.origin!, change.signal as PeerSignal).catch(() => {});
     }
   }
 
   private signal(signal: unknown, to?: string) { return this.request('/signal', { signal: { ...(signal as object), generation: this.generation }, to }); }
-  private async onSignal(peer: string, signal: any) {
+  private async onSignal(peer: string, signal: PeerSignal) {
     if (!this.ready || !this.writable || typeof RTCPeerConnection === 'undefined' || !peer || !signal || signal.generation !== this.generation) return;
     if (signal.type === 'hello') {
       if (this.peers.has(peer) || this.peers.size >= 8) return;
@@ -213,22 +216,47 @@ export class DiagramCollaboration {
       }
       pc ??= this.peer(peer);
       await pc.setRemoteDescription(signal.description);
+      await this.applyEarlyCandidates(peer, pc);
       if (signal.description.type === 'offer') {
         await pc.setLocalDescription(await pc.createAnswer());
         await this.signal({ description: pc.localDescription }, peer);
       }
     } else if (signal.candidate) {
+      // Signals are separate HTTP requests, so a candidate can overtake the
+      // offer or answer it belongs to. Dropped, the peers never connect (they
+      // often have a single candidate each): keep it until the description is in.
       const pc = this.peers.get(peer);
       if (pc?.remoteDescription) await pc.addIceCandidate(signal.candidate);
+      else {
+        const early = this.earlyCandidates.get(peer) ?? [];
+        if (early.length < 32) early.push(signal.candidate);
+        this.earlyCandidates.set(peer, early);
+      }
     }
+  }
+  /** Candidates that arrived before their peer's description, applied once it is set. */
+  private earlyCandidates = new Map<string, RTCIceCandidateInit[]>();
+  private async applyEarlyCandidates(peer: string, pc: RTCPeerConnection) {
+    for (const candidate of this.earlyCandidates.get(peer) ?? []) {
+      try { await pc.addIceCandidate(candidate); } catch { /* a stale candidate from an earlier attempt */ }
+    }
+    this.earlyCandidates.delete(peer);
   }
   private peer(id: string) {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS }); this.peers.set(id, pc);
     pc.onicecandidate = event => { if (event.candidate) void this.signal({ candidate: event.candidate.toJSON() }, id).catch(() => {}); };
     pc.ondatachannel = event => this.attach(event.channel);
-    pc.onconnectionstatechange = () => {
-      if (['failed', 'closed'].includes(pc.connectionState)) { pc.close(); this.peers.delete(id); }
+    const drop = () => {
+      pc.close();
+      if (this.peers.get(id) === pc) { this.peers.delete(id); this.earlyCandidates.delete(id); }
     };
+    pc.onconnectionstatechange = () => {
+      if (['failed', 'closed'].includes(pc.connectionState)) drop();
+    };
+    // An attempt that never connects (a lost signal, STUN unreachable, UDP
+    // blocked) is given up, so the next `hello` (every 15 s) can try again.
+    // Meanwhile, and if it never works, updates travel over HTTP + SSE.
+    setTimeout(() => { if (!this.closed && pc.connectionState !== 'connected') drop(); }, 12_000);
     return pc;
   }
   private attach(channel: RTCDataChannel) {

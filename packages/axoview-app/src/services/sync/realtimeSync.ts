@@ -1,4 +1,4 @@
-import { receiveCollaboration } from './collaboration';
+import { receiveCollaboration } from './collaborationRegistry';
 import { apiFetch } from '../apiFetch';
 import { getBrowserId } from './browserId';
 import { getDeviceId } from './deviceId';

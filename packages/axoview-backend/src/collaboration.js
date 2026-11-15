@@ -101,6 +101,12 @@ export function createJournal({ tableName, region, ddbClient }) {
   };
 }
 
+/** A diagram's name for a live notice about one that is not open. */
+const nameOf = body => {
+  const name = typeof body?.name === 'string' && body.name.trim() ? body.name : body?.title;
+  return typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : 'Untitled';
+};
+
 export function createCollaboration({ journal, notify, cache }) {
   const timers = new Map();
   const roomOf = (target, id) => `COLLAB#${target.owner || '_shared'}#${id}`;
@@ -193,7 +199,7 @@ export function createCollaboration({ journal, notify, cache }) {
       const seq = await journal.append(state.room, update, target.adapter);
       // Persist first. Pub/Sub is only a latency optimization; replay survives
       // Redis failover, dropped subscriptions and API pod loss.
-      await notify(target, { kind: 'collaboration', generation: state.generation, action: 'save', id, origin, ...(agent ? { agent } : {}), ...(update.length < 128 * 1024 ? { update } : {}), documentSeq: seq });
+      await notify(target, { kind: 'collaboration', generation: state.generation, action: 'save', id, origin, ...(agent ? { agent, diagramName: nameOf(state.saved.body) } : {}), ...(update.length < 128 * 1024 ? { update } : {}), documentSeq: seq });
       schedule(target, id);
       return { seq };
     },
