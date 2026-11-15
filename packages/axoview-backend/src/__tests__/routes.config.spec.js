@@ -1,4 +1,5 @@
 import { externalIdentityProviders, getConfig } from '../routes.js';
+import { autosaveDelayFrom } from '../autosaveDelay.js';
 import { makeCtx } from './helpers/memoryAdapter.js';
 
 describe('getConfig', () => {
@@ -14,6 +15,7 @@ describe('getConfig', () => {
       cognito: null,
       serverStorage: true,
       collaborationEnabled: false,
+      autosaveDelayMs: 1500,
       sharing: false,
       publicBaseUrl: null,
       ai: {
@@ -136,5 +138,28 @@ describe('getConfig', () => {
     const result = getConfig(null, null);
     expect(result.status).toBe(200);
     expect(result.body.authMode).toBe('none');
+  });
+});
+
+describe('AUTOSAVE_DELAY_MS: how long after the last edit a diagram is saved', () => {
+  test('the app is told the configured delay', () => {
+    expect(getConfig(null, makeCtx({ env: { AUTOSAVE_DELAY_MS: 2000 } })).body.autosaveDelayMs).toBe(2000);
+  });
+
+  test('unset: 1.5 s; a whole number of ms from 250 to 30000: that; anything else: 1.5 s, with a warning', () => {
+    const warnings = [];
+    const warn = (message) => warnings.push(message);
+    expect(autosaveDelayFrom(undefined, warn)).toBe(1500);
+    expect(autosaveDelayFrom('', warn)).toBe(1500);
+    expect(warnings).toEqual([]);
+    expect(autosaveDelayFrom('2500', warn)).toBe(2500);
+    expect(autosaveDelayFrom(' 800 ', warn)).toBe(800);
+    expect(autosaveDelayFrom('250', warn)).toBe(250);
+    expect(autosaveDelayFrom('30000', warn)).toBe(30000);
+    for (const bad of ['1.5s', '1500ms', '1.5', '-1', '0', '249', '30001', 'abc', '1e3']) {
+      expect([bad, autosaveDelayFrom(bad, warn)]).toEqual([bad, 1500]);
+    }
+    expect(warnings).toHaveLength(9);
+    expect(warnings[0]).toMatch(/AUTOSAVE_DELAY_MS must be a whole number of milliseconds from 250 to 30000; using 1500/);
   });
 });

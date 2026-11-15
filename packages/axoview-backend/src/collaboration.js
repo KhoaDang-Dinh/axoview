@@ -4,12 +4,15 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { seedModel, patchModel, readModel } from '@axoview/collaboration';
 import * as routes from './routes.js';
+import { DEFAULT_AUTOSAVE_DELAY_MS } from './autosaveDelay.js';
 
 const encode = bytes => Buffer.from(bytes).toString('base64');
 const decode = text => new Uint8Array(Buffer.from(text, 'base64'));
 const error = (status, message) => Object.assign(new Error(message), { status, body: { error: message } });
 const logKey = seq => `UPDATE#${String(seq).padStart(16, '0')}`;
 export const MAX_UPDATE_BYTES = 4 * 1024 * 1024;
+/** A busy live session is snapshotted at least this often, however often edits come. */
+export const BUSY_SNAPSHOT_MS = 15_000;
 
 export function createJournal({ tableName, region, ddbClient }) {
   const ddb = ddbClient || tableName && DynamoDBDocumentClient.from(new DynamoDBClient({ region }));
@@ -107,7 +110,7 @@ const nameOf = body => {
   return typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : 'Untitled';
 };
 
-export function createCollaboration({ journal, notify, cache }) {
+export function createCollaboration({ journal, notify, cache, idleMs = DEFAULT_AUTOSAVE_DELAY_MS }) {
   const timers = new Map();
   const roomOf = (target, id) => `COLLAB#${target.owner || '_shared'}#${id}`;
   const generationOf = saved => createHash('sha256').update(saved.body.created || 'legacy').digest('hex').slice(0, 24);
@@ -165,8 +168,9 @@ export function createCollaboration({ journal, notify, cache }) {
     const previous = timers.get(room);
     const first = previous?.first || Date.now();
     if (previous) clearTimeout(previous.timer);
-    // Idle: 2.5s. Continuous collaboration: a bounded 15s checkpoint window.
-    const delay = Math.max(0, Math.min(2500, 15000 - (Date.now() - first)));
+    // `idleMs` (AUTOSAVE_DELAY_MS, 1.5 s by default) after the last edit;
+    // while a session stays busy, at least every 15 s since its first unsaved edit.
+    const delay = Math.max(0, Math.min(idleMs, BUSY_SNAPSHOT_MS - (Date.now() - first)));
     const timer = setTimeout(() => {
       timers.delete(room);
       void (async () => { if (!cache?.claim || await cache.claim(room)) await snapshot(target, id); })().catch(err => console.warn('[collaboration] snapshot deferred', err.name));

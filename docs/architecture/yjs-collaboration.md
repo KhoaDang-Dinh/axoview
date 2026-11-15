@@ -24,8 +24,12 @@ whole-document checkpoint broadcasts are suppressed for active Yjs sessions.
   atomic sequence/update/deduplication transaction. Large deltas use immutable S3
   objects referenced by the journal. Filesystem deployments use an atomic local
   journal and support one API process.
-- Full JSON plus Yjs checkpoints are assembled on the server after 2.5 seconds
-  idle, or at most 15 seconds into continuous activity. Explicit save, diagram
+- Full JSON plus Yjs checkpoints are assembled on the server `AUTOSAVE_DELAY_MS`
+  after the last edit (default 1.5 seconds), or at most 15 seconds into
+  continuous activity. The same setting is the app's autosave delay: the
+  backend reads it once (`src/autosaveDelay.js`, 250 to 30000 ms) and tells
+  the app through `/api/config` (`autosaveDelayMs`). Deployments set it with
+  the GitHub variable `DEV_AUTOSAVE_DELAY_MS` / `PROD_AUTOSAVE_DELAY_MS`. Explicit save, diagram
   switching and logout flush pending uploads and checkpoint immediately.
   Browser termination is best effort; IndexedDB and acknowledged journal entries
   are the recovery mechanism. Network failure cannot guarantee a final upload.

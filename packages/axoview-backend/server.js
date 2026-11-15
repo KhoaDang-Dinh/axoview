@@ -1,5 +1,6 @@
 import { createCollaboration, createJournal } from './src/collaboration.js';
 import { withRedisSync } from './src/redisSync.js';
+import { autosaveDelayFrom } from './src/autosaveDelay.js';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -71,6 +72,8 @@ const aiChatRouter = createAiChatRouter({ workspaceReader: () => chatWorkspaceRe
 const routeEnv = {
   STORAGE_ENABLED,
   COLLABORATION_ENABLED: STORAGE_ENABLED && process.env.COLLABORATION_ENABLED !== 'off',
+  // How long after the last edit a diagram is saved (src/autosaveDelay.js).
+  AUTOSAVE_DELAY_MS: autosaveDelayFrom(process.env.AUTOSAVE_DELAY_MS),
   ENABLE_GIT_BACKUP,
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || null,
   AUTH_MODE: process.env.AUTH_MODE || 'none',
@@ -332,6 +335,7 @@ const syncCursor = withRedisSync(STORAGE_ADAPTER === 'aws'
   ? createDynamoSyncCursor({ tableName: DYNAMODB_TABLE, region: AWS_REGION })
   : createMemorySyncCursor(), process.env.REDIS_URL);
 const collaboration = createCollaboration({
+  idleMs: routeEnv.AUTOSAVE_DELAY_MS,
   cache: syncCursor,
   journal: createJournal({ tableName: STORAGE_ADAPTER === 'aws' ? DYNAMODB_TABLE : null, region: AWS_REGION }),
   notify: async (target, change) => notify(target.owner

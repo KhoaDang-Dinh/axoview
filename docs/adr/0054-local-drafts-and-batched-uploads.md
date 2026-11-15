@@ -144,3 +144,13 @@ uploads). Each save stays cheap: one metadata read, and nothing written for an u
   each other's changes by themselves.
 - `tests-docker/batched-upload.spec.ts`: rewritten for uploads at once.
 
+## Addendum 2026-11-15: one autosave delay, set by the deployment
+
+The delay between the last edit and the save is one setting, `AUTOSAVE_DELAY_MS`, default 1.5 s
+(owner decision). The backend reads it (`src/autosaveDelay.js`; whole milliseconds from 250 to
+30000, anything else falls back to 1.5 s with a warning). It uses it for a live session's server
+snapshot and publishes it in `/api/config` as `autosaveDelayMs`, which `hooks/useAutoSave.ts`
+waits for. Deployments set it with the GitHub variable `DEV_AUTOSAVE_DELAY_MS` /
+`PROD_AUTOSAVE_DELAY_MS` (infra `bootstrap/ai-settings.sh`, which refuses a bad value). This
+replaces the 1 s of the addendum above and the 2.5 s the Yjs branch had hard-coded in two places.
+

@@ -9,11 +9,10 @@
  * the defect it pins.
  */
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useAutoSave } from '../useAutoSave';
+import { autosaveDelayOr, DEBOUNCE_MS, useAutoSave } from '../useAutoSave';
 import type { StorageProvider } from '../../services/storage/types';
 import type { DiagramData } from '../../diagramUtils';
 
-const DEBOUNCE_MS = 2500;
 
 const MODEL = (title: string): DiagramData =>
   ({ title, icons: [], colors: [], items: [], views: [], fitToScreen: true }) as DiagramData;
@@ -293,5 +292,31 @@ describe('resetStatus()', () => {
 
     expect(calls).toEqual([{ id: 'd1', title: 'queued' }]);
     expect(result.current.saveStatus).toBe('idle');
+  });
+});
+
+describe('the delay after the last edit (AUTOSAVE_DELAY_MS, via /api/config)', () => {
+  test('the deployment\'s delay is used when given, the 1.5 s default otherwise', () => {
+    for (const [debounceMs, waits] of [[undefined, 1500], [400, 400], [5000, 5000]] as const) {
+      const rec = makeOkStorage();
+      const { result, unmount } = renderHook(() =>
+        useAutoSave({ storage: rec.storage, enabled: true, onError: () => {}, debounceMs })
+      );
+      act(() => result.current.scheduleSave('d1', MODEL('x')));
+      act(() => { jest.advanceTimersByTime(waits - 1); });
+      expect([debounceMs, rec.calls.length]).toEqual([debounceMs, 0]);
+      act(() => { jest.advanceTimersByTime(1); });
+      expect([debounceMs, rec.calls.length]).toEqual([debounceMs, 1]);
+      unmount();
+    }
+  });
+
+  test('a delay that is not a whole number of ms from 250 to 30000 falls back to 1.5 s', () => {
+    expect(DEBOUNCE_MS).toBe(1500);
+    for (const bad of [undefined, null, 0, 249, 30_001, 1500.5, NaN, '2000', -1]) {
+      expect([bad, autosaveDelayOr(bad)]).toEqual([bad, 1500]);
+    }
+    expect(autosaveDelayOr(250)).toBe(250);
+    expect(autosaveDelayOr(30_000)).toBe(30_000);
   });
 });

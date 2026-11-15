@@ -47,6 +47,8 @@ interface UseAutoSaveOptions {
   onSaved?: (diagramId: string, savedAt: Date) => void;
   onError?: (error: Error) => void;
   batch?: AutoSaveBatching | null;
+  /** How long after the last edit a save starts (runtime config); DEBOUNCE_MS when absent. */
+  debounceMs?: number;
 }
 
 export interface UseAutoSaveResult {
@@ -81,8 +83,24 @@ export interface UseAutoSaveResult {
   resetStatus: () => void;
 }
 
-// Idle checkpoint delay. Live Yjs edits travel independently of this timer.
-export const DEBOUNCE_MS = 2500;
+/**
+ * How long after the last edit a save starts, when the server does not say
+ * otherwise: 1.5 s. The deployment sets it with AUTOSAVE_DELAY_MS, which the
+ * app reads from /api/config as `autosaveDelayMs` (owner decision 2026-11-15;
+ * axoview-backend/src/autosaveDelay.js). Live (Yjs) edits travel to the other
+ * devices at once, independently of this timer.
+ */
+export const DEBOUNCE_MS = 1500;
+/** The range a configured delay must fall in; anything else uses DEBOUNCE_MS. */
+export const MIN_DEBOUNCE_MS = 250;
+export const MAX_DEBOUNCE_MS = 30_000;
+
+/** A configured delay, if it is a whole number of ms in range; else the default. */
+export function autosaveDelayOr(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= MIN_DEBOUNCE_MS && value <= MAX_DEBOUNCE_MS
+    ? value
+    : DEBOUNCE_MS;
+}
 
 interface Pending {
   diagramId: string;
@@ -99,7 +117,9 @@ export function useAutoSave({
   onSaved,
   onError,
   batch = null,
+  debounceMs,
 }: UseAutoSaveOptions): UseAutoSaveResult {
+  const delayMs = autosaveDelayOr(debounceMs);
   const [saveStatus, setSaveStatusState] = useState<SaveStatus>('idle');
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
@@ -234,9 +254,9 @@ export function useAutoSave({
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
         void onDebounced();
-      }, DEBOUNCE_MS);
+      }, delayMs);
     },
-    [enabled, onDebounced, setStatus]
+    [enabled, onDebounced, setStatus, delayMs]
   );
 
   const saveNow = useCallback(async (): Promise<FlushOutcome> => {

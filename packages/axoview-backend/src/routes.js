@@ -7,6 +7,7 @@
  * and returns `{ status, body }` or throws HttpError.
  */
 
+import { DEFAULT_AUTOSAVE_DELAY_MS } from './autosaveDelay.js';
 import { contentHash, pickServerOwned, SERVER_OWNED_DIAGRAM_FIELDS } from './diagramContent.js';
 
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -216,6 +217,8 @@ export function getConfig(_adapter, ctx) {
         : null,
       serverStorage: env.STORAGE_ENABLED !== false,
       collaborationEnabled: env.COLLABORATION_ENABLED === true,
+      // Wait this long after the last edit to save (src/autosaveDelay.js).
+      autosaveDelayMs: env.AUTOSAVE_DELAY_MS ?? DEFAULT_AUTOSAVE_DELAY_MS,
       // Sharing a diagram with another account by email (ADR 0057; the Express
       // target with Cognito only: server.js decides and sets SHARING_ENABLED).
       sharing: env.SHARING_ENABLED === true,

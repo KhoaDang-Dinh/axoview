@@ -536,6 +536,8 @@ export function DiagramLifecycleProvider({
     batch,
     storage,
     enabled: !!storage && !isReadonlyUrl,
+    // AUTOSAVE_DELAY_MS from the deployment (1.5 s by default).
+    debounceMs: runtimeConfig?.autosaveDelayMs,
     onSaved: (id, savedAt) => {
       setLastSaved(savedAt);
       // Refresh the tree only on the first save of a given id (the save that

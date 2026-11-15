@@ -1,3 +1,4 @@
+import { autosaveDelayOr } from './useAutoSave';
 import { apiBaseUrl } from '../utils/apiBaseUrl';
 import { setConfiguredPublicBase } from '../appBase';
 import type { CognitoAuthConfig } from '../stores/cognitoSessionStore';
@@ -22,6 +23,11 @@ export interface RuntimeConfig {
   cognito: CognitoAuthConfig | null;
   serverStorage: boolean;
   collaborationEnabled?: boolean;
+  /**
+   * How long after the last edit a diagram is saved, in ms (the deployment's
+   * AUTOSAVE_DELAY_MS). Absent or out of range: hooks/useAutoSave.ts's 1.5 s.
+   */
+  autosaveDelayMs?: number;
   /**
    * Sharing a diagram with another account by email (ADR 0057): the server
    * has accounts (Cognito) and storage. Missing → false.
@@ -139,6 +145,7 @@ export async function fetchRuntimeConfig(): Promise<RuntimeConfig> {
         // Missing/malformed capability values fail closed.
         sharing: data.sharing === true,
         collaborationEnabled: data.collaborationEnabled === true,
+        autosaveDelayMs: autosaveDelayOr(data.autosaveDelayMs),
         ai: {
           chatEnabled: data.ai?.chatEnabled === true,
           liveChat: data.ai?.chatEnabled === true && data.ai?.liveChat === true,

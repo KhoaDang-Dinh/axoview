@@ -74,6 +74,27 @@ describe('durable update boundary', () => {
     expect(JSON.parse(new TextDecoder().decode(objects.get('diagrams/test'))).title).toBe('Recovered');
     expect(notices[0].kind).toBe('collaboration');
   });
+  it('assembles the saved diagram the configured delay after the last edit (AUTOSAVE_DELAY_MS)', async () => {
+    const { target, objects } = fixture();
+    const service = createCollaboration({ journal: createJournal({}), notify: async () => {}, idleMs: 300 });
+    const stored = () => JSON.parse(new TextDecoder().decode(objects.get('diagrams/test'))).title;
+    const edit = async (title) => {
+      const state = await service.state(target, 'test'), doc = new Y.Doc();
+      Y.applyUpdate(doc, Buffer.from(state.update, 'base64'));
+      const vector = Y.encodeStateVector(doc), before = readModel(doc);
+      patchModel(doc, before, { ...before, title });
+      await service.update(target, 'test', Buffer.from(Y.encodeStateAsUpdate(doc, vector)).toString('base64'), 'device-123');
+    };
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    await edit('First');
+    await wait(150);
+    // Another edit within the delay pushes the save back.
+    await edit('Second');
+    await wait(200);
+    expect(stored()).toBe('Test');
+    await wait(400);
+    expect(stored()).toBe('Second');
+  });
   it('does not announce success when journal persistence fails', async () => {
     const { target } = fixture(); let announced = false;
     const journal = { since: async () => [], append: async () => { throw Error('storage unavailable'); } };
