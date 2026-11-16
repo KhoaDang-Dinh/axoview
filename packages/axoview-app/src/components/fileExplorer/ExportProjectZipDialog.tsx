@@ -100,7 +100,9 @@ export function ExportProjectZipDialog({
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: 'text.secondary'
+          }}>
             {description}
           </Typography>
           {error && <Alert severity="error">{error}</Alert>}

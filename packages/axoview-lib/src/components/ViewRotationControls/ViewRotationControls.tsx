@@ -217,10 +217,12 @@ export const ViewRotationControls = () => {
     <Stack
       direction="row"
       spacing={0}
-      alignItems="center"
       role="group"
       aria-label={t('groupLabel')}
       data-axoview-id="view-rotation"
+      sx={{
+        alignItems: 'center'
+      }}
     >
       <Tooltip
         title={stepTitle(t('rotateCounterClockwise'))}

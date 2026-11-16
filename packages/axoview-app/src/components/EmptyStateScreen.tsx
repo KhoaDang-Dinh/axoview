@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Box, Button, CardActionArea, Link, Paper, Typography } from '@mui/material';
-import { AddCircleOutline as AddIcon, FileUploadOutlined as ImportIcon } from '@mui/icons-material';
+import { AddCircleOutlined as AddIcon, FileUploadOutlined as ImportIcon } from '@mui/icons-material';
 import { GoogleGIcon } from './GoogleGIcon';
 import { isoGridBackground } from '../utils/isoGridBackground';
 
@@ -140,7 +140,9 @@ export function EmptyStateScreen({ onCreate, onImport, showSignIn, onSignIn }: P
           >
             {t('auth.signIn', 'Sign in with Google')}
           </Button>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: 'text.secondary'
+          }}>
             {t(
               'emptyState.signInStripCaption',
               'Save your diagrams to Google Drive — or continue in this session and move them to Drive anytime.'
@@ -174,12 +176,16 @@ export function EmptyStateScreen({ onCreate, onImport, showSignIn, onSignIn }: P
           rel="noopener noreferrer"
           variant="caption"
           underline="hover"
-          color="text.secondary"
           data-axoview-id="screen-empty-privacy-link"
+          sx={{
+            color: 'text.secondary'
+          }}
         >
           {t('legal.privacy', 'Privacy')}
         </Link>
-        <Typography variant="caption" color="text.disabled" aria-hidden>
+        <Typography variant="caption" aria-hidden sx={{
+          color: 'text.disabled'
+        }}>
           ·
         </Typography>
         <Link
@@ -188,8 +194,10 @@ export function EmptyStateScreen({ onCreate, onImport, showSignIn, onSignIn }: P
           rel="noopener noreferrer"
           variant="caption"
           underline="hover"
-          color="text.secondary"
           data-axoview-id="screen-empty-terms-link"
+          sx={{
+            color: 'text.secondary'
+          }}
         >
           {t('legal.terms', 'Terms')}
         </Link>

@@ -35,7 +35,9 @@ export function StatusCluster() {
     const content = (() => {
       if (saveStatus === 'saving') {
         return (
-          <Stack direction="row" alignItems="center" spacing={0.5}>
+          <Stack direction="row" spacing={0.5} sx={{
+            alignItems: 'center'
+          }}>
             <SavingIcon sx={{ fontSize: 13, color: 'text.disabled', animation: 'spin 1s linear infinite', '@keyframes spin': { from: { transform: 'rotate(0deg)' }, to: { transform: 'rotate(360deg)' } } }} />
             <Typography variant="caption" sx={{ color: 'text.disabled', userSelect: 'none' }}>
               {t('status.saving', 'Saving…')}
@@ -45,7 +47,9 @@ export function StatusCluster() {
       }
       if (saveStatus === 'error') {
         return (
-          <Stack direction="row" alignItems="center" spacing={0.5}>
+          <Stack direction="row" spacing={0.5} sx={{
+            alignItems: 'center'
+          }}>
             <SaveErrorIcon sx={{ fontSize: 13, color: 'error.main' }} />
             <Typography variant="caption" sx={{ color: 'error.main', userSelect: 'none' }}>
               {t('status.saveFailed', 'Save failed')}

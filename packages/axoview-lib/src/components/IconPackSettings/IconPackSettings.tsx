@@ -64,7 +64,12 @@ export const IconPackSettings: React.FC<IconPackSettingsProps> = ({
               <FormLabel component="legend" sx={{ fontWeight: 600, mb: 0.5 }}>
                 {t('settings.iconPacks.lazyLoading')}
               </FormLabel>
-              <Typography variant="body2" color="text.secondary">
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary'
+                }}
+              >
                 {t('settings.iconPacks.lazyLoadingDesc')}
               </Typography>
             </Box>
@@ -90,7 +95,12 @@ export const IconPackSettings: React.FC<IconPackSettingsProps> = ({
             <Typography variant="body1" sx={{ fontWeight: 600 }}>
               {t('settings.iconPacks.coreIsoflow')}
             </Typography>
-            <Typography variant="caption" color="text.secondary">
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary'
+              }}
+            >
               {t('settings.iconPacks.alwaysEnabled')}
             </Typography>
           </Box>
@@ -135,13 +145,23 @@ export const IconPackSettings: React.FC<IconPackSettingsProps> = ({
                     {pack.loading && (
                       <>
                         <CircularProgress size={14} />
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            color: 'text.secondary'
+                          }}
+                        >
                           {t('settings.iconPacks.loading')}
                         </Typography>
                       </>
                     )}
                     {pack.loaded && !pack.loading && (
-                      <Typography variant="caption" color="success.main">
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: 'success.main'
+                        }}
+                      >
                         {t('settings.iconPacks.loaded')} •{' '}
                         {t('settings.iconPacks.iconCount').replace(
                           '{count}',
@@ -155,7 +175,12 @@ export const IconPackSettings: React.FC<IconPackSettingsProps> = ({
                       </Typography>
                     )}
                     {!pack.loaded && !pack.loading && !pack.error && (
-                      <Typography variant="caption" color="text.secondary">
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          color: 'text.secondary'
+                        }}
+                      >
                         {t('settings.iconPacks.notLoaded')}
                       </Typography>
                     )}
@@ -176,7 +201,12 @@ export const IconPackSettings: React.FC<IconPackSettingsProps> = ({
 
       <Divider sx={{ my: 3 }} />
 
-      <Typography variant="body2" color="text.secondary">
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary'
+        }}
+      >
         {t('settings.iconPacks.note')}
       </Typography>
     </Box>

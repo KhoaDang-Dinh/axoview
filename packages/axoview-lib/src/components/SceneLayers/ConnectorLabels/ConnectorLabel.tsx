@@ -98,7 +98,6 @@ const ConnectorNameEditor = ({
       >
         <Typography
           variant="body2"
-          fontWeight={400}
           contentEditable
           suppressContentEditableWarning
           onPointerDown={(e) => e.stopPropagation()}
@@ -123,13 +122,13 @@ const ConnectorNameEditor = ({
           }}
           ref={inlineRename.setRef}
           sx={{
+            fontWeight: 400,
             outline: 'none',
             minWidth: 20,
             cursor: 'text',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word'
-          }}
-        >
+          }}>
           {name}
         </Typography>
       </Label>

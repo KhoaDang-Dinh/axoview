@@ -48,9 +48,24 @@ if (!fs.existsSync(TSCONFIG)) die(2, `check-cycles: tsconfig not found: ${TSCONF
 
 const baseline = JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8'));
 
+// madge's resolver maps tsconfig `paths` only through `baseUrl`. TypeScript 6
+// deprecated `baseUrl`, so the lib tsconfig resolves `paths` relative to itself
+// instead; hand madge the same parsed config with `baseUrl` anchored at the lib
+// root so the `src/…` alias still resolves (otherwise the graph collapses and
+// the DENOMINATOR check below fails).
+const ts = require('typescript');
+const parsedTsConfig = ts.parseJsonConfigFileContent(
+  ts.readConfigFile(TSCONFIG, ts.sys.readFile).config,
+  ts.sys,
+  LIB
+);
+
 madge(ENTRY, {
   fileExtensions: ['ts', 'tsx'],
-  tsConfig: TSCONFIG,
+  tsConfig: {
+    ...parsedTsConfig.raw,
+    compilerOptions: { ...parsedTsConfig.options, baseUrl: LIB }
+  },
   detectiveOptions: { ts: { skipTypeImports: false } }
 })
   .then((res) => {

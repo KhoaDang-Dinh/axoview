@@ -49,7 +49,9 @@ export function ConnectedApps() {
     <Box data-axoview-id="ai-connected-apps" sx={{ mb: 2 }}>
       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Connected apps</Typography>
       {grants === null ? null : grants.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           None yet. Choose your AI below to connect it; it works on your diagrams as you.
         </Typography>
       ) : grants.map((grant) => (
@@ -64,7 +66,12 @@ export function ConnectedApps() {
               Disconnect
             </Button>
           </Box>
-          <Typography variant="caption" color="text.secondary" display="block">
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              display: 'block'
+            }}>
             Signs in through {grant.redirectHost} · since {new Date(grant.createdAt).toLocaleDateString()}
           </Typography>
           <FormControlLabel

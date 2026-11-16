@@ -240,7 +240,9 @@ export function ProposalPrompt({
               const ready = steps.filter((step) => step.status === 'ready').length;
               return (
                 <Box key={p.id} data-axoview-id="proposal" sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.25 }}>
-                  <Typography variant="body2" fontWeight={600}>
+                  <Typography variant="body2" sx={{
+                    fontWeight: 600
+                  }}>
                     {who(p)}, {new Date(p.createdAt).toLocaleString()}
                   </Typography>
                   {p.note && (
@@ -254,14 +256,26 @@ export function ProposalPrompt({
                         data-status={step.status} sx={{ color: step.status === 'ready' ? 'text.primary' : 'text.disabled', overflowWrap: 'anywhere' }}>
                         {step.summary}
                         {step.status !== 'ready' && step.problem && (
-                          <Typography component="span" variant="caption" color="warning.main" display="block">
+                          <Typography
+                            component="span"
+                            variant="caption"
+                            sx={{
+                              color: 'warning.main',
+                              display: 'block'
+                            }}>
                             {t('proposals.notApplicable', { problem: step.problem, defaultValue: `Not applicable: ${step.problem}` })}
                           </Typography>
                         )}
                       </Typography>
                     ))}
                   </Box>
-                  <Stack direction="row" spacing={1} sx={{ mt: 1 }} justifyContent="flex-end">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      justifyContent: 'flex-end',
+                      mt: 1
+                    }}>
                     <Button size="small" onClick={() => void reject(p)} disabled={busy !== null}
                       data-axoview-id="proposal-reject" sx={{ textTransform: 'none' }}>
                       {t('proposals.reject', 'Reject')}
@@ -279,7 +293,13 @@ export function ProposalPrompt({
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Typography variant="caption" color="text.secondary" sx={{ flex: 1, pl: 2 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              flex: 1,
+              pl: 2
+            }}>
             {t('proposals.undoHint', 'An approval is one change: Undo takes it back.')}
           </Typography>
           <Button onClick={() => setOpen(false)} sx={{ textTransform: 'none' }}>

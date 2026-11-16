@@ -17,7 +17,7 @@ import { docsSearchFromEnv, createDocsSearch } from './docsSearch.js';
 import { emitMcpTelemetry } from './observability.js';
 import { createMcpEndpoint, RpcError } from './mcpProtocol.js';
 
-export { decodeHeaderValue, MODERN_VERSIONS, LEGACY_VERSIONS } from './mcpProtocol.js';
+export { decodeHeaderValue } from './mcpProtocol.js';
 
 const SERVER_INFO = { name: 'axoview-docs', title: 'Axoview user manual', version: '1.0.0' };
 const INSTRUCTIONS = 'Search the Axoview user manual (an isometric and 2D diagram editor) and read its sections. ' +

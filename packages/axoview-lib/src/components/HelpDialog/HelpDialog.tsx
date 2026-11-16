@@ -210,7 +210,13 @@ export const HelpDialog = () => {
       }}
     >
       <DialogTitle>
-        <Box display="flex" alignItems="center" justifyContent="space-between">
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between'
+          }}
+        >
           <Typography variant="h6" component="div">
             {t('title')}
           </Typography>
@@ -325,7 +331,12 @@ export const HelpDialog = () => {
         </Box>
 
         <Box sx={{ mt: 3, p: 2, bgcolor: 'info.light', borderRadius: 1 }}>
-          <Typography variant="body2" color="info.contrastText">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'info.contrastText'
+            }}
+          >
             <strong>{t('note')}</strong> {t('noteContent')}
           </Typography>
         </Box>

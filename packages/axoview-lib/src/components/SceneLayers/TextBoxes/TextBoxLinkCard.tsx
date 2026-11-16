@@ -440,7 +440,9 @@ export const TextBoxLinkCard = ({ quill, onChanged }: Props) => {
                     </ListItemIcon>
                     <ListItemText
                       primary={d.name}
-                      primaryTypographyProps={{ fontSize: 13, noWrap: true }}
+                      slotProps={{
+                        primary: { noWrap: true, sx: { fontSize: 13 } }
+                      }}
                     />
                   </ListItemButton>
                 ))}

@@ -27,12 +27,19 @@ import {
   useDiagramLifecycle
 } from '../providers/DiagramLifecycleProvider';
 import type { StorageProvider } from '../services/storage/types';
-import type { DiagramData, SavedDiagram } from '../diagramUtils';
+import type { DiagramData } from '../diagramUtils';
 
 export type LifecycleCtx = ReturnType<typeof useDiagramLifecycle>;
 
 export const MODEL = (title: string, items: unknown[] = []): DiagramData =>
-  ({ title, icons: [], colors: [], items, views: [], fitToScreen: true }) as DiagramData;
+  (({
+    title,
+    icons: [],
+    colors: [],
+    items,
+    views: [],
+    fitToScreen: true
+  }) as DiagramData);
 
 export interface StorageDouble {
   storage: StorageProvider;
@@ -139,5 +146,3 @@ export function renderLifecycle() {
     renders: seen
   };
 }
-
-export type { SavedDiagram };

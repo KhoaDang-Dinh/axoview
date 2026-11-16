@@ -20,8 +20,14 @@ export function AgentLevelSwitch({ level, onChange, busy, canChange }: {
 }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, minWidth: 0 }} data-axoview-id="ai-agent-level">
-      <Typography variant="caption" color="text.secondary" component="label" htmlFor="ai-agent-level-select"
-        sx={{ flexShrink: 0 }}>
+      <Typography
+        variant="caption"
+        component="label"
+        htmlFor="ai-agent-level-select"
+        sx={{
+          color: 'text.secondary',
+          flexShrink: 0
+        }}>
         Nova may
       </Typography>
       <Select
@@ -40,8 +46,10 @@ export function AgentLevelSwitch({ level, onChange, busy, canChange }: {
         <MenuItem value="proposer" sx={{ fontSize: 13 }}>Changes need my approval</MenuItem>
       </Select>
       {level === 'proposer' && !canChange && (
-        <Typography variant="caption" color="text.secondary" data-axoview-id="ai-agent-level-capped" noWrap
-          title="You can only view this diagram, so Nova can only suggest here.">
+        <Typography variant="caption" data-axoview-id="ai-agent-level-capped" noWrap title="You can only view this diagram, so Nova can only suggest here."
+          sx={{
+            color: 'text.secondary'
+          }}>
           · Read only here, like you
         </Typography>
       )}

@@ -65,15 +65,18 @@ export const IconCollection = ({
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <Stack
-          sx={{ width: '100%' }}
           direction="row"
           spacing={1}
-          justifyContent="space-between"
-          alignItems="center"
-        >
+          sx={{
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            width: '100%'
+          }}>
           <Typography
             variant="overline"
-            color="text.secondary"
+            sx={{
+              color: 'text.secondary'
+            }}
           >
             {/* Capitalize first char only — preserves TLA casing in upstream
                 pack ids like "AWS", "GCP" while rendering "isoflow" → "Axoview". */}
@@ -82,9 +85,13 @@ export const IconCollection = ({
               <Typography
                 component="span"
                 variant="caption"
-                color="text.disabled"
-                sx={{ ml: 0.5, fontSize: 10, textTransform: 'none', fontWeight: 400 }}
-              >
+                sx={{
+                  color: 'text.disabled',
+                  ml: 0.5,
+                  fontSize: 10,
+                  textTransform: 'none',
+                  fontWeight: 400
+                }}>
                 ({icons.length})
               </Typography>
             )}
@@ -111,10 +118,14 @@ export const IconCollection = ({
           {isLargePack && (
             <Typography
               variant="caption"
-              color="text.disabled"
-              display="block"
-              sx={{ mt: 0.5, px: 0.5, fontSize: 10, lineHeight: 1.4 }}
-            >
+              sx={{
+                color: 'text.disabled',
+                display: 'block',
+                mt: 0.5,
+                px: 0.5,
+                fontSize: 10,
+                lineHeight: 1.4
+              }}>
               Showing {PREVIEW_COUNT} of {icons.length} — use search to find more
             </Typography>
           )}

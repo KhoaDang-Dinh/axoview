@@ -14,7 +14,7 @@ import {
 } from '@mui/material';
 import {
   Close as CloseIcon,
-  DeleteOutline as DeleteIcon,
+  DeleteOutlined as DeleteIcon,
   FileOpenOutlined as LoadIcon
 } from '@mui/icons-material';
 import type { SavedDiagram } from '../diagramUtils';
@@ -51,7 +51,12 @@ export function LoadDialog({ diagrams, onLoad, onDelete, onClose }: Props) {
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
         {diagrams.length === 0 ? (
-          <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              py: 2
+            }}>
             {t('dialog.load.noSavedDiagrams')}
           </Typography>
         ) : (
@@ -90,9 +95,10 @@ export function LoadDialog({ diagrams, onLoad, onDelete, onClose }: Props) {
                 <ListItemText
                   primary={diagram.name}
                   secondary={`${t('dialog.load.updated')}: ${new Date(diagram.updatedAt).toLocaleString()}`}
-                  primaryTypographyProps={{ variant: 'body2' }}
-                  secondaryTypographyProps={{ variant: 'caption' }}
-                />
+                  slotProps={{
+                    primary: { variant: 'body2' },
+                    secondary: { variant: 'caption' }
+                  }} />
               </ListItem>
             ))}
           </List>

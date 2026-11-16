@@ -40,7 +40,9 @@ export function PublicShareLoadErrorDialog({
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {t(
             'dialog.publicShareLoadError.body',
             'The share link may have expired, been revoked, or the diagram may no longer exist.'

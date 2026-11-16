@@ -196,8 +196,10 @@ export function DriveDisplayGate() {
         {driveDisplayState === 'gone' ? (
           <Typography
             variant="body2"
-            color="text.secondary"
             data-axoview-id="drive-display-gate-gone"
+            sx={{
+              color: 'text.secondary'
+            }}
           >
             {t(
               'driveDisplay.goneBody',
@@ -207,8 +209,10 @@ export function DriveDisplayGate() {
         ) : driveDisplayState === 'too-large' ? (
           <Typography
             variant="body2"
-            color="text.secondary"
             data-axoview-id="drive-display-gate-too-large"
+            sx={{
+              color: 'text.secondary'
+            }}
           >
             {t(
               'driveDisplay.tooLargeBody',
@@ -218,8 +222,10 @@ export function DriveDisplayGate() {
         ) : driveDisplayState === 'bad-link' ? (
           <Typography
             variant="body2"
-            color="text.secondary"
             data-axoview-id="drive-display-gate-bad-link"
+            sx={{
+              color: 'text.secondary'
+            }}
           >
             {t(
               'driveDisplay.badLinkBody',
@@ -228,7 +234,9 @@ export function DriveDisplayGate() {
           </Typography>
         ) : driveDisplayState === 'grant-not-registered' ? (
           <>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: 'text.secondary'
+            }}>
               {t(
                 'driveDisplay.grantNotRegisteredBody',
                 "Google hasn't finished registering your access to this file yet. This usually takes a moment — try again."
@@ -245,7 +253,9 @@ export function DriveDisplayGate() {
           </>
         ) : driveDisplayState === 'transient' ? (
           <>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: 'text.secondary'
+            }}>
               {t(
                 'driveDisplay.transientBody',
                 "We couldn't reach Google Drive to load this diagram. Check your connection and try again."
@@ -262,7 +272,9 @@ export function DriveDisplayGate() {
           </>
         ) : driveDisplayState === 'needs-signin' ? (
           <>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: 'text.secondary'
+            }}>
               {t(
                 'driveDisplay.signInBody',
                 'Sign in with Google so Axoview can check whether this diagram has been shared with you.'
@@ -281,7 +293,9 @@ export function DriveDisplayGate() {
           </>
         ) : pickerAvailable ? (
           <>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: 'text.secondary'
+            }}>
               {t(
                 'driveDisplay.grantBody',
                 'You are signed in, but Axoview needs your permission to open this specific file from Google Drive.'
@@ -308,7 +322,9 @@ export function DriveDisplayGate() {
           </>
         ) : (
           <>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: 'text.secondary'
+            }}>
               {signedInEmail
                 ? t('driveDisplay.grantUnavailableAs', {
                     defaultValue:

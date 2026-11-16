@@ -285,7 +285,9 @@ export function FileTreeNode({
     // 'empty'
     return (
       <Box style={style} sx={indentSx}>
-        <Typography variant="caption" color="text.secondary" noWrap>
+        <Typography variant="caption" noWrap sx={{
+          color: 'text.secondary'
+        }}>
           {node.data.placeId === 'google-drive'
             ? t('places.driveEmpty', 'No diagrams in Drive yet.')
             : t('fileExplorer.empty', 'No diagrams yet. Create one to get started.')}
