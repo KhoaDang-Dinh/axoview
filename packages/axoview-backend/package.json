@@ -24,7 +24,10 @@
     "dotenv": "^17.4.0",
     "express": "^5.2.1",
     "helmet": "^8.1.0",
-    "zod": "^4.6.7"
+    "redis": "^6.3.1",
+    "yjs": "^13.6.33",
+    "zod": "^4.6.7",
+    "@axoview/collaboration": "file:../axoview-collaboration"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

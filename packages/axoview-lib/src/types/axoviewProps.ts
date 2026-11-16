@@ -756,6 +756,8 @@ export interface AxoviewProps {
 }
 
 export interface LoadOptions {
+  /** CRDT-owned selective undo; remote merges never undo another person's edits. */
+  collaborationHistory?: { undo: () => void; redo: () => void; canUndo: () => boolean; canRedo: () => boolean };
   /** When true, zoom and scroll are preserved instead of being reset to defaults. */
   preserveViewport?: boolean;
   /**

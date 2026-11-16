@@ -1,3 +1,5 @@
+import { activeCollaboration, type LiveSession } from '../services/sync/collaborationRegistry';
+import { leanIfModel } from '../services/storage/leanModel';
 import {
   createContext,
   useCallback,
@@ -328,6 +330,7 @@ export function DiagramLifecycleProvider({
     storage,
     storageManager,
     serverStorageAvailable,
+    runtimeConfig,
     remoteStorageActive,
     setActiveProviderId,
     defaultPlaceId,
@@ -509,7 +512,7 @@ export function DiagramLifecycleProvider({
         lineageRef.current.set(id, [...parents, result.rev]);
         // This tab's own content now: a sibling's save of this diagram is news again.
         adoptedFromRef.current.delete(id);
-        postToTabs(
+        if (!activeCollaboration(id)) postToTabs(
           {
             type: 'diagram-checkpoint', userKey, id, device: getDeviceId(),
             rev: result.rev, parents, baseVersion, baseStamp, model
@@ -521,7 +524,7 @@ export function DiagramLifecycleProvider({
       onUploaded: (id, rev) => {
         const userKey = userKeyRef.current;
         void useDraftStore.getState().uploaded(userKey, id, rev);
-        postToTabs(
+        if (!activeCollaboration(id)) postToTabs(
           { type: 'diagram-uploaded', userKey, id, rev, version: knownVersionOfRef.current(id), stamp: serverStampOf(id) },
           { fallback: false }
         );
@@ -533,6 +536,8 @@ export function DiagramLifecycleProvider({
     batch,
     storage,
     enabled: !!storage && !isReadonlyUrl,
+    // AUTOSAVE_DELAY_MS from the deployment (1.5 s by default).
+    debounceMs: runtimeConfig?.autosaveDelayMs,
     onSaved: (id, savedAt) => {
       setLastSaved(savedAt);
       // Refresh the tree only on the first save of a given id (the save that
@@ -782,6 +787,15 @@ export function DiagramLifecycleProvider({
       // sent for approval is built on exactly what the server holds, so the
       // server can refuse it if the diagram changes elsewhere meanwhile.
       if ((await autoSaveSaveNowRef.current()) === 'error') return { status: 'unsaved', steps: [] };
+      // A live (Yjs) session: have the server assemble its snapshot now, so the
+      // approval is checked against the version that holds every edit so far
+      // (the server also snapshots on its own a few seconds after an edit,
+      // which would otherwise make this tab's version stale).
+      try {
+        await activeCollaboration(id)?.flush();
+      } catch {
+        return { status: 'unsaved', steps: [] };
+      }
       if (currentDiagramRef.current?.id !== id) return { status: 'nothing', steps: [] };
       const prepared = axoviewRef.current?.prepareAgentOperations(operations, { viewId });
       if (!prepared) return { status: 'nothing', steps: [] };
@@ -791,6 +805,16 @@ export function DiagramLifecycleProvider({
       // Stored. If another diagram was opened meanwhile, it is not this
       // editor's to show: the stored diagram has the change when reopened.
       if (currentDiagramRef.current?.id !== id) return { status: 'made', steps: prepared.steps };
+      // A live (Yjs) session: the server wrote the approved change into the
+      // shared document, and it reaches this editor as that document's update,
+      // like everyone else's. Putting it in the editor here as well would be a
+      // second, concurrent edit of the same fields (names would double), so
+      // pull the update now instead of waiting for the stream.
+      const live = activeCollaboration(id);
+      if (live) {
+        await live.sync().catch(() => {});
+        return { status: 'made', steps: prepared.steps };
+      }
       return { status: 'made', steps: prepared.commit() };
     });
     return () => setStoreThenApply(null);
@@ -1468,6 +1492,8 @@ export function DiagramLifecycleProvider({
       // created: just made here, so this browser cannot hold a draft of it.
       { remote = false, view, created = false }: { remote?: boolean; view?: string; created?: boolean } = {}
     ) => {
+      const leaving = currentDiagramRef.current?.id;
+      if (!remote && leaving && leaving !== id) await activeCollaboration(leaving)?.flush();
       let data: PersistedDiagramBlob = isPersistedDiagramBlob(rawData) ? rawData : {};
 
       // Opening it (not a reload): this browser may hold edits to it that
@@ -1966,6 +1992,8 @@ export function DiagramLifecycleProvider({
   // every kind of storage (the server's sync stream follows for server
   // storage, and finds nothing left to close).
   useEffect(() => onTabMessage((message) => {
+    if ('id' in message && typeof message.id === 'string' && activeCollaboration(message.id) &&
+      (message.type === 'diagram-checkpoint' || message.type === 'diagram-uploaded')) return;
     if (message.type === 'diagram-checkpoint') {
       void takeCheckpointRef.current(message);
       return;
@@ -2124,7 +2152,10 @@ export function DiagramLifecycleProvider({
 
   // Signing out (here or in another tab): save pending edits first.
   useEffect(() => registerBeforeSignOut(async () => {
-    if (currentDiagramRef.current) await autoSaveSaveNowRef.current();
+    if (currentDiagramRef.current) {
+      await autoSaveSaveNowRef.current();
+      await activeCollaboration(currentDiagramRef.current.id)?.flush();
+    }
   }), []);
 
   // Defined further down; the live notices' buttons call them.
@@ -2136,6 +2167,7 @@ export function DiagramLifecycleProvider({
     useAssistantPageStore.getState().setReviewProposalsOf(id);
     if (currentDiagramRef.current?.id !== id) void openDiagramByIdRef.current(id, change.diagramName ?? '');
   });
+  const agentNoticeAtRef = useRef(new Map<string, number>());
   useRealtimeSync({
     enabled: serverStorageAvailable && storage?.id === 'local' && !isReadonlyUrl,
     baseUrl: apiBaseUrl(),
@@ -2149,6 +2181,10 @@ export function DiagramLifecycleProvider({
     },
     reloadOpenDiagram: reloadOpenDiagramFromRemote,
     alreadyHave: (change) => {
+      if (change.id && activeCollaboration(change.id) && change.action === 'save') {
+        void activeCollaboration(change.id)?.sync().catch(() => {});
+        return true;
+      }
       if (change.kind !== 'diagram' || change.action !== 'save' || !change.id || !change.origin) return false;
       if (currentDiagramRef.current?.id !== change.id) return false;
       if (adoptedFromRef.current.get(change.id) !== change.origin) return false;
@@ -2175,6 +2211,12 @@ export function DiagramLifecycleProvider({
     },
     onAgentChange: (change, open) => {
       const id = change.id!;
+      // One approval can arrive twice (the save's event and the live
+      // session's update): say it once.
+      const said = `${id}\n${change.agent}`;
+      const last = agentNoticeAtRef.current.get(said) ?? 0;
+      if (Date.now() - last < 4000) return;
+      agentNoticeAtRef.current.set(said, Date.now());
       notificationStore.push({
         severity: 'info',
         message: open
@@ -2489,12 +2531,48 @@ export function DiagramLifecycleProvider({
     };
   }, [saveAllDirty]);
 
+  // One session per open server diagram. Remote merges preserve the viewport;
+  // they never enter the legacy cross-tab checkpoint or whole-document save path.
+  useEffect(() => {
+    const id = currentDiagram?.id;
+    if (!id || !batchingEnabled || runtimeConfig?.collaborationEnabled !== true) return;
+    let attachedHistory = false;
+    let session: LiveSession | null = null;
+    let left = false;
+    // Yjs loads on demand, off the app's first chunk. An edit made before it
+    // arrives goes out as an ordinary save, which the server turns into a delta.
+    void import('../services/sync/collaboration').then(({ DiagramCollaboration }) => {
+      if (left) return;
+      session = new DiagramCollaboration(id, signedInSub ?? 'workspace', raw => {
+      if (currentDiagramRef.current?.id !== id) return;
+      const data = raw as DiagramData;
+      const model = { ...data, icons: [
+        ...iconPackManager.getLoadedIcons(), ...(data.icons || []).filter(icon => icon.collection === 'imported')
+      ] };
+      if (attachedHistory && JSON.stringify(leanIfModel(currentModelRef.current)) === JSON.stringify(leanIfModel(model))) return;
+      attachedHistory = true;
+      currentModelRef.current = model;
+      setCurrentModel(model);
+      isAfterLoadRef.current = true;
+      axoviewRef.current?.load(model as InitialData, { preserveViewport: true, collaborationHistory: activeCollaboration(id)?.history });
+      }, message => notificationStore.push({ severity: 'info', message, autoDismiss: 5000 }));
+    }).catch(() => { /* offline: ordinary saves carry on */ });
+    return () => {
+      left = true;
+      const open = session;
+      if (open) void open.flush().catch(() => {}).finally(() => open.close());
+    };
+  // The callbacks read live refs; changing a title must not reconnect the room.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDiagram?.id, batchingEnabled, signedInSub, runtimeConfig?.collaborationEnabled]);
+
   // ---------------------------------------------------------------------------
   // Model update handler
   // ---------------------------------------------------------------------------
   const handleModelUpdated = useCallback(
     (model: Model) => {
       const updatedModel = documentOf(model);
+      const previousModel = currentModelRef.current;
       setCurrentModel(updatedModel);
 
       if (isAfterLoadRef.current) {
@@ -2516,6 +2594,7 @@ export function DiagramLifecycleProvider({
         // ── Server mode ──────────────────────────────────────────────────────
         const currentId = currentDiagramRef.current?.id ?? null;
         if (currentId) {
+          activeCollaboration(currentId)?.change(leanIfModel(previousModel), leanIfModel(updatedModel));
           autoSave.scheduleSave(currentId, updatedModel);
         }
         // If no diagram open, do nothing — user must create explicitly
