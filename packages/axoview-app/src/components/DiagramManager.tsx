@@ -5,6 +5,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { shareUrlFromUuid } from '../utils/shareUrl';
 import { useDiagramLifecycle } from '../providers/DiagramLifecycleProvider';
 import './DiagramManager.css';
+import { postToTabs } from '../services/sync/tabChannel';
 
 interface Props {
   storage: StorageProvider;
@@ -80,6 +81,8 @@ export const DiagramManager: React.FC<Props> = ({
       // delete, so any pending autosave is canceled and can't resurrect it.
       notifyDiagramDeletedFromTree(id);
       await storage.deleteDiagram(id);
+      // Other tabs with it open close it now (tabChannel).
+      postToTabs({ type: 'diagram-deleted', id });
       await loadDiagrams();
     } catch (err) {
       setError(

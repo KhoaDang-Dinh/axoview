@@ -1,0 +1,82 @@
+# Agent end-to-end: a real MCP client (the official SDK) signs in through
+# OAuth, proposes a change, the person approves it in a real browser, and the
+# diagram is stored: OAuth -> propose -> approve -> persisted
+# (packages/axoview-e2e/tests-agents, ADR 0059 addendum 2026-11-12).
+#
+# It runs the BUILT app against the REAL backend behind one origin
+# (packages/axoview-e2e/agents/stack.mjs); only Cognito is faked. That is why
+# it is its own workflow and not a shard of e2e-playwright.yml, whose suite
+# runs on the dev server with the API mocked in the page.
+#
+# Unlike the main Playwright suite (master only) this runs on pull requests
+# into dev as well, so a feature branch is checked before it merges: it is one
+# test and takes about as long as the build it needs.
+
+name: E2E (agents)
+
+on:
+  pull_request:
+    branches: ["dev", "master"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-agents-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege GITHUB_TOKEN: checkout + run the test only.
+permissions:
+  contents: read
+
+jobs:
+  agents:
+    name: OAuth, propose, approve, persisted
+    if: ${{ github.event.pull_request.draft != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The stack serves packages/axoview-app/build: lib first, then the app.
+      - name: Build
+        run: npm run build
+
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the agent end-to-end test
+        run: npm run test:e2e:agents
+        env:
+          CI: true
+
+      - name: Upload traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-agents-results
+          path: packages/axoview-e2e/test-results/agents
+          if-no-files-found: ignore
+          retention-days: 7

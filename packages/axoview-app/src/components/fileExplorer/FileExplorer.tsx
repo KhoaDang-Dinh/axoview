@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import { Suspense, useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tree, TreeApi, NodeApi } from 'react-arborist';
 import { exportAsJSON, mergeBundledFixtures, type Model } from 'axoview';
@@ -28,8 +28,8 @@ import { useFileTree, FileNode, PlaceId } from '../../hooks/useFileTree';
 import { FileTreeNode } from './FileTreeNode';
 import { FileTreeToolbar } from './FileTreeToolbar';
 import { ContextMenuItems } from './ContextMenuItems';
-import { ExportProjectZipDialog } from './ExportProjectZipDialog';
-import { ImportDialog } from './ImportDialog';
+// Lazy: a static import here would pull the zip code back into the boot bundle.
+import { ExportProjectZipDialog, ImportDialog } from './lazyZipDialogs';
 import { ShareErrorDialog } from '../ShareErrorDialog';
 import { notificationStore } from '../../stores/notificationStore';
 import {
@@ -40,7 +40,7 @@ import {
   typeOfId
 } from '../../utils/fileOperations';
 import { shareUrlFromUuid } from '../../utils/shareUrl';
-import { ExportScope } from '../../services/project/projectZip';
+import type { ExportScope } from '../../services/project/projectZip';
 
 // Section-root ids of the places model (2026-07-06): one tree, two places.
 const PLACE_DRIVE = 'place:google-drive';
@@ -1195,7 +1195,9 @@ export function FileExplorer() {
       >
         {composedData.length === 0 && sessionTree.status === 'ready' && !dualMode && (
           <Box sx={{ px: 1.5, py: 2, textAlign: 'center' }}>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: 'text.secondary'
+            }}>
               {t('fileExplorer.empty', 'No diagrams yet. Create one to get started.')}
             </Typography>
           </Box>
@@ -1328,7 +1330,9 @@ export function FileExplorer() {
           </IconButton>
         </DialogTitle>
         <DialogContent sx={{ pt: 0 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: 'text.secondary'
+          }}>
             {(() => {
               // ADR 0036 §3 — a Drive-place delete = Drive trash (recoverable),
               // so the copy must not claim permanence. Places model: the fate
@@ -1367,6 +1371,7 @@ export function FileExplorer() {
 
       {/* Export dialog (project / folder zip only) */}
       {exportTarget && (
+        <Suspense fallback={null}>
         <ExportProjectZipDialog
           open
           onClose={() => setExportTarget(null)}
@@ -1386,10 +1391,12 @@ export function FileExplorer() {
             if (exportedPlace === 'local') markProjectExported?.();
           }}
         />
+        </Suspense>
       )}
 
       {/* Import dialog — imports land in the create-target place */}
       {showImport && (
+        <Suspense fallback={null}>
         <ImportDialog
           open
           onClose={() => setShowImport(false)}
@@ -1412,6 +1419,7 @@ export function FileExplorer() {
             await openDiagramById(newId, suggestedName, createTargetPlace);
           }}
         />
+        </Suspense>
       )}
 
       {/* Name collision dialog */}
@@ -1437,12 +1445,20 @@ export function FileExplorer() {
         </DialogTitle>
         <DialogContent sx={{ pt: 0 }}>
           {/* FEX-09: the copy names what the button does. It never replaced. */}
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: 'text.secondary'
+          }}>
             &ldquo;{collisionDialog?.name}&rdquo; already exists in this folder.
             Move it in under a new name?
           </Typography>
           {collisionQueue.length > 1 && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mt: 1
+              }}>
               {collisionQueue.length - 1} more to resolve.
             </Typography>
           )}

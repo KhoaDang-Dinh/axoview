@@ -11,7 +11,7 @@ import {
 import { shallow } from 'zustand/shallow';
 import { ChevronRight, ViewSidebarOutlined } from '@mui/icons-material';
 import { EditorModeEnum, DialogTypeEnum } from 'src/types';
-import { UiElement } from 'components/UiElement/UiElement';
+import { UiElement } from 'src/components/UiElement/UiElement';
 import { SceneLayer } from 'src/components/SceneLayer/SceneLayer';
 import { DragAndDrop } from 'src/components/DragAndDrop/DragAndDrop';
 import { ToolMenu } from 'src/components/ToolMenu/ToolMenu';
@@ -304,12 +304,18 @@ export const UiOverlay = ({
                 height: '100%'
               }}
             >
-              <Stack direction="row" alignItems="center">
-                <Typography variant="subtitle2" color="text.secondary">
+              <Stack direction="row" sx={{
+                alignItems: 'center'
+              }}>
+                <Typography variant="subtitle2" sx={{
+                  color: 'text.secondary'
+                }}>
                   {title}
                 </Typography>
                 <ChevronRight />
-                <Typography variant="subtitle2" color="text.secondary">
+                <Typography variant="subtitle2" sx={{
+                  color: 'text.secondary'
+                }}>
                   {currentView.name}
                 </Typography>
               </Stack>
@@ -349,10 +355,12 @@ export const UiOverlay = ({
           !hideViewControls && (
             <Stack
               spacing={1}
-              alignItems="flex-start"
-              sx={{ position: 'absolute', zIndex: 15 }}
               style={{ left: appPadding.x, top: appPadding.y }}
-            >
+              sx={{
+                alignItems: 'flex-start',
+                position: 'absolute',
+                zIndex: 15
+              }}>
               <PreviewLayerSwitcher />
               <PreviewCanvasModeToggle />
             </Stack>

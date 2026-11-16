@@ -412,9 +412,6 @@ const NodeContent = memo(
                 <LabelStack>
                   {isEditingName ? (
                     <Typography
-                      fontWeight={labelBold ? 700 : 600}
-                      fontStyle={labelItalic ? 'italic' : 'normal'}
-                      fontSize={labelFontSize ?? LABEL_BASE_FONT_PX}
                       color={labelColor || 'text.primary'}
                       contentEditable
                       suppressContentEditableWarning
@@ -455,6 +452,9 @@ const NodeContent = memo(
                       }}
                       ref={inlineRename.setRef}
                       sx={{
+                        fontWeight: labelBold ? 700 : 600,
+                        fontStyle: labelItalic ? 'italic' : 'normal',
+                        fontSize: labelFontSize ?? LABEL_BASE_FONT_PX,
                         outline: '1px solid rgba(0,0,0,0.3)',
                         borderRadius: 1,
                         px: 0.75,
@@ -473,8 +473,7 @@ const NodeContent = memo(
                           ]
                             .filter(Boolean)
                             .join(' ') || 'none'
-                      }}
-                    >
+                      }}>
                       {labelText ?? ''}
                     </Typography>
                   ) : (

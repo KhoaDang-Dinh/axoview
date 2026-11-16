@@ -703,6 +703,12 @@ export interface IconPackManagerProps {
 export interface AxoviewProps {
   initialData?: InitialData;
   onModelUpdated?: (Model: Model) => void;
+  /**
+   * The page (view) on screen changed: a page tab clicked, a page added or
+   * removed, a diagram loaded. Lets a host keep the page in its URL so a
+   * refresh reopens it. Not called while no diagram is loaded.
+   */
+  onActiveViewChange?: (viewId: string) => void;
   width?: number | string;
   height?: number | string;
   enableDebugTools?: boolean;
@@ -750,8 +756,44 @@ export interface AxoviewProps {
 }
 
 export interface LoadOptions {
+  /** CRDT-owned selective undo; remote merges never undo another person's edits. */
+  collaborationHistory?: { undo: () => void; redo: () => void; canUndo: () => boolean; canRedo: () => boolean };
   /** When true, zoom and scroll are preserved instead of being reset to defaults. */
   preserveViewport?: boolean;
+  /**
+   * Open on this page (view id) when the diagram has it, e.g. the page named
+   * in the host's URL after a refresh. Ignored when no page has this id.
+   */
+  view?: string;
+}
+
+/**
+ * What `applyAgentOperations` did with each operation, in order: the fields of
+ * `diagramAgent.PlanStep` a host needs to report it (declared here so the
+ * types do not import the agent module).
+ */
+export interface AgentStepOutcome {
+  index: number;
+  status: 'ready' | 'not_applicable' | 'invalid';
+  summary: string;
+  problem?: string;
+}
+
+/**
+ * An agent's operations worked out but not yet in the editor
+ * (`prepareAgentOperations`).
+ */
+export interface AgentPreparedChange {
+  /** What each operation would do, in order: only `ready` ones change anything. */
+  steps: AgentStepOutcome[];
+  /** The diagram with the ready steps made. The editor still shows it without them. */
+  model: Model;
+  /**
+   * Puts that diagram in the editor as ONE undoable change and returns the
+   * steps as made. If the diagram was edited since it was prepared, the steps
+   * are made again on the diagram as it is now, so that edit is kept.
+   */
+  commit: () => AgentStepOutcome[];
 }
 
 export interface AxoviewRef {
@@ -763,4 +805,23 @@ export interface AxoviewRef {
    * no live canvas to speak for, such as a file explorer.
    */
   openExportImageDialog: (options?: { angle?: 'asViewed' | 'pageDefault' }) => void;
+  /**
+   * The id of the page (view) on screen, or undefined before a diagram loads.
+   * Lets a host describe "this page" to the AI assistant without reaching into
+   * the editor's stores.
+   */
+  getActiveViewId: () => string | undefined;
+  /**
+   * Carries out an AI agent's operations (the `diagramAgent` vocabulary) that
+   * its person approved, on `viewId` or the page on screen, as ONE undoable
+   * change. Returns the steps: only `ready` ones changed anything. ADR 0052
+   * addendum 2026-11-10.
+   */
+  applyAgentOperations: (operations: unknown[], options?: { viewId?: string }) => AgentStepOutcome[];
+  /**
+   * The same change worked out without touching the editor, for a host that
+   * must store the resulting diagram before showing it: save `model`, then
+   * call `commit`. Null before a diagram loads. ADR 0059 addendum 2026-11-12.
+   */
+  prepareAgentOperations: (operations: unknown[], options?: { viewId?: string }) => AgentPreparedChange | null;
 }

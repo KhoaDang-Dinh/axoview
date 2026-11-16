@@ -52,9 +52,12 @@ export const PreviewLayerSwitcher = () => {
     >
       <Typography
         variant="micro"
-        color="text.secondary"
-        sx={{ px: 0.5, display: 'block', mb: 0.5 }}
-      >
+        sx={{
+          color: 'text.secondary',
+          px: 0.5,
+          display: 'block',
+          mb: 0.5
+        }}>
         {t('layers')}
       </Typography>
 

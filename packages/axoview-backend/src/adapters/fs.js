@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { randomBytes } from 'crypto';
 
 const KEY_PATTERN = /^[a-zA-Z0-9_-]+(\/[a-zA-Z0-9_-]+)*$/;
 
@@ -63,6 +64,29 @@ export function createFsObjectStorage(storagePath) {
       } catch (e) {
         await fs.unlink(tmp).catch(() => {});
         throw e;
+      }
+    },
+
+    /**
+     * Create the object only if none exists; true when this call created it.
+     * Atomic: of any number of concurrent calls for one key, exactly one gets
+     * true (a hard link to a complete temporary file either creates the name
+     * or fails because it exists), and a reader never sees a partial object.
+     */
+    async putIfAbsent(key, value) {
+      const filePath = keyToPath(storagePath, key);
+      const dir = path.dirname(filePath);
+      await fs.mkdir(dir, { recursive: true });
+      const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+      try {
+        await fs.writeFile(tmp, Buffer.from(value));
+        await fs.link(tmp, filePath);
+        return true;
+      } catch (e) {
+        if (e.code === 'EEXIST') return false;
+        throw e;
+      } finally {
+        await fs.unlink(tmp).catch(() => {});
       }
     },
 

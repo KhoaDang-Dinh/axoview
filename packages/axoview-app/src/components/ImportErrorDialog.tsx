@@ -94,7 +94,9 @@ export function ImportErrorDialog({
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {body
             ? t(body.key, body.fallback)
             : t(

@@ -38,11 +38,28 @@ jobs:
     timeout-minutes: 40
     outputs:
       tag: ${{ steps.release.outputs.tag }}
+      pr: ${{ steps.describe.outputs.pr }}
+      title: ${{ steps.describe.outputs.title }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       APP_SHA: ${{ github.sha }}
 
     steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # The pull request this commit merged, from its own message (no API, so
+      # it works for a private repository too). Baked into the backend image;
+      # the in-cluster release reporter reads it from /healthz and shows it on
+      # the CloudWatch dashboard next to the image tag.
+      - name: Describe the release
+        id: describe
+        shell: bash
+        run: |
+          set -euo pipefail
+          git log -1 --format=%B "$APP_SHA" | node scripts/release-info.mjs | tee -a "$GITHUB_OUTPUT"
+
       - name: Require a release branch and AWS_REGION
         id: release
         shell: bash
@@ -211,6 +228,8 @@ jobs:
           BACKEND_REPOSITORY: ${{ steps.aws.outputs.backend }}
           FRONTEND_REPOSITORY: ${{ steps.aws.outputs.frontend }}
           TAG: ${{ needs.gates.outputs.tag }}
+          RELEASE_PR: ${{ needs.gates.outputs.pr }}
+          RELEASE_TITLE: ${{ needs.gates.outputs.title }}
         run: |
           set -euo pipefail
           aws ecr get-login-password | $DOCKER login --username AWS --password-stdin "$REGISTRY"
@@ -227,8 +246,23 @@ jobs:
             echo "$name=$image" >> "$GITHUB_OUTPUT"
           }
 
-          push backend "$BACKEND_REPOSITORY" -f Dockerfile.backend
-          push frontend "$FRONTEND_REPOSITORY" -f Dockerfile --target frontend
+          # Both images say which commit they are (OCI labels); the backend also
+          # carries the release for /healthz (Dockerfile.backend, src/releaseInfo.js).
+          # Images that were in ECR before this keep no release: the reporter
+          # falls back to GitHub for those.
+          LABELS=(
+            --label "org.opencontainers.image.revision=$APP_SHA"
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY"
+          )
+          # "-" from release-info.mjs means none.
+          if [ "${RELEASE_PR:--}" = "-" ]; then RELEASE_PR=""; fi
+          if [ "${RELEASE_TITLE:--}" = "-" ]; then RELEASE_TITLE=""; fi
+          if [ -n "$RELEASE_PR" ]; then LABELS+=(--label "axoview.release.pr=$RELEASE_PR"); fi
+          push backend "$BACKEND_REPOSITORY" -f Dockerfile.backend "${LABELS[@]}" \
+            --build-arg "AXOVIEW_RELEASE_COMMIT=$APP_SHA" \
+            --build-arg "AXOVIEW_RELEASE_PR=$RELEASE_PR" \
+            --build-arg "AXOVIEW_RELEASE_TITLE=$RELEASE_TITLE"
+          push frontend "$FRONTEND_REPOSITORY" -f Dockerfile --target frontend "${LABELS[@]}"
 
       # Shared runner: leave no registry login or session behind.
       - name: Clean up credentials
@@ -246,11 +280,14 @@ jobs:
           BACKEND_IMAGE: ${{ steps.push.outputs.backend }}
           FRONTEND_IMAGE: ${{ steps.push.outputs.frontend }}
           JOB_STATUS: ${{ job.status }}
+          RELEASE_PR: ${{ needs.gates.outputs.pr }}
+          RELEASE_TITLE: ${{ needs.gates.outputs.title }}
         run: |
           # shellcheck disable=SC2016
           {
             printf '## Release images (%s)\n\n' "$JOB_STATUS"
             printf -- '- Axoview: `%s` at `%s`\n' "$GITHUB_REF_NAME" "$APP_SHA"
+            printf -- '- Pull request: %s %s\n' "$RELEASE_PR" "$RELEASE_TITLE"
             printf -- '- Backend: `%s`\n' "${BACKEND_IMAGE:-n/a}"
             printf -- '- Frontend: `%s`\n' "${FRONTEND_IMAGE:-n/a}"
             printf '\nDev picks these up automatically (Argo CD Image Updater, within a few minutes).'

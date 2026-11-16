@@ -117,7 +117,13 @@ export const SettingsDialog = ({
       label: t('settings.language'),
       content: (
         <Section>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary',
+              mb: 2
+            }}
+          >
             {t('settings.languageDescription')}
           </Typography>
           {languageSelector}
@@ -202,9 +208,11 @@ export const SettingsDialog = ({
                   >
                     <ListItemText
                       primary={tab.label}
-                      primaryTypographyProps={{
-                        variant: 'body2',
-                        sx: { fontWeight: tab.id === activeId ? 600 : 400 }
+                      slotProps={{
+                        primary: {
+                          variant: 'body2',
+                          sx: { fontWeight: tab.id === activeId ? 600 : 400 }
+                        }
                       }}
                     />
                   </ListItemButton>

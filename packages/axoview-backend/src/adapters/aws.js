@@ -14,6 +14,8 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
+import { contentHash, pickServerOwned } from '../diagramContent.js';
+
 const WORKSPACE_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const DIAGRAM_KEY_RE = /^diagrams\/([A-Za-z0-9_-]{1,64})$/;
 const PUBLIC_KEY_RE = /^public\/([A-Za-z0-9_-]{21,64})$/;
@@ -30,10 +32,18 @@ function decodeJson(bytes) {
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-function conflictError() {
+/**
+ * `currentVersion`, when this request already knows it: the client can retry
+ * against it without downloading the diagram just to learn its version.
+ */
+function conflictError(currentVersion) {
   const error = new Error('Diagram changed elsewhere. Reload before saving.');
   error.status = 409;
-  error.body = { error: error.message, code: 'VERSION_CONFLICT' };
+  error.body = {
+    error: error.message,
+    code: 'VERSION_CONFLICT',
+    ...(typeof currentVersion === 'number' ? { currentVersion } : {})
+  };
   return error;
 }
 
@@ -108,18 +118,50 @@ export function createAwsWorkspaceAdapter({
     }));
   }
 
+  /**
+   * Create the object only if none exists; true when this call created it.
+   * S3 conditional write (If-None-Match: *): of concurrent calls for one key
+   * the first to finish succeeds and the rest get 412, on every API pod.
+   */
+  async function putObjectIfAbsent(key, value) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await s3.send(new PutObjectCommand({
+          Bucket: bucketName,
+          Key: key,
+          Body: value,
+          ContentType: 'application/json',
+          IfNoneMatch: '*'
+        }));
+        return true;
+      } catch (error) {
+        const status = error?.$metadata?.httpStatusCode;
+        if (error?.name === 'PreconditionFailed' || status === 412) return false;
+        // 409: a conflicting operation was in flight; S3 asks for a retry.
+        if ((error?.name === 'ConditionalRequestConflict' || status === 409) && attempt < 2) continue;
+        throw error;
+      }
+    }
+  }
+
   async function getDiagram(id) {
     const item = await getItem({ PK: partition, SK: `DIAGRAM#${id}` });
     if (!item?.objectKey) return null;
     return readObject(item.objectKey);
   }
 
-  async function putDiagram(id, value, expectedVersion) {
+  /**
+   * `known`: the metadata item the caller read in this request
+   * (getDiagramState().item, or null for "there is none"), so the save does
+   * not read it again. Safe even if it is stale by now: the write below is
+   * conditional on its version, and a stale one is refused as a conflict.
+   */
+  async function putDiagram(id, value, expectedVersion, known) {
     const key = { PK: partition, SK: `DIAGRAM#${id}` };
-    const existing = await getItem(key);
+    const existing = known !== undefined ? known : await getItem(key);
     if (existing && expectedVersion === undefined) throw preconditionError();
     if (!existing && expectedVersion !== undefined && expectedVersion !== 0) throw conflictError();
-    if (existing && existing.version !== expectedVersion) throw conflictError();
+    if (existing && existing.version !== expectedVersion) throw conflictError(existing.version);
     const nextVersion = (existing?.version || 0) + 1;
     const objectKey = `${workspaceRoot}/diagrams/${id}/${nextVersion}-${crypto.randomUUID()}.json`;
     const data = decodeJson(value);
@@ -132,7 +174,12 @@ export function createAwsWorkspaceAdapter({
       name: data?.name || data?.title || 'Untitled Diagram',
       lastModified: data?.lastModified || new Date().toISOString(),
       folderId: data?.folderId ?? null,
-      deletedAt: data?.deletedAt ?? null
+      deletedAt: data?.deletedAt ?? null,
+      // What the next save needs, so it reads this item and not the object:
+      // the server-owned fields to carry over, and the digest that tells an
+      // unchanged save apart (routes.js saveDiagram).
+      owned: pickServerOwned(data),
+      contentHash: await contentHash(data)
     };
     try {
       await ddb.send(new PutCommand({
@@ -153,6 +200,7 @@ export function createAwsWorkspaceAdapter({
     }
     // S3 versioning is enabled by infra. Older versions are retained as a
     // recovery aid and lifecycle policy can expire them independently.
+    return { version: nextVersion };
   }
 
   async function deleteDiagram(id, expectedVersion) {
@@ -228,20 +276,28 @@ export function createAwsWorkspaceAdapter({
     },
     async put(key, value, options = {}) {
       const diagram = DIAGRAM_KEY_RE.exec(key);
-      if (diagram) return putDiagram(diagram[1], value, options.expectedVersion);
+      if (diagram) return putDiagram(diagram[1], value, options.expectedVersion, options.known);
       const snapshot = PUBLIC_KEY_RE.exec(key);
       if (snapshot) return putPublic(snapshot[1], value);
       return putObject(`${workspaceRoot}/objects/${key}.json`, value);
+    },
+    /** Generic objects only: create if absent; true when this call created it (atomic). */
+    async putIfAbsent(key, value) {
+      if (DIAGRAM_KEY_RE.test(key) || PUBLIC_KEY_RE.test(key)) {
+        throw new Error('putIfAbsent is for generic objects, not diagrams or public snapshots');
+      }
+      return putObjectIfAbsent(`${workspaceRoot}/objects/${key}.json`, value);
     },
     async delete(key, options = {}) {
       const diagram = DIAGRAM_KEY_RE.exec(key);
       if (diagram) return deleteDiagram(diagram[1], options.expectedVersion);
       const snapshot = PUBLIC_KEY_RE.exec(key);
       if (snapshot) return deletePublic(snapshot[1]);
-      return s3.send(new DeleteObjectCommand({
+      await s3.send(new DeleteObjectCommand({
         Bucket: bucketName,
         Key: `${workspaceRoot}/objects/${key}.json`
       }));
+      return undefined;
     },
     async list(prefix) {
       const s3Prefix = `${workspaceRoot}/objects/${prefix}`;
@@ -286,6 +342,32 @@ export function createAwsWorkspaceAdapter({
     },
     async getDiagramVersion(id) {
       return (await getItem({ PK: partition, SK: `DIAGRAM#${id}` }))?.version ?? null;
+    },
+    /**
+     * What a save needs, from the metadata item alone: its version, the
+     * server-owned fields (`owned`; null for an item written before they were
+     * kept there, meaning "read the object": readDocument()), and the content
+     * digest. `item` goes back to put() as `known`. Null when there is no such
+     * diagram.
+     */
+    async getDiagramState(id) {
+      const item = await getItem({ PK: partition, SK: `DIAGRAM#${id}` });
+      if (!item) return null;
+      return {
+        version: item.version,
+        owned: item.owned ?? null,
+        contentHash: item.contentHash ?? null,
+        item,
+        /** The stored document this item points at (no second item read). */
+        readDocument: async () => decodeJson(item.objectKey ? await readObject(item.objectKey) : null)
+      };
+    },
+    /** The diagram and its version from one metadata read. */
+    async getDiagramWithVersion(id) {
+      const item = await getItem({ PK: partition, SK: `DIAGRAM#${id}` });
+      if (!item?.objectKey) return null;
+      const bytes = await readObject(item.objectKey);
+      return bytes ? { bytes, version: item.version } : null;
     },
     forWorkspace(nextWorkspaceId) {
       return createAwsWorkspaceAdapter({

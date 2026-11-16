@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { id, coords, NOTES_MAX_LENGTH } from './common';
 
 export const rectangleSchema = z.object({

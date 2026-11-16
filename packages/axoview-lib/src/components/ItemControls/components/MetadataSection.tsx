@@ -60,8 +60,11 @@ export const MetadataSection = ({
         >
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ minWidth: 52, flexShrink: 0 }}
+            sx={{
+              color: 'text.secondary',
+              minWidth: 52,
+              flexShrink: 0
+            }}
           >
             {fieldLabel}
           </Typography>

@@ -1,0 +1,333 @@
+{
+  "description": "Diagram operations the API and axoview-lib (diagramOperationSchema) must both accept or both reject. See packages/axoview-lib/src/agent/operations.ts.",
+  "valid": [
+    {
+      "op": "add_node",
+      "name": "Cache"
+    },
+    {
+      "op": "add_node",
+      "name": "Cache",
+      "icon": "redis",
+      "near": {
+        "name": "Web"
+      },
+      "reason": "Reads repeat; a cache takes load off the database."
+    },
+    {
+      "op": "rename_node",
+      "node": {
+        "id": "node1"
+      },
+      "name": "API gateway"
+    },
+    {
+      "op": "set_notes",
+      "node": {
+        "name": "Database"
+      },
+      "notes": "Daily snapshots, 7-day retention."
+    },
+    {
+      "op": "remove_node",
+      "node": {
+        "name": "Legacy FTP"
+      }
+    },
+    {
+      "op": "connect",
+      "from": {
+        "name": "Web"
+      },
+      "to": {
+        "name": "Database"
+      },
+      "label": "SQL"
+    },
+    {
+      "op": "disconnect",
+      "from": {
+        "id": "node1"
+      },
+      "to": {
+        "name": "Database"
+      }
+    },
+    {
+      "op": "group",
+      "nodes": [
+        {
+          "name": "API"
+        },
+        {
+          "name": "Worker"
+        }
+      ],
+      "name": "Private subnet"
+    },
+    {
+      "op": "add_note",
+      "text": "Arrows show who calls whom.",
+      "near": {
+        "name": "Web"
+      }
+    },
+    {
+      "op": "add_note",
+      "text": "  padded text is trimmed  "
+    }
+  ],
+  "invalid": [
+    null,
+    "connect",
+    [],
+    {},
+    {
+      "op": "delete_everything"
+    },
+    {
+      "op": "add_node"
+    },
+    {
+      "op": "add_node",
+      "name": ""
+    },
+    {
+      "op": "add_node",
+      "name": "   "
+    },
+    {
+      "op": "add_node",
+      "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "op": "add_node",
+      "name": "Cache",
+      "tile": {
+        "x": 1,
+        "y": 2
+      }
+    },
+    {
+      "op": "connect",
+      "from": "Web",
+      "to": {
+        "name": "Database"
+      }
+    },
+    {
+      "op": "connect",
+      "from": {
+        "name": "Web",
+        "id": "n1"
+      },
+      "to": {
+        "name": "Database"
+      }
+    },
+    {
+      "op": "connect",
+      "from": {
+        "name": "Web"
+      },
+      "to": {
+        "name": "Database"
+      },
+      "color": "red"
+    },
+    {
+      "op": "connect",
+      "from": {
+        "name": "Web"
+      }
+    },
+    {
+      "op": "group",
+      "nodes": [],
+      "name": "Empty"
+    },
+    {
+      "op": "group",
+      "nodes": [
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        },
+        {
+          "name": "A"
+        }
+      ],
+      "name": "Too many"
+    },
+    {
+      "op": "add_note",
+      "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+    },
+    {
+      "op": "set_notes",
+      "node": {
+        "name": "Database"
+      }
+    },
+    {
+      "op": "rename_node",
+      "node": {
+        "name": "A"
+      },
+      "name": "B",
+      "reason": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+    },
+    {
+      "op": "remove_node",
+      "node": {
+        "id": ""
+      }
+    }
+  ]
+}

@@ -561,11 +561,16 @@ export const LayersPanel = () => {
       {/* Header */}
       <Stack
         direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ px: 1.5, py: 1, flexShrink: 0 }}
-      >
-        <Typography variant="overline" color="text.secondary">
+        sx={{
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          px: 1.5,
+          py: 1,
+          flexShrink: 0
+        }}>
+        <Typography variant="overline" sx={{
+          color: 'text.secondary'
+        }}>
           {/* D8 — header routed through i18n */}
           {t('header')}
         </Typography>
@@ -612,9 +617,13 @@ export const LayersPanel = () => {
         {sortedLayers.length === 0 && (
           <Typography
             variant="caption"
-            color="text.disabled"
-            sx={{ display: 'block', textAlign: 'center', mt: 2, mb: 1 }}
-          >
+            sx={{
+              color: 'text.disabled',
+              display: 'block',
+              textAlign: 'center',
+              mt: 2,
+              mb: 1
+            }}>
             {/* D8 — empty-state routed through i18n */}
             {t('noLayersYet')}
           </Typography>
@@ -701,18 +710,26 @@ export const LayersPanel = () => {
         >
           <Typography
             variant="overline"
-            color="text.disabled"
-            sx={{ display: 'block', px: 0.5, pt: 0.5, pb: 0.25 }}
-          >
+            sx={{
+              color: 'text.disabled',
+              display: 'block',
+              px: 0.5,
+              pt: 0.5,
+              pb: 0.25
+            }}>
             {/* D8 — "Unassigned (N)" count interpolated via i18n, not concat */}
             {t('unassigned').replace('{count}', String(unassignedCount))}
           </Typography>
           {unassignedCount === 0 ? (
             <Typography
               variant="caption"
-              color="text.disabled"
-              sx={{ display: 'block', px: 1, pb: 0.75, fontStyle: 'italic' }}
-            >
+              sx={{
+                color: 'text.disabled',
+                display: 'block',
+                px: 1,
+                pb: 0.75,
+                fontStyle: 'italic'
+              }}>
               {/* D8 — drop hint routed through i18n */}
               {t('dropToUnassign')}
             </Typography>

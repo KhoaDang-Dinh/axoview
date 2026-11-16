@@ -24,7 +24,7 @@
  * by rename.spec.ts — the canonical rename flow drives this POM and then
  * reloads without re-opening the diagram.
  */
-import { Locator, Page } from '@playwright/test';
+import { expect, Locator, Page } from '@playwright/test';
 import { byAxoviewId } from '../helpers/selectors';
 
 export class FileExplorerPOM {
@@ -57,19 +57,18 @@ export class FileExplorerPOM {
   }
 
   /**
-   * Opens the file-explorer panel if it isn't already open. Idempotent — a
-   * second call when the panel is open is a no-op (we read row visibility
-   * directly rather than the toggle's aria-pressed state).
+   * Opens the file-explorer panel if it isn't already open. Idempotent: reads
+   * the toggle's aria-pressed, not row visibility. The open state is
+   * remembered across reloads (axoview-explorer-open), so right after a reload
+   * the panel can be open with its rows still loading; clicking then would
+   * close it.
    */
   async open() {
-    // The Untitled row (or whatever else lives at root) becomes locatable as
-    // soon as the panel mounts. If any row is already visible, no toggle is
-    // needed. The 250ms first-paint nudge mirrors how the explorer ramps up
-    // its react-window virtualisation.
-    const anyRow = this.panelRoot().first();
-    if (await anyRow.isVisible().catch(() => false)) return;
-    await this.toggleButton().click();
-    await anyRow.waitFor({ state: 'visible', timeout: 5_000 });
+    const toggle = this.toggleButton();
+    await toggle.waitFor({ state: 'visible', timeout: 10_000 });
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await this.panelRoot().first().waitFor({ state: 'visible', timeout: 5_000 });
   }
 
   /**

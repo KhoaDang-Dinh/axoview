@@ -82,7 +82,9 @@ export const DeleteIconConfirmDialog = ({
       <DialogContent sx={{ pt: 0 }}>
         <Stack spacing={1.5}>
           {icon && (
-            <Stack direction="row" spacing={1.5} alignItems="center">
+            <Stack direction="row" spacing={1.5} sx={{
+              alignItems: 'center'
+            }}>
               <Box
                 component="img"
                 src={icon.url}
@@ -105,16 +107,22 @@ export const DeleteIconConfirmDialog = ({
           )}
 
           {scanning && (
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{
+              alignItems: 'center'
+            }}>
               <CircularProgress size={14} />
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{
+                color: 'text.secondary'
+              }}>
                 Checking workspace for references…
               </Typography>
             </Stack>
           )}
 
           {!scanning && !hasUsage && (
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{
+              color: 'text.secondary'
+            }}>
               This icon isn&rsquo;t used by any diagram. Deleting it removes it
               from the Imported section.
             </Typography>
@@ -122,7 +130,9 @@ export const DeleteIconConfirmDialog = ({
 
           {!scanning && hasUsage && (
             <>
-              <Typography variant="body2" color="warning.main">
+              <Typography variant="body2" sx={{
+                color: 'warning.main'
+              }}>
                 In use by {refCount}{' '}
                 {refCount === 1 ? 'item' : 'items'} across {usage!.length}{' '}
                 {usage!.length === 1 ? 'diagram' : 'diagrams'}. Affected items
@@ -143,10 +153,12 @@ export const DeleteIconConfirmDialog = ({
                     <Stack
                       key={r.diagramId}
                       direction="row"
-                      justifyContent="space-between"
-                      alignItems="center"
-                      sx={{ px: 1.25, py: 0.5 }}
-                    >
+                      sx={{
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        px: 1.25,
+                        py: 0.5
+                      }}>
                       <Typography
                         variant="body2"
                         sx={{
@@ -165,10 +177,12 @@ export const DeleteIconConfirmDialog = ({
                           <Typography
                             component="span"
                             variant="caption"
-                            color="text.secondary"
-                            sx={{ ml: 0.75, fontStyle: 'italic' }}
                             data-axoview-id="icon-usage-in-trash"
-                          >
+                            sx={{
+                              color: 'text.secondary',
+                              ml: 0.75,
+                              fontStyle: 'italic'
+                            }}>
                             {/* Hardcoded to match this dialog, whose copy is
                                 all literal English — i18n'ing one string here
                                 would be the inconsistency, not the fix. */}
@@ -178,9 +192,10 @@ export const DeleteIconConfirmDialog = ({
                       </Typography>
                       <Typography
                         variant="caption"
-                        color="text.secondary"
-                        sx={{ flexShrink: 0 }}
-                      >
+                        sx={{
+                          color: 'text.secondary',
+                          flexShrink: 0
+                        }}>
                         {r.count}
                       </Typography>
                     </Stack>

@@ -32,8 +32,9 @@ export function DriveAccessRequiredDialog() {
   return (
     <Dialog
       open={status === 'DRIVE_ACCESS_REQUIRED'}
-      // A required decision, not a toast — no backdrop-click / Escape dismissal.
-      disableEscapeKeyDown
+      // A required decision, not a toast — no backdrop-click / Escape dismissal:
+      // with no `onClose`, neither can close it (MUI 9 removed
+      // `disableEscapeKeyDown`, which this relied on before).
       maxWidth="xs"
       fullWidth
       slotProps={{
@@ -45,18 +46,27 @@ export function DriveAccessRequiredDialog() {
     >
       <DialogTitle sx={{ pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
         <NoDriveIcon color="warning" />
-        <Typography variant="h6" component="span" fontWeight={600}>
+        <Typography variant="h6" component="span" sx={{
+          fontWeight: 600
+        }}>
           {t('driveAccess.title', 'Google Drive access is required')}
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {t(
             'driveAccess.body',
             'Axoview signs you in only to store your diagrams in your own Google Drive. Without the Drive permission there is nothing to sign in for — every save and open would fail.'
           )}
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mt: 1.5
+          }}>
           {t(
             'driveAccess.instruction',
             'Please continue and tick the checkbox that lets Axoview "see, edit, create and delete only the specific files you use with it."'

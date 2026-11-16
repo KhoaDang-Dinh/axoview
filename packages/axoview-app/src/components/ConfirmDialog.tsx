@@ -64,7 +64,9 @@ export function ConfirmDialog({
         </DialogTitle>
       )}
       <DialogContent sx={{ pt: title ? 0 : undefined }}>
-        <Typography variant="body2" color="text.secondary">{message}</Typography>
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>{message}</Typography>
       </DialogContent>
       <DialogActions sx={{ px: 2.5, pb: 2.5, pt: 1 }}>
         <Button variant="text" onClick={onCancel}>{cancelLabel}</Button>
@@ -76,5 +78,5 @@ export function ConfirmDialog({
         </Button>
       </DialogActions>
     </Dialog>
-  )
+  );
 }

@@ -5,7 +5,7 @@ const path = require('path');
 const rootNodeModules = path.resolve(__dirname, '../../node_modules');
 
 module.exports = {
-  testEnvironment: path.join(rootNodeModules, 'jest-environment-jsdom'),
+  testEnvironment: path.join(__dirname, 'jest.environment.js'),
   transform: {
     '^.+\\.(ts|tsx)$': [
       path.join(rootNodeModules, 'ts-jest'),

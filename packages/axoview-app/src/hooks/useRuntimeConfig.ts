@@ -1,3 +1,4 @@
+import { autosaveDelayOr } from './useAutoSave';
 import { apiBaseUrl } from '../utils/apiBaseUrl';
 import { setConfiguredPublicBase } from '../appBase';
 import type { CognitoAuthConfig } from '../stores/cognitoSessionStore';
@@ -21,6 +22,17 @@ export interface RuntimeConfig {
   authMode: 'none' | 'shared-token' | 'cf-access' | 'cognito';
   cognito: CognitoAuthConfig | null;
   serverStorage: boolean;
+  collaborationEnabled?: boolean;
+  /**
+   * How long after the last edit a diagram is saved, in ms (the deployment's
+   * AUTOSAVE_DELAY_MS). Absent or out of range: hooks/useAutoSave.ts's 1.5 s.
+   */
+  autosaveDelayMs?: number;
+  /**
+   * Sharing a diagram with another account by email (ADR 0057): the server
+   * has accounts (Cognito) and storage. Missing → false.
+   */
+  sharing: boolean;
   /**
    * A5/CHR-08 (owner ruling 2026-07-30). The canonical, externally reachable
    * base URL of this deployment, when the operator has configured one
@@ -36,6 +48,16 @@ export interface RuntimeConfig {
    * only lets an operator override it deliberately.
    */
   publicBaseUrl: string | null;
+  ai: {
+    chatEnabled: boolean;
+    /** Real model replies: the server has chat fully configured (Phase 2). */
+    liveChat: boolean;
+    guestEnabled: boolean;
+    diagramContextEnabled: boolean;
+    mcpEnabled: boolean;
+    ragEnabled: boolean;
+    agentWriteEnabled: boolean;
+  };
 }
 
 // ADR 0035 §4: a pure-local `npm run dev` boot has no backend serving
@@ -61,7 +83,17 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   authMode: 'none',
   cognito: null,
   serverStorage: false,
-  publicBaseUrl: null
+  sharing: false,
+  publicBaseUrl: null,
+  ai: {
+    chatEnabled: false,
+    liveChat: false,
+    guestEnabled: false,
+    diagramContextEnabled: false,
+    mcpEnabled: false,
+    ragEnabled: false,
+    agentWriteEnabled: false
+  }
 };
 
 let cached: RuntimeConfig | null = null;
@@ -107,7 +139,23 @@ export async function fetchRuntimeConfig(): Promise<RuntimeConfig> {
     }
     try {
       const data = (await response.json()) as Partial<RuntimeConfig>;
-      cached = { ...DEFAULT_CONFIG, ...data };
+      cached = {
+        ...DEFAULT_CONFIG,
+        ...data,
+        // Missing/malformed capability values fail closed.
+        sharing: data.sharing === true,
+        collaborationEnabled: data.collaborationEnabled === true,
+        autosaveDelayMs: autosaveDelayOr(data.autosaveDelayMs),
+        ai: {
+          chatEnabled: data.ai?.chatEnabled === true,
+          liveChat: data.ai?.chatEnabled === true && data.ai?.liveChat === true,
+          guestEnabled: data.ai?.guestEnabled === true,
+          diagramContextEnabled: data.ai?.diagramContextEnabled === true,
+          mcpEnabled: data.ai?.mcpEnabled === true,
+          ragEnabled: data.ai?.ragEnabled === true,
+          agentWriteEnabled: data.ai?.agentWriteEnabled === true
+        }
+      };
     } catch (err) {
       console.warn('[useRuntimeConfig] /api/config returned unparseable JSON', err);
       cached = { ...DEFAULT_CONFIG };

@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -17,8 +19,12 @@ import {
 } from 'axoview';
 import { scanIconUsage } from './services/iconUsage';
 import { AppStorageProvider, useAppStorage } from './providers/AppStorageContext';
+import { AnalyticsConsentBanner } from './components/AnalyticsConsentBanner';
+import { trackProductEvent } from './services/productAnalytics';
 import { AuthProvider } from './providers/AuthProvider';
 import { CognitoSessionProvider } from './providers/CognitoSessionProvider';
+import { AssistantProvider } from './providers/AssistantProvider';
+
 import {
   DiagramLifecycleProvider,
   useDiagramLifecycle
@@ -43,8 +49,8 @@ import { LocalModeShareErrorDialog } from './components/LocalModeShareErrorDialo
 import { ReadonlyLoadErrorDialog } from './components/ReadonlyLoadErrorDialog';
 import { PublicShareLoadErrorDialog } from './components/PublicShareLoadErrorDialog';
 import { SaveErrorDialog } from './components/SaveErrorDialog';
-import { ExportProjectZipDialog } from './components/fileExplorer/ExportProjectZipDialog';
-import { ImportDialog } from './components/fileExplorer/ImportDialog';
+// Lazy: fetched only when the dialog opens (see lazyZipDialogs.ts).
+import { ExportProjectZipDialog, ImportDialog } from './components/fileExplorer/lazyZipDialogs';
 import { sanitizeImportedBlob } from './services/storage/importedBlob';
 import { notificationStore } from './stores/notificationStore';
 import { diagnosticsStore } from './stores/diagnosticsStore';
@@ -53,6 +59,22 @@ import './App.css';
 
 // R1 (ADR 0040): the editor SPA mounts under /app (the marketing landing owns
 // the site root). APP_BASENAME = `${PUBLIC_URL}/app`.
+
+// An infrequently visited setup route, not editor boot-critical code: keep the
+// MCP setup mock out of the initial /app JavaScript payload.
+const AssistantConnectionPage = lazy(() =>
+  import('./components/ai/AssistantConnectionPage').then(({ AssistantConnectionPage }) => ({
+    default: AssistantConnectionPage
+  }))
+);
+
+// An outside agent's sign-in (ADR 0059): the person approves it here.
+const AgentConsentPage = lazy(() =>
+  import('./components/ai/AgentConsentPage').then(({ AgentConsentPage }) => ({
+    default: AgentConsentPage
+  }))
+);
+
 const basename = APP_BASENAME;
 
 const EXPORTER_TAG = `axoview-app@${process.env.REACT_APP_VERSION ?? 'dev'}`;
@@ -65,6 +87,32 @@ function App() {
       <Routes>
         <Route path="/" element={<EditorPage />} />
         <Route path="/auth/callback" element={<EditorPage />} />
+        {/* The open diagram (server storage), so a refresh reopens it:
+            /app/d/<id>?page=<view id>. */}
+        <Route path="/d/:diagramId" element={<EditorPage />} />
+        <Route
+          path="/ai/connect/:clientId"
+          element={
+            <AppStorageProvider>
+              <Suspense fallback={null}>
+                <AssistantConnectionPage />
+              </Suspense>
+            </AppStorageProvider>
+          }
+        />
+        {/* Signed in first (the sign-in screen comes back here), then Allow or Deny. */}
+        <Route
+          path="/oauth/consent"
+          element={
+            <AppStorageProvider>
+              <CognitoSessionProvider>
+                <Suspense fallback={null}>
+                  <AgentConsentPage />
+                </Suspense>
+              </CognitoSessionProvider>
+            </AppStorageProvider>
+          }
+        />
         <Route path="/display/p/:shareUuid" element={<EditorPage />} />
         {/* ADR 0042 §2 — live Drive-file preview. The static `drive` segment
             ranks above :readonlyDiagramId, so the routes cannot collide. */}
@@ -83,11 +131,14 @@ function EditorPage() {
   return (
     <AppStorageProvider>
       <AuthProvider>
-        <CognitoSessionProvider>
-          <DiagramLifecycleProvider>
-            <EditorShell />
-          </DiagramLifecycleProvider>
-        </CognitoSessionProvider>
+        <AssistantProvider>
+          <CognitoSessionProvider>
+            <DiagramLifecycleProvider>
+              <EditorShell />
+              <AnalyticsConsentBanner />
+            </DiagramLifecycleProvider>
+          </CognitoSessionProvider>
+        </AssistantProvider>
       </AuthProvider>
     </AppStorageProvider>
   );
@@ -110,6 +161,7 @@ function EditorShell() {
     frozenInitialDataRef,
     iconPackManagerProp,
     handleModelUpdated,
+    handleActiveViewChange,
     handleCreateBlankDiagram,
     sidebarTogglePortalTarget,
     styleControlsPortalTarget,
@@ -133,6 +185,10 @@ function EditorShell() {
     closeProjectExport,
     currentModel
   } = useDiagramLifecycle();
+
+  useEffect(() => {
+    if (currentDiagram?.id && !isReadonlyUrl) trackProductEvent('diagram_opened');
+  }, [currentDiagram?.id, isReadonlyUrl]);
 
   // When the perf-monitoring overlay is on, also expose the lib's read-only
   // store bridge (window.__axoview__) so DiagnosticsOverlay can read live
@@ -309,6 +365,7 @@ function EditorShell() {
             ref={axoviewRef}
             initialData={frozenInitialDataRef.current ?? undefined}
             onModelUpdated={handleModelUpdated}
+            onActiveViewChange={handleActiveViewChange}
             exposeStoreBridge={perfMonitoringEnabled}
             editorMode={isReadonlyUrl ? 'EXPLORABLE_READONLY' : 'EDITABLE'}
             locale={currentLocale}
@@ -433,6 +490,7 @@ function EditorShell() {
 
       {/* The one import flow (A3/ZIP-09) */}
       {showImportDialog && storage && (
+        <Suspense fallback={null}>
         <ImportDialog
           open
           onClose={() => setShowImportDialog(false)}
@@ -466,9 +524,11 @@ function EditorShell() {
             await openDiagramById(newId, suggestedName);
           }}
         />
+        </Suspense>
       )}
 
-      {storage && (
+      {storage && isProjectExportOpen && (
+        <Suspense fallback={null}>
         <ExportProjectZipDialog
           open={isProjectExportOpen}
           onClose={closeProjectExport}
@@ -482,6 +542,7 @@ function EditorShell() {
             if (!remoteStorageActive) markProjectExported?.();
           }}
         />
+        </Suspense>
       )}
 
       <LocalModeShareErrorDialog

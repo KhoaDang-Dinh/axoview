@@ -1,3 +1,5 @@
+import { activeCollaboration, type LiveSession } from '../services/sync/collaborationRegistry';
+import { leanIfModel } from '../services/storage/leanModel';
 import {
   createContext,
   useCallback,
@@ -7,7 +9,13 @@ import {
   useRef,
   useState
 } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { onTabMessage, postToTabs, type TabMessage } from '../services/sync/tabChannel';
+import { getDeviceId } from '../services/sync/deviceId';
+import { othersPresent, usePresenceStore } from '../services/sync/presence';
+import { useDraftStore } from '../stores/draftStore';
+import { useCognitoSessionStore } from '../stores/cognitoSessionStore';
+import { registerBeforeSignOut } from '../services/session/beforeSignOut';
 import { downloadBlob } from '../utils/downloadBlob';
 import { useTranslation } from 'react-i18next';
 import { flattenCollections } from '@isoflow/isopacks/dist/utils';
@@ -27,7 +35,8 @@ import { useAppStorage } from './AppStorageContext';
 import { useAuthStore } from '../stores/authStore';
 import { fetchRuntimeConfig } from '../hooks/useRuntimeConfig';
 import { readDriveDisplayFile } from '../services/drive/drivePublicRead';
-import { useAutoSave, SaveStatus } from '../hooks/useAutoSave';
+import { useAutoSave, SaveStatus, type AutoSaveBatching } from '../hooks/useAutoSave';
+import type { SyncChange } from '../services/sync/realtimeSync';
 import { useRealtimeSync } from '../hooks/useRealtimeSync';
 import { DiagramManager } from '../components/DiagramManager';
 import { SaveDialog } from '../components/SaveDialog';
@@ -39,6 +48,7 @@ import { notificationStore } from '../stores/notificationStore';
 import { sequentialName } from '../utils/fileOperations';
 import { apiBaseUrl } from '../utils/apiBaseUrl';
 import { exportAsJSON } from 'axoview';
+import { useAssistantPageStore } from '../stores/assistantPageStore';
 import {
   CORE_ICONS,
   getBundledCatalog,
@@ -174,6 +184,8 @@ export interface DiagramLifecycleContextValue {
   handleOpenClick: () => void;
   handlePreviewClick: () => Promise<void>;
   handleModelUpdated: (model: Model) => void;
+  /** The editor switched page: kept in the URL (/d/<id>?page=<view>). */
+  handleActiveViewChange: (viewId: string) => void;
   handleExportJSON: () => void;
   handleExportImage: () => void;
   handleExportProject: () => void;
@@ -243,22 +255,82 @@ const DiagramLifecycleContext = createContext<DiagramLifecycleContextValue>(
   null as unknown as DiagramLifecycleContextValue
 );
 
+/**
+ * Batched uploads: while no other browser has the workspace open, a checkpoint
+ * reaches the server at most this long after it was made (and at once on
+ * every flush point). See stores/draftStore.ts.
+ */
+// The longest an upload could wait. Unused while every checkpoint uploads at
+// once (uploadNow below); kept as the hook's required bound.
+const UPLOAD_BATCH_MS = 30_000;
+/** The in-app assistant, as live notices name it to other devices and people. */
+const ASSISTANT_NAME = 'Nova';
+/** How many earlier checkpoints a tab message names (see tabChannel.ts). */
+const LINEAGE_LIMIT = 32;
+
+/**
+ * Whether two models show the same diagram: the same items, pages (with
+ * their nodes, connectors, shapes and text) and colours. Icons are left out:
+ * a loaded model carries every loaded pack's icons, a saved one only what the
+ * diagram uses.
+ */
+function sameContent(a: DiagramData, b: DiagramData): boolean {
+  const content = (m: DiagramData) => JSON.stringify([m.items ?? [], m.views ?? [], m.colors ?? []]);
+  return content(a) === content(b);
+}
+
+/** The first page of a diagram stored without pages: the same id on every load. */
+export const firstPageId = (diagramId: string): string => `${diagramId}-page-1`;
+
+/**
+ * The pages of a stored diagram, with a first page added when it has none (a
+ * blank diagram created and never edited is stored that way). Left to the
+ * editor, every load gave that page a new random id: the URL's ?page= changed
+ * on each open, refresh and sync reload, a bookmark never found its page, the
+ * canvas switched page under the user, and a draft never matched the server
+ * copy.
+ */
+export function withFirstPage(diagramId: string, views: unknown): DiagramData['views'] {
+  if (Array.isArray(views) && views.length > 0) return views as DiagramData['views'];
+  return [{
+    id: firstPageId(diagramId),
+    name: 'Page 1',
+    items: [],
+    connectors: [],
+    rectangles: [],
+    textBoxes: []
+  }];
+}
+
+/**
+ * What opening a diagram does with this browser's draft of it (edits that
+ * never reached the server): `show` is drawn instead of the server copy, and
+ * `afterShown` runs once it is on screen.
+ */
+interface DraftRecovery {
+  show?: DiagramData;
+  afterShown: () => Promise<void>;
+}
+
 export function DiagramLifecycleProvider({
   children
 }: {
   children: React.ReactNode;
 }) {
-  const { readonlyDiagramId, shareUuid, driveFileId } = useParams<{
+  const { readonlyDiagramId, shareUuid, driveFileId, diagramId: urlDiagramId } = useParams<{
     readonlyDiagramId: string;
     shareUuid: string;
     driveFileId: string;
+    diagramId: string;
   }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { t } = useTranslation('app');
   const {
     storage,
     storageManager,
     serverStorageAvailable,
+    runtimeConfig,
     remoteStorageActive,
     setActiveProviderId,
     defaultPlaceId,
@@ -392,9 +464,80 @@ export function DiagramLifecycleProvider({
   // Auto-save (server mode only)
   // ---------------------------------------------------------------------------
   const lastAutoSavedIdRef = useRef<string | null>(null);
+
+  // Batched uploads (server storage; stores/draftStore.ts, hooks/useAutoSave.ts).
+  // Each autosave is a checkpoint in this browser; while no other browser has
+  // the workspace open and no one else has the diagram, the upload waits up
+  // to UPLOAD_BATCH_MS and carries the latest checkpoint. Drafts belong to the signed-in user (one shared key
+  // when the deployment has no sign-in).
+  const signedInSub = useCognitoSessionStore((state) => state.user?.sub ?? null);
+  const userKeyRef = useRef('workspace');
+  userKeyRef.current = signedInSub ?? 'workspace';
+  // The active provider, not `storage.id`: the manager always says 'local'.
+  const batchingEnabled = serverStorageAvailable && !isReadonlyUrl &&
+    !!storage && storageManager?.activeProviderId === 'local';
+  const serverModeRef = useRef(false);
+  serverModeRef.current = serverStorageAvailable && storageManager?.activeProviderId === 'local';
+  // Filled in below, once the storage helpers exist.
+  const knownVersionOfRef = useRef<(id: string) => number | undefined>(() => undefined);
+  const serverStampOf = (id: string): string | undefined =>
+    (storageRef.current as { serverStamp?: (id: string) => string | undefined } | null)?.serverStamp?.(id);
+  // Per diagram: the checkpoints the content on screen descends from, newest
+  // last (its own, or one taken from another tab). See the tab handler.
+  const lineageRef = useRef<Map<string, string[]>>(new Map());
+  // Set once recoverDraft exists (it needs the loader, defined further down).
+  const recoverDraftRef = useRef<(id: string, loaded: DiagramData) => Promise<DraftRecovery | null>>(
+    async () => null
+  );
+  // Per diagram: the sibling tab whose checkpoint is on screen here. Its upload
+  // carries content this tab already shows (see the realtime sync filter).
+  const adoptedFromRef = useRef<Map<string, string>>(new Map());
+  const batch = useMemo<AutoSaveBatching | null>(() => {
+    if (!batchingEnabled) return null;
+    return {
+      maxDelayMs: UPLOAD_BATCH_MS,
+      // Every checkpoint uploads at once (owner decision 2026-11-13, ADR 0054
+      // addendum): every change reaches the person's other devices and the
+      // people the diagram is shared with live, a second or two after a pause,
+      // whether or not anyone else is watching right now. The checkpoint in
+      // the browser stays: it is what survives a crash or a failed upload,
+      // and what other tabs of this browser show at once.
+      uploadNow: () => true,
+      checkpoint: async (id, model) => {
+        const userKey = userKeyRef.current;
+        const baseVersion = knownVersionOfRef.current(id);
+        const baseStamp = serverStampOf(id);
+        const result = await useDraftStore.getState().checkpoint({ userKey, id, model, baseVersion, baseStamp });
+        const parents = (lineageRef.current.get(id) ?? []).slice(-LINEAGE_LIMIT);
+        lineageRef.current.set(id, [...parents, result.rev]);
+        // This tab's own content now: a sibling's save of this diagram is news again.
+        adoptedFromRef.current.delete(id);
+        if (!activeCollaboration(id)) postToTabs(
+          {
+            type: 'diagram-checkpoint', userKey, id, device: getDeviceId(),
+            rev: result.rev, parents, baseVersion, baseStamp, model
+          },
+          { fallback: false }
+        );
+        return result;
+      },
+      onUploaded: (id, rev) => {
+        const userKey = userKeyRef.current;
+        void useDraftStore.getState().uploaded(userKey, id, rev);
+        if (!activeCollaboration(id)) postToTabs(
+          { type: 'diagram-uploaded', userKey, id, rev, version: knownVersionOfRef.current(id), stamp: serverStampOf(id) },
+          { fallback: false }
+        );
+      }
+    };
+  }, [batchingEnabled]);
+
   const autoSave = useAutoSave({
+    batch,
     storage,
     enabled: !!storage && !isReadonlyUrl,
+    // AUTOSAVE_DELAY_MS from the deployment (1.5 s by default).
+    debounceMs: runtimeConfig?.autosaveDelayMs,
     onSaved: (id, savedAt) => {
       setLastSaved(savedAt);
       // Refresh the tree only on the first save of a given id (the save that
@@ -418,6 +561,8 @@ export function DiagramLifecycleProvider({
       });
     }
   });
+  const autoSaveSaveNowRef = useRef(autoSave.saveNow);
+  autoSaveSaveNowRef.current = autoSave.saveNow;
 
   // ---------------------------------------------------------------------------
   // File explorer panel state
@@ -512,12 +657,168 @@ export function DiagramLifecycleProvider({
   const isAfterLoadRef = useRef(true);
   const currentModelRef = useRef<DiagramData | null>(null);
   useEffect(() => { currentModelRef.current = currentModel; }, [currentModel]);
+  // The AI assistant reads the open page only when the user asks it to
+  // ("Include this page"), at that moment; nothing is pushed to it. Changes
+  // it suggests are carried out only when the person approves them, through
+  // the editor, as one undoable change saved like any edit (ADR 0052
+  // addendum 2026-11-10).
+  const isReadonlyUrlRef = useRef(isReadonlyUrl);
+  isReadonlyUrlRef.current = isReadonlyUrl;
+  useEffect(() => {
+    const { setReadPage, setPageAccess } = useAssistantPageStore.getState();
+    setReadPage(() => (currentModelRef.current
+      ? { model: currentModelRef.current as unknown as Model, viewId: axoviewRef.current?.getActiveViewId() }
+      : null));
+    setPageAccess(
+      (operations, viewId) => {
+        const outcomes = axoviewRef.current?.applyAgentOperations(operations, { viewId }) ?? [];
+        // Approved in the chat: the save that carries it names the assistant,
+        // so the other devices and people hear whose change it was.
+        const id = currentDiagramRef.current?.id;
+        if (id && outcomes.some((step) => step.status === 'ready')) {
+          storageRef.current?.noteAgentChange?.(id, ASSISTANT_NAME);
+        }
+        return outcomes;
+      },
+      () => {
+        const id = currentDiagramRef.current?.id;
+        if (!id || !currentModelRef.current || isReadonlyUrlRef.current) return false;
+        return storageRef.current?.sharedRole?.(id) !== 'viewer';
+      }
+    );
+    return () => {
+      setReadPage(null);
+      setPageAccess(null, null);
+    };
+  }, []);
 
   const currentDiagramRef = useRef<SavedDiagram | null>(null);
   useEffect(() => { currentDiagramRef.current = currentDiagram; }, [currentDiagram]);
 
+  // ---------------------------------------------------------------------------
+  // The open diagram and page in the URL: /app/d/<id>?page=<view id>
+  // ---------------------------------------------------------------------------
+  // So a refresh (or a bookmark) reopens the diagram and page you were on,
+  // instead of an empty /app. Server storage only: a session diagram lives in
+  // this browser (restored from localStorage), a Drive file has its own
+  // /display/drive/<id> link. Always `replace`: switching diagrams or pages
+  // adds no history entries.
+  const urlDiagramIdRef = useRef<string | null>(null);
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const urlTracksDiagram =
+    serverStorageAvailable && !isReadonlyUrl && storageManager?.activeProviderId !== 'google-drive';
+  const urlTracksDiagramRef = useRef(urlTracksDiagram);
+  urlTracksDiagramRef.current = urlTracksDiagram;
+  const writeDiagramUrl = useCallback((id: string | null, viewId?: string) => {
+    const { pathname, search } = locationRef.current;
+    const onDiagramUrl = pathname.startsWith('/d/');
+    let target: string;
+    if (id && urlTracksDiagramRef.current) {
+      target = `/d/${encodeURIComponent(id)}${viewId ? `?page=${encodeURIComponent(viewId)}` : ''}`;
+    } else if (onDiagramUrl) {
+      target = '/';
+    } else {
+      return;
+    }
+    if (pathname + search === target) return;
+    navigate(target, { replace: true });
+    // Two writes in one tick (a load, then its page) must compare against
+    // this one, not the location of the last render.
+    const [nextPath, nextQuery] = target.split('?');
+    locationRef.current = { ...locationRef.current, pathname: nextPath, search: nextQuery ? `?${nextQuery}` : '' };
+  }, [navigate]);
+  // handleDiagramManagerLoad is declared above this hook's callbacks.
+  const writeDiagramUrlRef = useRef(writeDiagramUrl);
+  writeDiagramUrlRef.current = writeDiagramUrl;
+
+  // The editor switched page. The lib reports from a child effect, before
+  // currentDiagramRef updates, so this keys off urlDiagramIdRef (set at load).
+  const handleActiveViewChange = useCallback((viewId: string) => {
+    if (urlDiagramIdRef.current) writeDiagramUrl(urlDiagramIdRef.current, viewId);
+  }, [writeDiagramUrl]);
+
+  // Reopening from the URL. Until that attempt ends, "no diagram open" is the
+  // normal boot state, not a reason to clear the URL.
+  const urlRestorePendingRef = useRef(!!urlDiagramId);
+  // The URL diagram this tab has dealt with (reopened, failed, or already
+  // open). Reopening happens once per URL: after that, "nothing open" means
+  // it was closed or deleted, and must not bring it back.
+  const urlHandledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (currentDiagram || urlRestorePendingRef.current) return;
+    urlDiagramIdRef.current = null;
+    writeDiagramUrl(null);
+  }, [currentDiagram, writeDiagramUrl]);
+
   const diagramNameRef = useRef(diagramName);
   useEffect(() => { diagramNameRef.current = diagramName; }, [diagramName]);
+
+  /** The editor's model as the document this app saves (what an autosave of it sends). */
+  const documentOf = useCallback((model: Model): DiagramData => {
+    // isoflow's model schema doesn't include `requiredPacks`, so the field
+    // is dropped from `model` here. Re-attach from the in-memory ref so the
+    // hint survives autosave round-trips when the icons array hasn't been
+    // fully rehydrated (e.g. a pack is still loading on first open).
+    const preservedRequiredPacks = currentModelRef.current?.requiredPacks;
+    return {
+      title: model.title || diagramNameRef.current || 'Untitled',
+      icons: model.icons || [],
+      colors: model.colors || defaultColors,
+      items: model.items || [],
+      views: model.views || [],
+      fitToScreen: true,
+      ...(Array.isArray(preservedRequiredPacks)
+        ? { requiredPacks: preservedRequiredPacks }
+        : {})
+    };
+  }, []);
+
+  // Approving an outside agent's proposal (components/ProposalPrompt.tsx): the
+  // change is stored before it shows, so the agent is never told "approved"
+  // for something that then fails to save (ADR 0059 addendum 2026-11-12).
+  useEffect(() => {
+    const { setStoreThenApply } = useAssistantPageStore.getState();
+    setStoreThenApply(async (operations, viewId, store) => {
+      const id = currentDiagramRef.current?.id;
+      if (!id || !axoviewRef.current) return { status: 'nothing', steps: [] };
+      // Edits not uploaded yet go up first, as any save does. What is then
+      // sent for approval is built on exactly what the server holds, so the
+      // server can refuse it if the diagram changes elsewhere meanwhile.
+      if ((await autoSaveSaveNowRef.current()) === 'error') return { status: 'unsaved', steps: [] };
+      // A live (Yjs) session: have the server assemble its snapshot now, so the
+      // approval is checked against the version that holds every edit so far
+      // (the server also snapshots on its own a few seconds after an edit,
+      // which would otherwise make this tab's version stale).
+      try {
+        await activeCollaboration(id)?.flush();
+      } catch {
+        return { status: 'unsaved', steps: [] };
+      }
+      if (currentDiagramRef.current?.id !== id) return { status: 'nothing', steps: [] };
+      const prepared = axoviewRef.current?.prepareAgentOperations(operations, { viewId });
+      if (!prepared) return { status: 'nothing', steps: [] };
+      const made = prepared.steps.filter((step) => step.status === 'ready').length;
+      if (made === 0) return { status: 'nothing', steps: prepared.steps };
+      if (!(await store(documentOf(prepared.model), made))) return { status: 'not-stored', steps: prepared.steps };
+      // Stored. If another diagram was opened meanwhile, it is not this
+      // editor's to show: the stored diagram has the change when reopened.
+      if (currentDiagramRef.current?.id !== id) return { status: 'made', steps: prepared.steps };
+      // A live (Yjs) session: the server wrote the approved change into the
+      // shared document, and it reaches this editor as that document's update,
+      // like everyone else's. Putting it in the editor here as well would be a
+      // second, concurrent edit of the same fields (names would double), so
+      // pull the update now instead of waiting for the stream.
+      const live = activeCollaboration(id);
+      if (live) {
+        await live.sync().catch(() => {});
+        return { status: 'made', steps: prepared.steps };
+      }
+      return { status: 'made', steps: prepared.commit() };
+    });
+    return () => setStoreThenApply(null);
+  }, [documentOf]);
 
   // Session-mode scratch buffer
   const scratchBufferRef = useRef<Map<string, DiagramData>>(new Map());
@@ -546,12 +847,26 @@ export function DiagramLifecycleProvider({
   );
   const hasUnsavedWorkRef = useRef(hasUnsavedWork);
   useEffect(() => { hasUnsavedWorkRef.current = hasUnsavedWork; }, [hasUnsavedWork]);
+  // Leaving the page: with batched uploads, work saved in the browser (a
+  // persisted draft, restored on the next open) is not at risk, so only work
+  // that is not even there warns. The flush on `pagehide` below still tries
+  // to upload it.
+  const hasWorkAtRiskOnUnload = useCallback(
+    (): boolean =>
+      (batch ? autoSave.hasUnpersistedWork() : autoSave.hasUnsavedWork()) ||
+      dirtyDiagramIdsRef.current.size > 0 ||
+      (!serverStorageAvailable && sessionWorkUnexportedRef.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the autoSave predicates are stable; the rest are refs
+    [batch, autoSave.hasUnpersistedWork, autoSave.hasUnsavedWork, serverStorageAvailable]
+  );
+  const hasWorkAtRiskOnUnloadRef = useRef(hasWorkAtRiskOnUnload);
+  useEffect(() => { hasWorkAtRiskOnUnloadRef.current = hasWorkAtRiskOnUnload; }, [hasWorkAtRiskOnUnload]);
   const beforeUnloadMessageRef = useRef('');
   useEffect(() => { beforeUnloadMessageRef.current = t('alert.beforeUnload'); }, [t]);
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!hasUnsavedWorkRef.current()) return;
+      if (!hasWorkAtRiskOnUnloadRef.current()) return;
       e.preventDefault();
       e.returnValue = beforeUnloadMessageRef.current;
       return e.returnValue;
@@ -1173,9 +1488,29 @@ export function DiagramLifecycleProvider({
       // remote: the open diagram reloaded because another device saved it
       // (realtime sync) — keep the viewport, and never write back from here,
       // or two devices would answer each other's saves forever.
-      { remote = false }: { remote?: boolean } = {}
+      // view: open on this page if the diagram has it (the URL's ?page=).
+      // created: just made here, so this browser cannot hold a draft of it.
+      { remote = false, view, created = false }: { remote?: boolean; view?: string; created?: boolean } = {}
     ) => {
-      const data: PersistedDiagramBlob = isPersistedDiagramBlob(rawData) ? rawData : {};
+      const leaving = currentDiagramRef.current?.id;
+      if (!remote && leaving && leaving !== id) await activeCollaboration(leaving)?.flush();
+      let data: PersistedDiagramBlob = isPersistedDiagramBlob(rawData) ? rawData : {};
+
+      // Opening it (not a reload): this browser may hold edits to it that
+      // never reached the server. Decided before anything is drawn, so the
+      // canvas shows one version, not the server copy and then, a moment
+      // later, the draft over it.
+      let recovery: DraftRecovery | null = null;
+      if (!remote && !created) {
+        recovery = await recoverDraftRef.current(id, {
+          title: data.title || '',
+          icons: [],
+          colors: data.colors?.length ? data.colors : defaultColors,
+          items: Array.isArray(data.items) ? data.items : [],
+          views: withFirstPage(id, data.views)
+        });
+        if (recovery?.show) data = recovery.show as unknown as PersistedDiagramBlob;
+      }
 
       const loadedIcons: Icon[] = data.icons || [];
       await iconPackManager.loadPacksForDiagram(data);
@@ -1201,7 +1536,7 @@ export function DiagramLifecycleProvider({
         icons: finalIcons,
         colors: data.colors?.length ? data.colors : defaultColors,
         items: Array.isArray(data.items) ? data.items : [],
-        views: Array.isArray(data.views) ? data.views : [],
+        views: withFirstPage(id, data.views),
         fitToScreen: data.fitToScreen !== false,
         requiredPacks: data.requiredPacks
       };
@@ -1218,22 +1553,89 @@ export function DiagramLifecycleProvider({
       setLastSaved(new Date(newDiagram.updatedAt));
       autoSave.resetStatus();
       isAfterLoadRef.current = true;
+      const requestedView =
+        view && mergedData.views.some((v) => v.id === view) ? view : undefined;
+      // The URL follows the open diagram from here on (writeDiagramUrl).
+      urlDiagramIdRef.current = id;
       if (!axoviewRef.current) {
         // Axoview not mounted yet (EmptyStateScreen showing) — seed initialData so it
         // mounts with the correct diagram instead of the stale frozen data.
-        frozenInitialDataRef.current = mergedData;
+        frozenInitialDataRef.current = requestedView
+          ? ({ ...mergedData, view: requestedView } as DiagramData)
+          : mergedData;
       }
       axoviewRef.current?.load(
         mergedData as InitialData,
-        remote ? { preserveViewport: true } : undefined
+        remote ? { preserveViewport: true } : requestedView ? { view: requestedView } : undefined
       );
-      if (!remote && !hasDefaultIcons && storageRef.current) {
+      if (!remote) writeDiagramUrlRef.current(id, axoviewRef.current?.getActiveViewId() ?? requestedView);
+      // Write the icon-merged diagram back (a migration for diagrams stored
+      // before packs loaded on demand). Not on server storage: the stored
+      // document is already the lean shape this would write, so every open
+      // was a full upload the server found unchanged (and, before it could
+      // tell, a real write that made every other device reload).
+      if (!remote && !hasDefaultIcons && storageRef.current && !serverModeRef.current) {
         storageRef.current.saveDiagram(id, mergedData).catch(() => {});
       }
+      // A restored draft goes up now; an outdated one is offered.
+      if (recovery) void recovery.afterShown();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.resetStatus; whole autoSave churns on every save-status change
     [iconPackManager, autoSave.resetStatus]
   );
+
+  // A refresh or a bookmark on /app/d/<id>?page=<view>: open that diagram on
+  // that page once server storage is ready. The editor only mounts after
+  // sign-in (CognitoSessionProvider), so this never races the session. A
+  // diagram that is gone or not this user's: say so and fall back to /app.
+  useEffect(() => {
+    if (!urlDiagramId || isReadonlyUrl || !isInitialized) return;
+    if (urlHandledRef.current === urlDiagramId) return;
+    const done = () => { urlRestorePendingRef.current = false; };
+    if (!serverStorageAvailable) {
+      urlHandledRef.current = urlDiagramId;
+      done();
+      navigate('/', { replace: true });
+      return;
+    }
+    if (currentDiagramRef.current?.id === urlDiagramId) {
+      // Opened in this tab (the URL followed it): nothing to reopen.
+      urlHandledRef.current = urlDiagramId;
+      done();
+      return;
+    }
+    if (!storage) return;
+    if (storageManager && storageManager.activeProviderId !== 'local') {
+      setActiveProviderId('local');
+      return;
+    }
+    urlHandledRef.current = urlDiagramId;
+    const page = new URLSearchParams(locationRef.current.search).get('page') || undefined;
+    void (async () => {
+      try {
+        const raw: unknown = await storage.loadDiagram(urlDiagramId);
+        if (storage.sharedRole?.(urlDiagramId) === 'viewer') {
+          // A Read only member following an editor link: the read-only viewer.
+          navigate(`/display/${encodeURIComponent(urlDiagramId)}`, { replace: true });
+          return;
+        }
+        await handleDiagramManagerLoad(urlDiagramId, raw, '', { view: page });
+      } catch (e) {
+        console.warn('Could not reopen the diagram in the URL:', e);
+        notificationStore.push({
+          severity: 'warning',
+          message: t(
+            'diagram.linkUnavailable',
+            "That diagram can't be opened. It may have been deleted, or it belongs to another account."
+          )
+        });
+        navigate('/', { replace: true });
+      } finally {
+        done();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t and notificationStore are stable; re-run only when the URL target or storage readiness changes
+  }, [urlDiagramId, isReadonlyUrl, isInitialized, serverStorageAvailable, storage, storageManager, setActiveProviderId, handleDiagramManagerLoad, navigate]);
 
   // ---------------------------------------------------------------------------
   // Create blank diagram (for canvas card or file tree)
@@ -1282,7 +1684,7 @@ export function DiagramLifecycleProvider({
           setFileExplorerOpen(true);
         }
         setFileTreeRefreshToken((n) => n + 1);
-        await handleDiagramManagerLoad(id, blankData, name);
+        await handleDiagramManagerLoad(id, blankData, name, { created: true });
         if (focusAfter === 'elements') {
           // Bridge into the lib store (separate provider tree) the same way the
           // other cross-boundary commands do — a window event the LeftDock
@@ -1536,6 +1938,13 @@ export function DiagramLifecycleProvider({
   const knownVersionOf = (id: string): number | undefined =>
     (storageRef.current as { knownVersion?: (id: string) => number | undefined } | null)
       ?.knownVersion?.(id);
+  knownVersionOfRef.current = knownVersionOf;
+  const noteVersion = (id: string, version: number) =>
+    (storageRef.current as { noteVersion?: (id: string, version: number) => void } | null)
+      ?.noteVersion?.(id, version);
+  const noteStamp = (id: string, stamp: string) =>
+    (storageRef.current as { noteStamp?: (id: string, stamp: string) => void } | null)
+      ?.noteStamp?.(id, stamp);
 
   // Another device saved the open diagram: load its content in place. Skipped
   // when this tab has unsaved work (its next save wins), when another diagram
@@ -1546,7 +1955,14 @@ export function DiagramLifecycleProvider({
     if (!open || !s || hasUnsavedWorkRef.current()) return;
     const before = knownVersionOf(open.id);
     const raw = await s.loadDiagram(open.id);
-    if (currentDiagramRef.current?.id !== open.id || hasUnsavedWorkRef.current()) return;
+    if (currentDiagramRef.current?.id !== open.id) return;
+    // Moved to the trash while this tab missed the event (a resync): close it
+    // as a delete, not show the trashed copy.
+    if (raw && typeof raw === 'object' && (raw as { deletedAt?: unknown }).deletedAt) {
+      closeDeletedElsewhereRef.current(open.id, 'device');
+      return;
+    }
+    if (hasUnsavedWorkRef.current()) return;
     const after = knownVersionOf(open.id);
     if (before !== undefined && after !== undefined && after === before) return;
     await handleDiagramManagerLoad(open.id, raw, diagramNameRef.current || open.name, {
@@ -1554,6 +1970,204 @@ export function DiagramLifecycleProvider({
     });
   }, [handleDiagramManagerLoad]);
 
+  // A diagram deleted elsewhere while open here: close it (the URL goes back
+  // to /app with it) and say where it went. `tab`: another tab of this
+  // browser told us at once (tabChannel); `device`: the server's sync said so.
+  const closeDeletedElsewhere = useCallback((id: string, where: 'tab' | 'device') => {
+    if (currentDiagramRef.current?.id !== id) return;
+    notifyDiagramDeletedFromTree(id);
+    setFileTreeRefreshToken((n) => n + 1);
+    notificationStore.push({
+      severity: 'warning',
+      message: where === 'tab'
+        ? t('sync.deletedInAnotherTab', 'This diagram was deleted in another tab.')
+        : t('sync.deletedElsewhere', 'This diagram was deleted in another tab or on another device.')
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t and notificationStore are stable
+  }, [notifyDiagramDeletedFromTree]);
+  const closeDeletedElsewhereRef = useRef(closeDeletedElsewhere);
+  closeDeletedElsewhereRef.current = closeDeletedElsewhere;
+
+  // Other tabs of this browser: a deleted diagram closes here at once, for
+  // every kind of storage (the server's sync stream follows for server
+  // storage, and finds nothing left to close).
+  useEffect(() => onTabMessage((message) => {
+    if ('id' in message && typeof message.id === 'string' && activeCollaboration(message.id) &&
+      (message.type === 'diagram-checkpoint' || message.type === 'diagram-uploaded')) return;
+    if (message.type === 'diagram-checkpoint') {
+      void takeCheckpointRef.current(message);
+      return;
+    }
+    if (message.type === 'diagram-uploaded') {
+      if (message.userKey !== userKeyRef.current) return;
+      void useDraftStore.getState().uploaded(message.userKey, message.id, message.rev);
+      // This tab shows exactly that checkpoint: it is now that server version.
+      const held = lineageRef.current.get(message.id)?.slice(-1)[0];
+      if (held === message.rev && message.version !== undefined) noteVersion(message.id, message.version);
+      if (held === message.rev && message.stamp) noteStamp(message.id, message.stamp);
+      return;
+    }
+    if (message.type !== 'diagram-deleted') return;
+    if (currentDiagramRef.current?.id === message.id) {
+      closeDeletedElsewhereRef.current(message.id, 'tab');
+    } else {
+      setFileTreeRefreshToken((n) => n + 1);
+    }
+  }), []);
+
+  // Another tab of this browser checkpointed an edit to the diagram open here:
+  // show it at once (no server round trip). Taken only when this tab has no
+  // edit of its own that is not checkpointed yet (that one goes out next and
+  // the other tab takes it instead), and, when this tab has a checkpoint still
+  // queued for upload, only if the other tab's content descends from it: then
+  // that tab's upload carries both, and this tab's queued one is dropped.
+  // Otherwise both upload and the later save wins, as between devices.
+  const takeCheckpoint = useCallback(async (
+    message: Extract<TabMessage, { type: 'diagram-checkpoint' }>
+  ) => {
+    if (!batchingEnabled || message.userKey !== userKeyRef.current) return;
+    const open = currentDiagramRef.current;
+    if (!open || open.id !== message.id) return;
+    if (autoSave.hasUnpersistedWork()) return;
+    const held = lineageRef.current.get(message.id)?.slice(-1)[0];
+    if (autoSave.hasUnsavedWork() && held && !message.parents.includes(held)) return;
+    autoSave.dropQueued(message.id);
+    lineageRef.current.set(message.id, [...message.parents, message.rev].slice(-LINEAGE_LIMIT - 1));
+    adoptedFromRef.current.set(message.id, message.device);
+    useDraftStore.getState().adopt({
+      userKey: message.userKey,
+      id: message.id,
+      model: message.model as DiagramData,
+      baseVersion: message.baseVersion,
+      baseStamp: message.baseStamp,
+      rev: message.rev,
+      savedAt: Date.now()
+    });
+    if (message.baseVersion !== undefined) noteVersion(message.id, message.baseVersion);
+    if (message.baseStamp) noteStamp(message.id, message.baseStamp);
+    await handleDiagramManagerLoad(message.id, message.model, diagramNameRef.current || open.name, {
+      remote: true
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoSave's predicates and dropQueued are stable; noteVersion reads refs
+  }, [batchingEnabled, handleDiagramManagerLoad, autoSave.hasUnpersistedWork, autoSave.hasUnsavedWork, autoSave.dropQueued]);
+  const takeCheckpointRef = useRef(takeCheckpoint);
+  takeCheckpointRef.current = takeCheckpoint;
+
+  // Opening a diagram that has a draft in this browser (stores/draftStore.ts):
+  // edits that never reached the server. Edited from the version the server
+  // still has: show and upload them. The server moved on since (another device
+  // saved): show the server's and offer them, instead of overwriting that save
+  // unasked. Runs before the diagram is drawn (handleDiagramManagerLoad), so
+  // a restore is one draw, not the server copy and then the draft over it.
+  const recoverDraft = useCallback(async (id: string, loaded: DiagramData): Promise<DraftRecovery | null> => {
+    if (!batchingEnabled) return null;
+    const userKey = userKeyRef.current;
+    // The server state as this load found it, before anything below can
+    // write and move it.
+    const serverStamp = serverStampOf(id);
+    const serverVersion = knownVersionOfRef.current(id);
+    const draft = await useDraftStore.getState().find(userKey, id);
+    if (!draft) return null;
+    // This tab's own checkpoint, still on its way up: not a leftover.
+    if (lineageRef.current.get(id)?.includes(draft.rev)) return null;
+    // Its edits reached the server after all (an upload sent as the tab
+    // closed, delivered late): nothing to restore.
+    if (sameContent(draft.model, loaded)) {
+      await useDraftStore.getState().discard(userKey, id);
+      return null;
+    }
+    // On screen now: upload it, and drop the draft once that landed.
+    const upload = async () => {
+      lineageRef.current.set(id, [draft.rev]);
+      autoSave.scheduleSave(id, draft.model);
+      if ((await autoSave.saveNow()) === 'saved') await useDraftStore.getState().discard(userKey, id);
+    };
+    // Unchanged since the draft was made: same server stamp (its version, or
+    // lastModified on a store without versions). Unknown on either side: a
+    // draft from before stamps existed, or a backend that reports none.
+    const unchangedSince = draft.baseStamp && serverStamp
+      ? draft.baseStamp === serverStamp
+      : draft.baseVersion === undefined || serverVersion === undefined || draft.baseVersion === serverVersion;
+    if (unchangedSince) {
+      return {
+        show: draft.model,
+        afterShown: async () => {
+          notificationStore.push({
+            severity: 'info',
+            message: t('sync.draftRestored', 'Restored edits from this browser that had not reached the server yet.')
+          });
+          await upload();
+        }
+      };
+    }
+    // The user chose to put them back over what another device saved.
+    const restore = async () => {
+      const open = currentDiagramRef.current;
+      if (open?.id !== id) return;
+      await handleDiagramManagerLoad(id, draft.model, diagramNameRef.current || open.name, { remote: true });
+      await upload();
+    };
+    return {
+      afterShown: async () => {
+        notificationStore.push({
+          severity: 'warning',
+          message: t(
+            'sync.draftOutdated',
+            'This browser has edits to this diagram that never reached the server, and the diagram has changed since.'
+          ),
+          action: { label: t('sync.restoreDraft', 'Restore my edits'), onClick: () => { void restore(); } }
+        });
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoSave's methods are stable; t and notificationStore too
+  }, [batchingEnabled, handleDiagramManagerLoad, autoSave.scheduleSave, autoSave.saveNow]);
+  recoverDraftRef.current = recoverDraft;
+
+  // Batched uploads go out at once when it matters: the tab is hidden or the
+  // page is going away (keepalive upload; the draft covers a failure), or
+  // another browser opened the workspace and should see edits live.
+  useEffect(() => {
+    if (!batch) return undefined;
+    const flush = () => {
+      if (autoSave.hasUnsavedWork()) void autoSaveSaveNowRef.current();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    let company = othersPresent();
+    const stopWatching = usePresenceStore.subscribe(() => {
+      const now = othersPresent();
+      if (now && !company) flush();
+      company = now;
+    });
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      stopWatching();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- autoSave.hasUnsavedWork is stable
+  }, [batch, autoSave.hasUnsavedWork]);
+
+  // Signing out (here or in another tab): save pending edits first.
+  useEffect(() => registerBeforeSignOut(async () => {
+    if (currentDiagramRef.current) {
+      await autoSaveSaveNowRef.current();
+      await activeCollaboration(currentDiagramRef.current.id)?.flush();
+    }
+  }), []);
+
+  // Defined further down; the live notices' buttons call them.
+  const openDiagramByIdRef = useRef<(id: string, name: string) => Promise<void>>(async () => undefined);
+  /** Review on a "proposes changes" notice: open that diagram and its waiting proposals. */
+  const reviewProposalsRef = useRef((change: SyncChange) => {
+    const id = change.id;
+    if (!id) return;
+    useAssistantPageStore.getState().setReviewProposalsOf(id);
+    if (currentDiagramRef.current?.id !== id) void openDiagramByIdRef.current(id, change.diagramName ?? '');
+  });
+  const agentNoticeAtRef = useRef(new Map<string, number>());
   useRealtimeSync({
     enabled: serverStorageAvailable && storage?.id === 'local' && !isReadonlyUrl,
     baseUrl: apiBaseUrl(),
@@ -1566,7 +2180,60 @@ export function DiagramLifecycleProvider({
       };
     },
     reloadOpenDiagram: reloadOpenDiagramFromRemote,
+    alreadyHave: (change) => {
+      if (change.id && activeCollaboration(change.id) && change.action === 'save') {
+        void activeCollaboration(change.id)?.sync().catch(() => {});
+        return true;
+      }
+      if (change.kind !== 'diagram' || change.action !== 'save' || !change.id || !change.origin) return false;
+      if (currentDiagramRef.current?.id !== change.id) return false;
+      if (adoptedFromRef.current.get(change.id) !== change.origin) return false;
+      if (change.version !== undefined) noteVersion(change.id, change.version);
+      return true;
+    },
     refreshTree: () => setFileTreeRefreshToken((n) => n + 1),
+    // Live notices of AI agents' work (ADR 0059 addendum 2026-11-13).
+    onAgentProposal: (change) => {
+      const steps = change.steps ?? 1;
+      notificationStore.push({
+        severity: 'info',
+        message: t('agents.proposed', {
+          agent: change.agent,
+          count: steps,
+          diagram: change.diagramName ?? t('agents.aDiagram', 'a diagram'),
+          defaultValue: steps === 1
+            ? '{{agent}} proposes 1 change to “{{diagram}}”'
+            : '{{agent}} proposes {{count}} changes to “{{diagram}}”'
+        }),
+        autoDismiss: 10_000,
+        action: { label: t('agents.review', 'Review'), onClick: () => reviewProposalsRef.current(change) }
+      });
+    },
+    onAgentChange: (change, open) => {
+      const id = change.id!;
+      // One approval can arrive twice (the save's event and the live
+      // session's update): say it once.
+      const said = `${id}\n${change.agent}`;
+      const last = agentNoticeAtRef.current.get(said) ?? 0;
+      if (Date.now() - last < 4000) return;
+      agentNoticeAtRef.current.set(said, Date.now());
+      notificationStore.push({
+        severity: 'info',
+        message: open
+          ? t('agents.changedOpen', { agent: change.agent, defaultValue: '{{agent}}’s approved changes were added to this diagram' })
+          : t('agents.changedOther', {
+            agent: change.agent,
+            diagram: change.diagramName ?? t('agents.aDiagram', 'a diagram'),
+            defaultValue: '{{agent}}’s approved changes were added to “{{diagram}}”'
+          }),
+        autoDismiss: 6_000,
+        ...(open ? {} : {
+          action: { label: t('agents.open', 'Open'), onClick: () => void openDiagramByIdRef.current(id, change.diagramName ?? '') }
+        })
+      });
+    },
+    // The hook warns ("deleted in another tab or on another device") and
+    // refreshes the tree.
     onOpenDeleted: notifyDiagramDeletedFromTree,
     onOpenRenamed: notifyDiagramRenamedFromTree,
     notify: (severity, message) => notificationStore.push({ severity, message }),
@@ -1644,11 +2311,14 @@ export function DiagramLifecycleProvider({
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      // Either case: with Caps Lock on (or Shift held) the key is 'S', and
+      // Ctrl+S used to do nothing, leaving the save to the autosave.
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === 's') {
         e.preventDefault();
         handleSaveClick();
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+      if ((e.ctrlKey || e.metaKey) && key === 'o') {
         e.preventDefault();
         handleOpenClick();
       }
@@ -1684,6 +2354,12 @@ export function DiagramLifecycleProvider({
 
         const buffered = scratchBufferRef.current.get(id);
         const rawData: unknown = buffered ?? await storage.loadDiagram(id);
+        // Shared with this account as Read only: it opens in the read-only
+        // viewer, the same one a public link shows (ADR 0057, 2026-11-10).
+        if (storage.sharedRole?.(id) === 'viewer') {
+          navigate(`/display/${encodeURIComponent(id)}`);
+          return;
+        }
         await handleDiagramManagerLoad(id, rawData, name);
       } catch (e) {
         console.error('openDiagramById failed:', e);
@@ -1691,8 +2367,9 @@ export function DiagramLifecycleProvider({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.saveNow/resetStatus; whole autoSave churns on every save-status change
-    [storage, storageManager, setActiveProviderId, remoteStorageActive, autoSave.saveNow, autoSave.resetStatus, handleDiagramManagerLoad]
+    [storage, storageManager, setActiveProviderId, remoteStorageActive, autoSave.saveNow, autoSave.resetStatus, handleDiagramManagerLoad, navigate]
   );
+  openDiagramByIdRef.current = openDiagramById;
 
   const handlePreviewClick = useCallback(async () => {
     if (!currentDiagram || !storage) return;
@@ -1854,27 +2531,48 @@ export function DiagramLifecycleProvider({
     };
   }, [saveAllDirty]);
 
+  // One session per open server diagram. Remote merges preserve the viewport;
+  // they never enter the legacy cross-tab checkpoint or whole-document save path.
+  useEffect(() => {
+    const id = currentDiagram?.id;
+    if (!id || !batchingEnabled || runtimeConfig?.collaborationEnabled !== true) return;
+    let attachedHistory = false;
+    let session: LiveSession | null = null;
+    let left = false;
+    // Yjs loads on demand, off the app's first chunk. An edit made before it
+    // arrives goes out as an ordinary save, which the server turns into a delta.
+    void import('../services/sync/collaboration').then(({ DiagramCollaboration }) => {
+      if (left) return;
+      session = new DiagramCollaboration(id, signedInSub ?? 'workspace', raw => {
+      if (currentDiagramRef.current?.id !== id) return;
+      const data = raw as DiagramData;
+      const model = { ...data, icons: [
+        ...iconPackManager.getLoadedIcons(), ...(data.icons || []).filter(icon => icon.collection === 'imported')
+      ] };
+      if (attachedHistory && JSON.stringify(leanIfModel(currentModelRef.current)) === JSON.stringify(leanIfModel(model))) return;
+      attachedHistory = true;
+      currentModelRef.current = model;
+      setCurrentModel(model);
+      isAfterLoadRef.current = true;
+      axoviewRef.current?.load(model as InitialData, { preserveViewport: true, collaborationHistory: activeCollaboration(id)?.history });
+      }, message => notificationStore.push({ severity: 'info', message, autoDismiss: 5000 }));
+    }).catch(() => { /* offline: ordinary saves carry on */ });
+    return () => {
+      left = true;
+      const open = session;
+      if (open) void open.flush().catch(() => {}).finally(() => open.close());
+    };
+  // The callbacks read live refs; changing a title must not reconnect the room.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDiagram?.id, batchingEnabled, signedInSub, runtimeConfig?.collaborationEnabled]);
+
   // ---------------------------------------------------------------------------
   // Model update handler
   // ---------------------------------------------------------------------------
   const handleModelUpdated = useCallback(
     (model: Model) => {
-      // isoflow's model schema doesn't include `requiredPacks`, so the field
-      // is dropped from `model` here. Re-attach from the in-memory ref so the
-      // hint survives autosave round-trips when the icons array hasn't been
-      // fully rehydrated (e.g. a pack is still loading on first open).
-      const preservedRequiredPacks = currentModelRef.current?.requiredPacks;
-      const updatedModel: DiagramData = {
-        title: model.title || diagramNameRef.current || 'Untitled',
-        icons: model.icons || [],
-        colors: model.colors || defaultColors,
-        items: model.items || [],
-        views: model.views || [],
-        fitToScreen: true,
-        ...(Array.isArray(preservedRequiredPacks)
-          ? { requiredPacks: preservedRequiredPacks }
-          : {})
-      };
+      const updatedModel = documentOf(model);
+      const previousModel = currentModelRef.current;
       setCurrentModel(updatedModel);
 
       if (isAfterLoadRef.current) {
@@ -1896,6 +2594,7 @@ export function DiagramLifecycleProvider({
         // ── Server mode ──────────────────────────────────────────────────────
         const currentId = currentDiagramRef.current?.id ?? null;
         if (currentId) {
+          activeCollaboration(currentId)?.change(leanIfModel(previousModel), leanIfModel(updatedModel));
           autoSave.scheduleSave(currentId, updatedModel);
         }
         // If no diagram open, do nothing — user must create explicitly
@@ -1915,7 +2614,7 @@ export function DiagramLifecycleProvider({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depends on stable autoSave.scheduleSave; whole autoSave churns on every save-status change
-    [isReadonlyUrl, remoteStorageActive, autoSave.scheduleSave]
+    [isReadonlyUrl, remoteStorageActive, autoSave.scheduleSave, documentOf]
   );
 
   // ---------------------------------------------------------------------------
@@ -1990,6 +2689,7 @@ export function DiagramLifecycleProvider({
     handleOpenClick,
     handlePreviewClick,
     handleModelUpdated,
+    handleActiveViewChange,
     handleExportJSON,
     handleExportImage,
     handleExportProject,

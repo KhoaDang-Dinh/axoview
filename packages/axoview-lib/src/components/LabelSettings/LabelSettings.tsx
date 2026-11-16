@@ -19,7 +19,13 @@ export const LabelSettings = () => {
 
   return (
     <Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2
+        }}
+      >
         {t('description')}
       </Typography>
 
@@ -29,8 +35,11 @@ export const LabelSettings = () => {
         </Typography>
         <Typography
           variant="caption"
-          color="text.secondary"
-          sx={{ mb: 1, display: 'block' }}
+          sx={{
+            color: 'text.secondary',
+            mb: 1,
+            display: 'block'
+          }}
         >
           {t('expandButtonPaddingDesc')}
         </Typography>
@@ -44,7 +53,12 @@ export const LabelSettings = () => {
           valueLabelDisplay="auto"
           sx={{ mt: 2 }}
         />
-        <Typography variant="caption" color="text.secondary">
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary'
+          }}
+        >
           {/* D13 — was hardcoded English; {value} interpolated via i18n. */}
           {t('currentValue').replace(
             '{value}',

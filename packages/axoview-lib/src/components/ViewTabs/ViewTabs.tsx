@@ -106,6 +106,8 @@ export const ViewTabs = () => {
 
   return (
     <Box
+      role="tablist"
+      aria-label="Pages"
       sx={{
         display: 'flex',
         flexDirection: 'row',
@@ -144,6 +146,12 @@ export const ViewTabs = () => {
           <Box
             key={view.id}
             onClick={() => handleTabClick(view.id)}
+            // The page tab, and which one is on screen: for screen readers,
+            // and a stable hook for browser tests that cannot read the store.
+            role="tab"
+            aria-selected={isActive}
+            data-axoview-id="view-tab"
+            data-view-id={view.id}
             sx={{ cursor: 'pointer', display: 'flex', minWidth: 0 }}
           >
             <Box

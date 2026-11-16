@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { coords, id, constrainedStrings, NOTES_MAX_LENGTH, ARRAY_MAX } from './common';
 
 export const connectorStyleOptions = ['SOLID', 'DOTTED', 'DASHED'] as const;

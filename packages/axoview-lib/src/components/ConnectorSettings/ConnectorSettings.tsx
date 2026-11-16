@@ -45,7 +45,12 @@ export const ConnectorSettings = () => {
                   <Typography variant="body1">
                     {t('settings.connector.clickMode')}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary'
+                    }}
+                  >
                     {t('settings.connector.clickModeDesc')}
                   </Typography>
                 </Box>
@@ -59,7 +64,12 @@ export const ConnectorSettings = () => {
                   <Typography variant="body1">
                     {t('settings.connector.dragMode')}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'text.secondary'
+                    }}
+                  >
                     {t('settings.connector.dragModeDesc')}
                   </Typography>
                 </Box>
@@ -70,7 +80,13 @@ export const ConnectorSettings = () => {
         </FormControl>
       </Paper>
 
-      <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mt: 2
+        }}
+      >
         {t('settings.connector.note')}
       </Typography>
     </Box>

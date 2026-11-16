@@ -68,7 +68,13 @@ export const LazyLoadingWelcomeNotification = () => {
           {t('message')}
         </Typography>
 
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 1
+          }}
+        >
           {t('canDisable')}
         </Typography>
 

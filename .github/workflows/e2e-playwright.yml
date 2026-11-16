@@ -50,7 +50,7 @@ jobs:
   playwright:
     name: Playwright (chromium) [shard ${{ matrix.shard }}/4]
     if: ${{ github.event.pull_request.draft != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       # One shard failing must not cancel the others — we want the full picture.
@@ -118,7 +118,7 @@ jobs:
     name: Merge Playwright reports
     if: ${{ failure() && github.event.pull_request.draft != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [playwright]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -165,7 +165,7 @@ jobs:
     # ready re-triggers the workflow via the `ready_for_review` type above.
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [playwright]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Assert every shard passed

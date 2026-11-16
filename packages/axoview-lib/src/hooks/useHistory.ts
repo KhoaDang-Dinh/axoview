@@ -55,8 +55,8 @@ export const useHistory = () => {
   });
 
   // Derived values
-  const canUndo = modelCanUndo || sceneCanUndo;
-  const canRedo = modelCanRedo || sceneCanRedo;
+  const canUndo = session.collaborationHistory ? (session.collaborationHistory.canUndo() || modelCanUndo || sceneCanUndo) : (modelCanUndo || sceneCanUndo);
+  const canRedo = session.collaborationHistory?.canRedo() ?? (modelCanRedo || sceneCanRedo);
 
   // Transaction wrapper - groups multiple operations into single history entry
   /**
@@ -176,6 +176,7 @@ export const useHistory = () => {
   // peek*Seq) working: when both stacks report the same seq the behaviour
   // collapses to "step every stack that can", matching the legacy contract.
   const undo = useCallback(() => {
+    if (session.collaborationHistory) { session.collaborationHistory.undo(); return true; }
     if (!modelActions || !sceneActions) return false;
 
     const modelSeq = modelActions.canUndo()
@@ -222,6 +223,7 @@ export const useHistory = () => {
   }, [modelActions, sceneActions, navigateToEntryView, resyncScene]);
 
   const redo = useCallback(() => {
+    if (session.collaborationHistory) { session.collaborationHistory.redo(); return true; }
     if (!modelActions || !sceneActions) return false;
 
     const modelSeq = modelActions.canRedo()

@@ -389,7 +389,9 @@ export const ElementsPanel = () => {
                 </Stack>
               )}
               {hasPacks && <Divider sx={{ mb: 1 }} />}
-              <Stack direction="row" spacing={0.5} alignItems="center">
+              <Stack direction="row" spacing={0.5} sx={{
+                alignItems: 'center'
+              }}>
                 <Button
                   variant="outlined"
                   startIcon={<FileUploadIcon />}
@@ -433,7 +435,9 @@ export const ElementsPanel = () => {
       >
         <Stack spacing={1}>
           <Typography variant="subtitle2">{t('aiPromptTitle')}</Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: 'text.secondary'
+          }}>
             {t('aiPromptBody')}
           </Typography>
           <TextField
@@ -441,10 +445,14 @@ export const ElementsPanel = () => {
             minRows={4}
             maxRows={8}
             value={AI_ICON_PROMPT}
-            InputProps={{ readOnly: true, sx: { fontSize: 11, fontFamily: 'monospace' } }}
             size="small"
+            slotProps={{
+              input: { readOnly: true, sx: { fontSize: 11, fontFamily: 'monospace' } }
+            }}
           />
-          <Stack direction="row" justifyContent="flex-end">
+          <Stack direction="row" sx={{
+            justifyContent: 'flex-end'
+          }}>
             <Button
               variant={aiPromptCopied ? 'contained' : 'outlined'}
               color={aiPromptCopied ? 'success' : 'primary'}

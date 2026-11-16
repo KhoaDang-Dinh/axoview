@@ -40,6 +40,25 @@ export function runObjectStorageContract({ name, createStore }) {
       expect(await store.get('objects/a')).toBeNull();
     });
 
+    test('putIfAbsent creates once: later calls leave the first value and say so', async () => {
+      const store = await createStore();
+      expect(await store.putIfAbsent('objects/once', encoder.encode('first'))).toBe(true);
+      expect(await store.putIfAbsent('objects/once', encoder.encode('second'))).toBe(false);
+      expect(decoder.decode(await store.get('objects/once'))).toBe('first');
+      // A deleted object can be created again.
+      await store.delete('objects/once');
+      expect(await store.putIfAbsent('objects/once', encoder.encode('third'))).toBe(true);
+    });
+
+    test('putIfAbsent: of many concurrent calls for one key, exactly one wins', async () => {
+      const store = await createStore();
+      const results = await Promise.all(
+        Array.from({ length: 25 }, (_, i) => store.putIfAbsent('objects/race', encoder.encode(`writer-${i}`)))
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(decoder.decode(await store.get('objects/race'))).toBe(`writer-${results.indexOf(true)}`);
+    });
+
     test('list returns keys under the requested prefix', async () => {
       const store = await createStore();
       await store.put('objects/a', encoder.encode('a'));

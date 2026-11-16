@@ -32,13 +32,30 @@ export function WebGLUnsupportedScreen() {
         px: 4
       }}
     >
-      <Typography variant="h5" color="text.primary">
+      <Typography
+        variant="h5"
+        sx={{
+          color: 'text.primary'
+        }}
+      >
         {t('title')}
       </Typography>
-      <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 480 }}>
+      <Typography
+        variant="body1"
+        sx={{
+          color: 'text.secondary',
+          maxWidth: 480
+        }}
+      >
         {t('body')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 480 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          maxWidth: 480
+        }}
+      >
         {t('hint')}
       </Typography>
     </Box>

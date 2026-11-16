@@ -42,7 +42,9 @@ export function ShareErrorDialog({ open, onDismiss, onRetry }: ShareErrorDialogP
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {t('dialog.shareError.body', 'Something went wrong. Try again in a moment.')}
         </Typography>
       </DialogContent>

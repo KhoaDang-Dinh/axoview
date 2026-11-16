@@ -70,3 +70,48 @@ describe('StorageManager', () => {
     expect((local as unknown as { usingServer: boolean }).usingServer).toBe(true);
   });
 });
+
+describe('version tracking reaches the active provider', () => {
+  // The app holds the manager, not the provider: without forwarding, realtime
+  // sync never knew a version and reloaded on every change event.
+  test('knownVersion, noteVersion, serverStamp and noteStamp are forwarded', () => {
+    const versions = new Map<string, number>();
+    const stamps = new Map<string, string>();
+    const provider = {
+      ...fakeProvider('local'),
+      knownVersion: (id: string) => versions.get(id),
+      noteVersion: (id: string, v: number) => { versions.set(id, v); },
+      serverStamp: (id: string) => stamps.get(id),
+      noteStamp: (id: string, s: string) => { stamps.set(id, s); }
+    } as StorageProvider;
+    const manager = new StorageManager();
+    manager.registerProvider(provider);
+    manager.setActiveProvider('local');
+    manager.noteVersion('d1', 4);
+    manager.noteStamp('d1', 'tX');
+    expect(manager.knownVersion('d1')).toBe(4);
+    expect(manager.serverStamp('d1')).toBe('tX');
+  });
+
+  test('a provider without versions (Drive) answers undefined', () => {
+    const manager = new StorageManager();
+    manager.registerProvider(fakeProvider('google-drive'));
+    manager.setActiveProvider('google-drive');
+    expect(manager.knownVersion('d1')).toBeUndefined();
+    expect(() => manager.noteVersion('d1', 1)).not.toThrow();
+  });
+});
+
+// The app holds the manager: without forwarding, a chat-approved change was
+// saved without naming the assistant, and no other device heard whose it was.
+test('an agent change noted on the manager reaches the active provider; one without it is fine', () => {
+  const noted: Array<[string, string]> = [];
+  const manager = new StorageManager();
+  manager.registerProvider({ ...fakeProvider('local'), noteAgentChange: (id: string, agent: string) => { noted.push([id, agent]); } } as StorageProvider);
+  manager.registerProvider(fakeProvider('google-drive'));
+  manager.setActiveProvider('local');
+  manager.noteAgentChange('d1', 'Nova');
+  expect(noted).toEqual([['d1', 'Nova']]);
+  manager.setActiveProvider('google-drive');
+  expect(() => manager.noteAgentChange('d1', 'Nova')).not.toThrow();
+});

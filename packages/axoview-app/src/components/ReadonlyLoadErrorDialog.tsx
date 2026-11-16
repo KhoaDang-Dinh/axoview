@@ -40,7 +40,9 @@ export function ReadonlyLoadErrorDialog({
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {t(
             'dialog.readonlyLoadError.body',
             'The diagram may have been deleted, or you may not have access to it.'

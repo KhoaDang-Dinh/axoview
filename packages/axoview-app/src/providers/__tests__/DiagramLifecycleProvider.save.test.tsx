@@ -17,7 +17,8 @@ import { useEffect } from 'react';
 // --- module stubs ----------------------------------------------------------
 jest.mock('react-router-dom', () => ({
   useParams: () => ({}),
-  useNavigate: () => jest.fn()
+  useNavigate: () => jest.fn(),
+  useLocation: () => ({ pathname: '/', search: '', hash: '', state: null, key: 'default' })
 }));
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { DiagramMeta, FolderMeta, StorageProvider, TreeManifest } from '../services/storage/types';
 import { propagateDirty } from '../utils/fileOperations';
+import { postToTabs } from '../services/sync/tabChannel';
 
 // ---------------------------------------------------------------------------
 // FileNode type — used by react-arborist
@@ -301,6 +302,8 @@ export function useFileTree(
     async (id: string): Promise<void> => {
       if (!storageRef.current) throw new Error('No storage');
       await storageRef.current.deleteDiagram(id, true);
+      // Other tabs with it open close it now (tabChannel).
+      postToTabs({ type: 'diagram-deleted', id });
       await load();
     },
     [load]
@@ -310,6 +313,7 @@ export function useFileTree(
     async (id: string): Promise<void> => {
       if (!storageRef.current) throw new Error('No storage');
       await storageRef.current.deleteDiagram(id, false);
+      postToTabs({ type: 'diagram-deleted', id });
       await load();
     },
     [load]

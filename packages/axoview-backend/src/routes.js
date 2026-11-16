@@ -7,6 +7,9 @@
  * and returns `{ status, body }` or throws HttpError.
  */
 
+import { DEFAULT_AUTOSAVE_DELAY_MS } from './autosaveDelay.js';
+import { contentHash, pickServerOwned, SERVER_OWNED_DIAGRAM_FIELDS } from './diagramContent.js';
+
 const ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 const UUID_PATTERN = /^[a-zA-Z0-9_-]{21,64}$/;
 
@@ -45,8 +48,6 @@ const RESERVED_DIAGRAM_IDS = new Set([
  * link with A's content. Same class as the engine block's finding that
  * reference integrity is checked and *identity* integrity is not (E4/CLIP-01).
  */
-const SERVER_OWNED_DIAGRAM_FIELDS = ['shareUuid', 'created', 'workspaceId'];
-
 function stripServerOwnedFields(body) {
   const out = { ...(body || {}) };
   for (const key of SERVER_OWNED_DIAGRAM_FIELDS) delete out[key];
@@ -132,20 +133,34 @@ async function getJson(adapter, key) {
   return JSON.parse(new TextDecoder().decode(buf));
 }
 
+/**
+ * Write a document. Internal mutations (rename, trash, share state) write over
+ * the latest stored version; full editor saves (saveDiagram) pass the version
+ * the client observed instead. Resolves to what the adapter reports back
+ * (`{ version }` from a versioned store, nothing from the fs one).
+ */
 async function putJson(adapter, key, value) {
   const options = {};
-  // Internal mutations (rename, trash, share state) use the latest stored
-  // version. Full editor saves pass the version observed by the client below.
-  if (key.startsWith('diagrams/') && adapter.getDiagramVersion) {
+  if (key.startsWith('diagrams/') && adapter.getDiagramState) {
+    // One metadata read, handed to the write so it does not read again. The
+    // write is still conditional on that version, so a racing save is refused.
+    const state = await adapter.getDiagramState(key.slice('diagrams/'.length));
+    options.expectedVersion = state?.version ?? 0;
+    options.known = state?.item ?? null;
+  } else if (key.startsWith('diagrams/') && adapter.getDiagramVersion) {
     options.expectedVersion = (await adapter.getDiagramVersion(key.slice('diagrams/'.length))) ?? 0;
   }
-  await adapter.put(key, new TextEncoder().encode(JSON.stringify(value, null, 2)), options);
+  return adapter.put(key, new TextEncoder().encode(JSON.stringify(value, null, 2)), options);
 }
 
-function diagramVersionHeaders(adapter, id) {
-  return adapter.getDiagramVersion
-    ? adapter.getDiagramVersion(id).then((version) => version == null ? {} : { ETag: `"${version}"` })
-    : Promise.resolve({});
+const etag = (version) => (typeof version === 'number' ? { ETag: `"${version}"` } : {});
+
+/** The ETag for a write: the version it produced, else (an adapter that does not report it) a lookup. */
+async function diagramVersionHeaders(adapter, id, written) {
+  if (typeof written?.version === 'number') return etag(written.version);
+  if (!adapter.getDiagramVersion) return {};
+  const version = await adapter.getDiagramVersion(id);
+  return version == null ? {} : etag(version);
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +216,12 @@ export function getConfig(_adapter, ctx) {
           }
         : null,
       serverStorage: env.STORAGE_ENABLED !== false,
+      collaborationEnabled: env.COLLABORATION_ENABLED === true,
+      // Wait this long after the last edit to save (src/autosaveDelay.js).
+      autosaveDelayMs: env.AUTOSAVE_DELAY_MS ?? DEFAULT_AUTOSAVE_DELAY_MS,
+      // Sharing a diagram with another account by email (ADR 0057; the Express
+      // target with Cognito only: server.js decides and sets SHARING_ENABLED).
+      sharing: env.SHARING_ENABLED === true,
       // A5/CHR-08 (owner ruling 2026-07-30): the operator's canonical public
       // base, so every share link the CLIENT mints resolves against it instead
       // of whichever origin the page happens to be on (preview, staging, LAN).
@@ -208,6 +229,18 @@ export function getConfig(_adapter, ctx) {
       // from `shareDiagram`; this exposes the same value to the app, which
       // builds the links the user actually copies. Null → page origin, which is
       // the existing behaviour.
+      ai: {
+        chatEnabled: env.AI_CHAT_ENABLED === 'true',
+        // Real model replies (Phase 2): chat enabled AND fully configured
+        // (Cognito, table, model, guardrail). Otherwise the app shows its
+        // mock preview instead of failing every message.
+        liveChat: env.AI_LIVE_CHAT === true,
+        guestEnabled: env.AI_GUEST_ENABLED === 'true',
+        diagramContextEnabled: env.AI_DIAGRAM_CONTEXT_ENABLED === 'true',
+        mcpEnabled: env.AI_MCP_ENABLED === 'true',
+        ragEnabled: env.AI_RAG_ENABLED === 'true',
+        agentWriteEnabled: env.AI_AGENT_WRITE_ENABLED === 'true'
+      },
       publicBaseUrl: env.PUBLIC_BASE_URL || null
     }
   };
@@ -224,6 +257,16 @@ export async function listDiagrams(adapter, _ctx) {
 
 export async function getDiagram(adapter, ctx) {
   const id = assertId(ctx.params.id);
+  if (adapter.getDiagramWithVersion) {
+    // One metadata read gives both the object and its version.
+    const found = await adapter.getDiagramWithVersion(id);
+    if (!found?.bytes) throw new HttpError(404, 'Diagram not found');
+    return {
+      status: 200,
+      body: JSON.parse(new TextDecoder().decode(found.bytes)),
+      headers: etag(found.version)
+    };
+  }
   const data = await getJson(adapter, `diagrams/${id}`);
   if (!data) throw new HttpError(404, 'Diagram not found');
   return { status: 200, body: data, headers: await diagramVersionHeaders(adapter, id) };
@@ -259,8 +302,22 @@ export async function createDiagram(adapter, ctx) {
     created: new Date().toISOString(),
     lastModified: new Date().toISOString()
   };
-  await putJson(adapter, `diagrams/${id}`, data);
-  return { status: 201, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id) };
+  const written = await putJson(adapter, `diagrams/${id}`, data);
+  return {
+    status: 201,
+    body: { success: true, id, lastModified: data.lastModified },
+    headers: await diagramVersionHeaders(adapter, id, written)
+  };
+}
+
+/**
+ * The version an If-Match names: "7", or W/"7" from a client that echoes the
+ * ETag it got. CloudFront weakens the ETag of every answer it compresses, so
+ * a client may only ever have seen the weak form. Anything else: no version.
+ */
+export function versionFromIfMatch(header) {
+  const match = /^(?:W\/)?"([1-9][0-9]*)"$/.exec(typeof header === 'string' ? header.trim() : '');
+  return match ? Number(match[1]) : undefined;
 }
 
 export async function saveDiagram(adapter, ctx) {
@@ -279,20 +336,76 @@ export async function saveDiagram(adapter, ctx) {
     // `patchDiagram` (rename / trash) always preserved the field, so the loss
     // was specific to the full replace. Carry the server-owned fields across
     // the same way, which also makes the two write paths agree.
-    const existing = await getJson(adapter, `diagrams/${id}`);
-    const preserved = {};
-    for (const key of SERVER_OWNED_DIAGRAM_FIELDS) {
-      if (existing && existing[key] !== undefined) preserved[key] = existing[key];
+    //
+    // Cost: a versioned store (DynamoDB + S3) keeps the server-owned fields and
+    // a content digest on the metadata item, so this is ONE metadata read and
+    // no object read. The fs store, and an item written before those fields
+    // existed, read the stored document instead.
+    const state = adapter.getDiagramState ? await adapter.getDiagramState(id) : undefined;
+    const existing = state === undefined
+      ? await getJson(adapter, `diagrams/${id}`)
+      : state?.owned === null
+        ? await state.readDocument()
+        : null;
+    const preserved = state?.owned ?? pickServerOwned(existing);
+    const storedHash = state?.contentHash ?? (existing ? await contentHash(existing) : null);
+
+    // A save that must not replace anything its author has not seen (approving
+    // an agent's proposal, server.js): the author says which state the document
+    // was built on, and any other state refuses the save. A versioned store
+    // checks If-Match in the write itself (a conditional write, so it holds
+    // across API pods). The fs store has no versions: compare the lastModified
+    // the author loaded, under this key's lock (one process serves an fs store).
+    if (ctx.mustMatch) {
+      if (state !== undefined) {
+        if (ctx.ifMatch === undefined) throw new HttpError(428, { error: 'If-Match is required', reason: 'precondition-required' });
+      } else if (typeof ctx.ifUnmodified !== 'string') {
+        throw new HttpError(428, { error: 'baseModified is required', reason: 'precondition-required' });
+      } else if (!existing || existing.lastModified !== ctx.ifUnmodified) {
+        throw new HttpError(409, { error: 'Diagram was changed since it was loaded', reason: 'conflict' });
+      }
     }
+
+    // Nothing the user can see changed (an undo back to the saved state, a
+    // second tab saving what the first already saved): write nothing and tell
+    // nobody. A versioned store still requires If-Match, so a save without one
+    // goes on to the write and is refused there as before.
+    if (storedHash && storedHash === (await contentHash(body)) && (!state || ctx.ifMatch !== undefined)) {
+      return {
+        status: 200,
+        body: {
+          success: true,
+          id,
+          unchanged: true,
+          lastModified: state?.item?.lastModified ?? existing?.lastModified
+        },
+        headers: etag(state?.version),
+        sync: false
+      };
+    }
+
+    // On a store without versions lastModified is what tells two states
+    // apart (ctx.mustMatch above, the app's drafts), so a save never repeats
+    // the stamp it replaces, even within the same millisecond.
+    const previous = state === undefined ? Date.parse(existing?.lastModified) : NaN;
     const data = {
       ...body,
       ...preserved,
       id,
-      lastModified: new Date().toISOString()
+      lastModified: new Date(Number.isFinite(previous) ? Math.max(Date.now(), previous + 1) : Date.now()).toISOString()
     };
     const bytes = new TextEncoder().encode(JSON.stringify(data, null, 2));
-    await adapter.put(`diagrams/${id}`, bytes, { expectedVersion: ctx.ifMatch });
-    return { status: 200, body: { success: true, id }, headers: await diagramVersionHeaders(adapter, id) };
+    const written = await adapter.put(`diagrams/${id}`, bytes, {
+      expectedVersion: ctx.ifMatch,
+      ...(state !== undefined ? { known: state?.item ?? null } : {})
+    });
+    // lastModified: the stamp a client without versions (the fs store) uses
+    // to tell whether the diagram changed since it last saw it.
+    return {
+      status: 200,
+      body: { success: true, id, lastModified: data.lastModified },
+      headers: await diagramVersionHeaders(adapter, id, written)
+    };
   });
 }
 
@@ -308,8 +421,13 @@ export async function patchDiagram(adapter, ctx) {
       id,
       lastModified: new Date().toISOString()
     };
-    await putJson(adapter, `diagrams/${id}`, updated);
-    return { status: 200, body: { success: true } };
+    const written = await putJson(adapter, `diagrams/${id}`, updated);
+    // The new version, so the client's next save is not refused as stale.
+    return {
+      status: 200,
+      body: { success: true, lastModified: updated.lastModified },
+      headers: await diagramVersionHeaders(adapter, id, written)
+    };
   });
 }
 

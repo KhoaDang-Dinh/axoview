@@ -1,3 +1,4 @@
+import { activeCollaboration } from '../../sync/collaborationRegistry';
 import {
   DiagramMeta,
   FolderMeta,
@@ -5,6 +6,16 @@ import {
   StorageProvider,
   TreeManifest,
   isPersistedDiagramBlob
+} from '../types';
+import type {
+  AddMemberResult,
+  DiagramMember,
+  AgentLevel,
+  DiagramRole,
+  MemberRole,
+  Proposal,
+  ProposalDecision,
+  SharedState
 } from '../types';
 import { leanIfModel } from '../leanModel';
 import { apiBaseUrl } from '../../../utils/apiBaseUrl';
@@ -85,6 +96,36 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
   return undefined;
 }
 
+/** Under the browsers' 64 KB keepalive budget, with room for another request. */
+const KEEPALIVE_MAX_BYTES = 48_000;
+
+const MEMBER_ROLES: readonly string[] = ['viewer', 'admin'];
+const DIAGRAM_ROLES: readonly string[] = ['owner', ...MEMBER_ROLES];
+
+/** A listing row's `shared` field (a diagram someone shared with this account). */
+function isSharedRow(value: unknown): value is { role: MemberRole; ownerEmail?: string | null } {
+  return typeof value === 'object' && value !== null && MEMBER_ROLES.includes((value as { role?: unknown }).role as string);
+}
+
+/** A members/proposals call's answer as a result the share UI can show. */
+async function sharingFailure(response: Response): Promise<{ ok: false; reason: string; message: string }> {
+  const body = (await response.json().catch(() => null)) as { reason?: string; error?: string } | null;
+  return { ok: false, reason: body?.reason || 'error', message: body?.error || `Sharing failed (${response.status})` };
+}
+
+/**
+ * The diagram version an API answer carries in its ETag: `"7"`, or `W/"7"`.
+ * CloudFront compresses API answers of 1,000 bytes or more and, doing so,
+ * turns a strong ETag into a weak one (W/"7"): a diagram's load comes back
+ * that way as soon as the diagram is not tiny. Reading only the strong form
+ * left this tab without a version, so every save and approval went out
+ * without If-Match and the versioned store refused it (428) for good.
+ */
+export function versionFromETag(etag: string | null | undefined): number | undefined {
+  const match = etag?.match(/^(?:W\/)?"([1-9][0-9]*)"$/);
+  return match ? Number(match[1]) : undefined;
+}
+
 export class LocalStorageProvider implements StorageProvider {
   readonly id = 'local' as const;
   readonly displayName = 'Local Storage';
@@ -100,6 +141,11 @@ export class LocalStorageProvider implements StorageProvider {
   // The version of the content this tab actually holds: set on load and save,
   // never by a listing (which only tells which version exists on the server).
   private readonly contentVersions = new Map<string, number>();
+  /** lastModified of each diagram as this tab last saw it on the server (serverStamp). */
+  private readonly serverModified = new Map<string, string>();
+  // What the server last said about who else has each diagram (rememberShared).
+  private readonly sharedStates = new Map<string, SharedState>();
+  private readonly sharedRoles = new Map<string, DiagramRole>();
 
   constructor(baseUrl?: string) {
     this.baseUrl = baseUrl ?? apiBaseUrl();
@@ -131,7 +177,10 @@ export class LocalStorageProvider implements StorageProvider {
         ? d.lastModified
         : new Date(d.lastModified as string | number | Date).toISOString(),
       folderId: (d.folderId as string | null | undefined) ?? null,
-      deletedAt: (d.deletedAt as string | undefined) ?? undefined
+      deletedAt: (d.deletedAt as string | undefined) ?? undefined,
+      ...(isSharedRow(d.shared)
+        ? { shared: { role: d.shared.role, ownerEmail: d.shared.ownerEmail ?? null } }
+        : {})
     }));
   }
 
@@ -140,13 +189,38 @@ export class LocalStorageProvider implements StorageProvider {
       signal: timeoutSignal(10000)
     });
     if (!response.ok) throw new Error(`Failed to load diagram: ${response.status}`);
-    const version = response.headers?.get('ETag');
-    const match = version?.match(/^"([1-9][0-9]*)"$/);
-    if (match) {
-      this.diagramVersions.set(id, Number(match[1]));
-      this.contentVersions.set(id, Number(match[1]));
+    this.rememberShared(id, response);
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version !== undefined) {
+      this.diagramVersions.set(id, version);
+      this.contentVersions.set(id, version);
     }
-    return response.json();
+    const data = await response.json();
+    this.rememberStamp(id, data);
+    return data;
+  }
+
+  /**
+   * Which state of `id` on the server this tab last saw (loaded or wrote):
+   * its version where the backend versions diagrams, else its lastModified
+   * (the fs store). A draft records it, so on the next open the app can tell
+   * whether the diagram changed elsewhere since the draft was made.
+   */
+  serverStamp(id: string): string | undefined {
+    const version = activeCollaboration(id)?.serverVersion ?? this.contentVersions.get(id);
+    if (version !== undefined) return `v${version}`;
+    const modified = activeCollaboration(id)?.serverModified ?? this.serverModified.get(id);
+    return modified ? `t${modified}` : undefined;
+  }
+
+  /** Another tab of this browser wrote `id`; this tab shows that content. */
+  noteStamp(id: string, stamp: string): void {
+    if (stamp.startsWith('t')) this.serverModified.set(id, stamp.slice(1));
+  }
+
+  private rememberStamp(id: string, body: unknown): void {
+    const modified = (body as { lastModified?: unknown } | null)?.lastModified;
+    if (typeof modified === 'string') this.serverModified.set(id, modified);
   }
 
   /**
@@ -155,39 +229,108 @@ export class LocalStorageProvider implements StorageProvider {
    * it with the version another device saved.
    */
   knownVersion(id: string): number | undefined {
-    return this.contentVersions.get(id);
+    return activeCollaboration(id)?.serverVersion ?? this.contentVersions.get(id);
   }
 
-  private async putDiagram(id: string, body: string): Promise<Response> {
+  /**
+   * Another tab of this browser holds `id` at `version` and this tab now shows
+   * the same content (it took that tab's checkpoint): save against it next,
+   * and do not reload when the sync stream reports it.
+   */
+  noteVersion(id: string, version: number): void {
+    this.diagramVersions.set(id, version);
+    this.contentVersions.set(id, version);
+  }
+
+  /** Per diagram: the AI agent whose approved change the next save carries. */
+  private agentChanges = new Map<string, string>();
+
+  noteAgentChange(id: string, agent: string): void {
+    const session = activeCollaboration(id);
+    if (session) session.noteAgentChange(agent);
+    else this.agentChanges.set(id, agent);
+  }
+
+  private async putDiagram(id: string, body: string, agent?: string): Promise<Response> {
     const version = this.diagramVersions.get(id);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (version !== undefined) headers['If-Match'] = `"${version}"`;
+    if (agent) headers['X-Axoview-Agent'] = agent;
     return apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
       method: 'PUT',
       headers,
       body,
+      // A save flushed as the tab is hidden or closed must outlive the page.
+      // Browsers cap keepalive bodies at 64 KB (all in flight together); a
+      // larger diagram is still saved in the browser as a draft.
+      keepalive: new Blob([body]).size < KEEPALIVE_MAX_BYTES,
       signal: timeoutSignal(15000)
     });
   }
 
   private async serverSaveDiagram(id: string, data: unknown): Promise<void> {
+    // Noted before this save started: this save carries the agent's change.
+    const agent = this.agentChanges.get(id);
     const body = JSON.stringify(leanIfModel(data));
-    let response = await this.putDiagram(id, body);
+    let response = await this.putDiagram(id, body, agent);
     // Latest save wins (multi-device sync): another device saved this diagram
     // since this tab loaded it (409), or this tab never learned its version
     // (428). Learn the current version and save again, once, so this edit
     // replaces it. Without this, every later autosave retried the same stale
     // version and failed until a reload threw the edits away.
     if (response.status === 409 || response.status === 428) {
-      await this.refreshVersion(id);
-      response = await this.putDiagram(id, body);
+      // A 409 that names the current version saves a download of the whole
+      // diagram just to learn it.
+      const conflict = response.status === 409
+        ? await response.json().catch(() => null) as { currentVersion?: unknown } | null
+        : null;
+      if (typeof conflict?.currentVersion === 'number') this.diagramVersions.set(id, conflict.currentVersion);
+      else await this.refreshVersion(id);
+      response = await this.putDiagram(id, body, agent);
     }
     if (!response.ok) throw new Error(`Failed to save diagram: ${response.status}`);
-    const nextVersion = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (nextVersion) {
-      this.diagramVersions.set(id, Number(nextVersion[1]));
-      this.contentVersions.set(id, Number(nextVersion[1]));
-    }
+    // Said once: later saves are the person's own edits. (A save that was
+    // already on its way when the change was noted leaves the note for the
+    // save that carries it.)
+    if (agent && this.agentChanges.get(id) === agent) this.agentChanges.delete(id);
+    this.rememberShared(id, response);
+    this.rememberVersion(id, response);
+    this.rememberStamp(id, await response.json().catch(() => null));
+  }
+
+  /**
+   * The version a successful write produced (its ETag): the next save goes out
+   * against it. A rename, trash or restore changes the version too; without
+   * this the next autosave was refused as stale, re-downloaded the diagram to
+   * learn the version, and saved again.
+   */
+  private rememberVersion(id: string, response: Response): void {
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version === undefined) return;
+    this.diagramVersions.set(id, version);
+    this.contentVersions.set(id, version);
+  }
+
+  /**
+   * Whether other people have `id` (the server's X-Axoview-Shared header on a
+   * load or save): the app then uploads every save at once instead of
+   * batching, so they see it within a second or two.
+   */
+  private rememberShared(id: string, response: Response): void {
+    const value = response.headers?.get('X-Axoview-Shared');
+    const role = response.headers?.get('X-Axoview-Role');
+    if (value === 'by-you' || value === 'with-you') this.sharedStates.set(id, value);
+    else this.sharedStates.delete(id);
+    if (role && DIAGRAM_ROLES.includes(role)) this.sharedRoles.set(id, role as DiagramRole);
+    else this.sharedRoles.delete(id);
+  }
+
+  sharedState(id: string): SharedState | undefined {
+    return this.sharedStates.get(id);
+  }
+
+  sharedRole(id: string): DiagramRole | undefined {
+    return this.sharedRoles.get(id);
   }
 
   /** Re-read the diagram's current version from the server (its ETag). */
@@ -196,8 +339,8 @@ export class LocalStorageProvider implements StorageProvider {
       signal: timeoutSignal(10000)
     });
     if (!response.ok) return;
-    const match = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (match) this.diagramVersions.set(id, Number(match[1]));
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version !== undefined) this.diagramVersions.set(id, version);
     else this.diagramVersions.delete(id);
   }
 
@@ -220,10 +363,11 @@ export class LocalStorageProvider implements StorageProvider {
     });
     if (!response.ok) throw new Error(`Failed to create diagram: ${response.status}`);
     const result = await response.json();
-    const version = response.headers?.get('ETag')?.match(/^"([1-9][0-9]*)"$/);
-    if (version) {
-      this.diagramVersions.set(result.id, Number(version[1]));
-      this.contentVersions.set(result.id, Number(version[1]));
+    this.rememberStamp(result.id, result);
+    const version = versionFromETag(response.headers?.get('ETag'));
+    if (version !== undefined) {
+      this.diagramVersions.set(result.id, version);
+      this.contentVersions.set(result.id, version);
     }
     return result.id;
   }
@@ -237,6 +381,8 @@ export class LocalStorageProvider implements StorageProvider {
         signal: timeoutSignal(10000)
       });
       if (!response.ok) throw new Error(`Failed to soft-delete diagram: ${response.status}`);
+      this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
     } else {
       const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}`, {
         method: 'DELETE',
@@ -408,6 +554,13 @@ export class LocalStorageProvider implements StorageProvider {
 
   async saveDiagram(id: string, data: unknown): Promise<void> {
     if (this.usingServer) {
+      const collaboration = activeCollaboration(id);
+      if (collaboration) {
+        await collaboration.flush();
+        if (collaboration.serverVersion !== undefined) this.noteVersion(id, collaboration.serverVersion);
+        if (collaboration.serverModified) this.serverModified.set(id, collaboration.serverModified);
+        return;
+      }
       await this.serverSaveDiagram(id, data);
     } else {
       this.sessionSaveDiagram(id, data);
@@ -438,6 +591,8 @@ export class LocalStorageProvider implements StorageProvider {
         signal: timeoutSignal(10000)
       });
       if (!response.ok) throw new Error(`Failed to restore diagram: ${response.status}`);
+      this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
     } else {
       const list = this.sessionListDiagrams();
       const updated = list.map((d) =>
@@ -457,6 +612,8 @@ export class LocalStorageProvider implements StorageProvider {
         signal: timeoutSignal(10000)
       });
       if (!response.ok) throw new Error(`Failed to rename diagram: ${response.status}`);
+      this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
     } else {
       // MQA #14: keep the per-diagram blob's `title` in sync with the list-level
       // `name`. The export path reads from the blob (`loadDiagram`), so renaming
@@ -756,6 +913,156 @@ export class LocalStorageProvider implements StorageProvider {
     });
     if (!response.ok) throw await shareRequestError(response);
     return response.json();
+  }
+
+  // ---------------------------------------------------------------------------
+  // People a diagram is shared with (ADR 0057) — server storage with accounts
+  // ---------------------------------------------------------------------------
+
+  async listMembers(id: string): Promise<DiagramMember[]> {
+    if (!this.usingServer) return [];
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members`, {
+      signal: timeoutSignal(10000)
+    });
+    if (!response.ok) throw new Error(`Failed to list people: ${response.status}`);
+    const body = (await response.json()) as { members?: DiagramMember[] };
+    return Array.isArray(body.members) ? body.members : [];
+  }
+
+  async addMember(id: string, email: string, role: MemberRole = 'viewer'): Promise<AddMemberResult> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, role }),
+        signal: timeoutSignal(10000)
+      });
+      if (!response.ok) return sharingFailure(response);
+      const body = (await response.json()) as { member: DiagramMember };
+      if (!this.sharedStates.has(id)) this.sharedStates.set(id, 'by-you');
+      // Unshared until now, so the load said nothing: the one sharing it owns it.
+      if (!this.sharedRoles.has(id)) this.sharedRoles.set(id, 'owner');
+      return { ok: true, member: body.member };
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async setMemberRole(id: string, sub: string, role: MemberRole): Promise<AddMemberResult> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members/${encodeURIComponent(sub)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+        signal: timeoutSignal(10000)
+      });
+      if (!response.ok) return sharingFailure(response);
+      return { ok: true, member: ((await response.json()) as { member: DiagramMember }).member };
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async agentLevel(): Promise<AgentLevel> {
+    if (!this.usingServer) return 'viewer';
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/agent`, { signal: timeoutSignal(10000) });
+      if (!response.ok) return 'viewer';
+      const { level } = (await response.json()) as { level?: unknown };
+      return level === 'proposer' ? 'proposer' : 'viewer';
+    } catch {
+      return 'viewer';
+    }
+  }
+
+  async setAgentLevel(level: AgentLevel): Promise<boolean> {
+    if (!this.usingServer) return false;
+    try {
+      const response = await apiFetch(`${this.baseUrl}/api/agent`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level }),
+        signal: timeoutSignal(10000)
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async listProposals(id: string): Promise<Proposal[]> {
+    if (!this.usingServer) return [];
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/proposals`, {
+      signal: timeoutSignal(10000)
+    });
+    if (!response.ok) return [];
+    const body = (await response.json()) as { proposals?: Proposal[] };
+    return Array.isArray(body.proposals) ? body.proposals : [];
+  }
+
+  /**
+   * Approve = save (ADR 0059 addendum 2026-11-12). Unlike an ordinary save,
+   * which replaces whatever is stored (latest save wins), this one names the
+   * state the document was built on, the content this tab holds, and is
+   * refused if the diagram is no longer in it: its version where the backend
+   * versions diagrams (If-Match), else its lastModified.
+   */
+  async approveProposal(
+    id: string,
+    proposalId: string,
+    change: { applied: number; document: unknown }
+  ): Promise<ProposalDecision> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    const version = activeCollaboration(id)?.serverVersion ?? this.contentVersions.get(id);
+    const modified = activeCollaboration(id)?.serverModified ?? this.serverModified.get(id);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (version !== undefined) headers['If-Match'] = `"${version}"`;
+    try {
+      const response = await apiFetch(
+        `${this.baseUrl}/api/diagrams/${id}/proposals/${encodeURIComponent(proposalId)}/approve`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            applied: change.applied,
+            document: leanIfModel(change.document),
+            ...(version === undefined && modified ? { baseModified: modified } : {})
+          }),
+          signal: timeoutSignal(15000)
+        }
+      );
+      if (!response.ok) return sharingFailure(response);
+      // The document is stored: this tab now holds that state.
+      this.rememberVersion(id, response);
+      this.rememberStamp(id, await response.json().catch(() => null));
+      return { ok: true };
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async rejectProposal(id: string, proposalId: string): Promise<ProposalDecision> {
+    if (!this.usingServer) return { ok: false, reason: 'error', message: 'Sharing requires server storage' };
+    try {
+      const response = await apiFetch(
+        `${this.baseUrl}/api/diagrams/${id}/proposals/${encodeURIComponent(proposalId)}/reject`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: timeoutSignal(15000) }
+      );
+      return response.ok ? { ok: true } : sharingFailure(response);
+    } catch {
+      return { ok: false, reason: 'error', message: 'Network error' };
+    }
+  }
+
+  async removeMember(id: string, sub: string): Promise<void> {
+    if (!this.usingServer) return;
+    const response = await apiFetch(`${this.baseUrl}/api/diagrams/${id}/members/${encodeURIComponent(sub)}`, {
+      method: 'DELETE',
+      signal: timeoutSignal(10000)
+    });
+    if (!response.ok) throw new Error(`Failed to remove: ${response.status}`);
   }
 
   async unshareDiagram(id: string): Promise<void> {

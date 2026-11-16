@@ -13,7 +13,7 @@ import {
   Tooltip,
   Typography
 } from '@mui/material';
-import { DeleteOutline as DeleteIcon } from '@mui/icons-material';
+import { DeleteOutlined as DeleteIcon } from '@mui/icons-material';
 
 const SESSION_DIAGRAM_PREFIX = 'axoview_diagram_';
 const SESSION_DIAGRAMS_KEY = 'axoview_diagrams';
@@ -144,12 +144,16 @@ export function SessionStorageGauge({ onDeleteDiagram }: Props) {
       >
         <Stack spacing={1}>
           <Typography variant="subtitle2">Session storage</Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: 'text.secondary'
+          }}>
             {usedLabel} used of approximately {limitLabel}. Your work lives in this browser tab only.
           </Typography>
 
           {rows.length === 0 ? (
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: 'text.secondary'
+            }}>
               No diagrams stored.
             </Typography>
           ) : (
@@ -195,7 +199,9 @@ export function SessionStorageGauge({ onDeleteDiagram }: Props) {
             </TableContainer>
           )}
 
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: 'text.secondary'
+          }}>
             Export your project to keep this work safely. For raw diagnostics, use Settings → Diagnostics.
           </Typography>
         </Stack>

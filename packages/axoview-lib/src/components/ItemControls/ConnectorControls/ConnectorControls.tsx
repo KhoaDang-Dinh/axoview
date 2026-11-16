@@ -183,9 +183,11 @@ export const ConnectorControls = ({ id, readOnly = false }: Props) => {
         {labels.length === 0 && (
           <Typography
             variant="body2"
-            color="text.secondary"
-            sx={{ textAlign: 'center', py: 1 }}
-          >
+            sx={{
+              color: 'text.secondary',
+              textAlign: 'center',
+              py: 1
+            }}>
             {t('noLabels')}
           </Typography>
         )}
@@ -193,9 +195,11 @@ export const ConnectorControls = ({ id, readOnly = false }: Props) => {
         {labels.length > 0 && (
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ display: 'block', mb: 1 }}
-          >
+            sx={{
+              color: 'text.secondary',
+              display: 'block',
+              mb: 1
+            }}>
             {t('positionHint')}
           </Typography>
         )}
@@ -231,7 +235,9 @@ export const ConnectorControls = ({ id, readOnly = false }: Props) => {
                   mb: 1
                 }}
               >
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{
+                  color: 'text.secondary'
+                }}>
                   {t('labelN').replace('{count}', String(index + 1))}
                 </Typography>
                 {!readOnly && (
@@ -271,7 +277,9 @@ export const ConnectorControls = ({ id, readOnly = false }: Props) => {
 
               {isDoubleLineType && (
                 <Box sx={{ mb: 1 }}>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{
+                    color: 'text.secondary'
+                  }}>
                     {t('line')}
                   </Typography>
                   <Select

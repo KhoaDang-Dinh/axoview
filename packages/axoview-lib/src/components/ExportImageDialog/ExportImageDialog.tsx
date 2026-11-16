@@ -926,7 +926,9 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
     }
     if (isInCropMode) {
       return (
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{
+          color: 'text.secondary'
+        }}>
           {t('cropHint')}
         </Typography>
       );
@@ -944,7 +946,11 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
     const cropSelectionPending =
       cropToContent && isInCropMode && !croppedImageData;
     return (
-      <Stack sx={{ width: '100%' }} alignItems="flex-end">
+      <Stack
+        sx={{
+          alignItems: 'flex-end',
+          width: '100%'
+        }}>
         <Stack direction="row" spacing={2}>
           <Button variant="text" onClick={onClose}>
             {t('cancel')}
@@ -1052,7 +1058,9 @@ export const ExportImageDialog = memo(({ onClose }: Props) => {
               <Loader size={2} />
             </Box>
           )}
-          <Stack alignItems="center" spacing={2}>
+          <Stack spacing={2} sx={{
+            alignItems: 'center'
+          }}>
             {renderPreview()}
             <Box sx={{ width: '100%' }}>
               <Box component="fieldset">

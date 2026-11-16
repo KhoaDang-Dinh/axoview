@@ -189,7 +189,7 @@ export function ImportDialog({
 
   const renderPickFile = () => (
     <Stack spacing={2}>
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
         Choose a project zip (<code>.zip</code>) or a single diagram (<code>.json</code>).
       </Typography>
       <Box>
@@ -225,7 +225,7 @@ export function ImportDialog({
             {folderCount} folder{folderCount === 1 ? '' : 's'}, {diagramCount} diagram
             {diagramCount === 1 ? '' : 's'}
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
             From {parsed.manifest.exportedBy ?? 'unknown'}
           </Typography>
         </Box>
@@ -248,7 +248,7 @@ export function ImportDialog({
               value="replaceAll"
               control={<Radio size="small" />}
               label={
-                <Typography variant="body2" color="error.main">
+                <Typography variant="body2" sx={{ color: 'error.main' }}>
                   Replace all existing folders and diagrams
                 </Typography>
               }
@@ -297,7 +297,7 @@ export function ImportDialog({
 
   const renderConfigureJson = () => (
     <Stack spacing={2}>
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
         Single diagram detected. It will be imported as a new diagram named{' '}
         <strong>{singleJsonName || 'diagram'}</strong>.
       </Typography>
@@ -343,7 +343,7 @@ export function ImportDialog({
         {step === 'configureZip' && renderConfigureZip()}
         {step === 'configureJson' && renderConfigureJson()}
         {step === 'pickFile' && error && (
-          <Box mt={2}>
+          <Box sx={{ mt: 2 }}>
             <Alert severity="error">{error}</Alert>
           </Box>
         )}

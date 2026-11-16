@@ -16,17 +16,10 @@
  * the build check: a production bundle on localhost:3000 stays same-origin.
  */
 import { apiBaseUrl } from '../apiBaseUrl';
+import { setJsdomUrl } from '../../testUtils/jsdomUrl';
 
-const atOrigin = (hostname: string, port: string) => {
-  const original = Object.getOwnPropertyDescriptor(window, 'location');
-  Object.defineProperty(window, 'location', {
-    value: { hostname, port },
-    configurable: true
-  });
-  return () => {
-    if (original) Object.defineProperty(window, 'location', original);
-  };
-};
+const atOrigin = (hostname: string, port: string) =>
+  setJsdomUrl(`http://${hostname}${port ? `:${port}` : ''}/`);
 
 const withNodeEnv = (value: string) => {
   const original = process.env.NODE_ENV;

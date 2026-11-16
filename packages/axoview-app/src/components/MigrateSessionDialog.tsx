@@ -314,7 +314,9 @@ export function MigrateSessionDialog() {
       }}
     >
       <DialogTitle sx={{ pb: 1, pr: 6 }}>
-        <Typography variant="h6" component="span" fontWeight={600}>
+        <Typography variant="h6" component="span" sx={{
+          fontWeight: 600
+        }}>
           {t('migrate.title', 'Move session diagrams to Google Drive?')}
         </Typography>
         <IconButton
@@ -327,7 +329,9 @@ export function MigrateSessionDialog() {
         </IconButton>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {t(
             'migrate.body',
             'These diagrams live only in this browser tab and are lost when it closes:'
@@ -360,7 +364,9 @@ export function MigrateSessionDialog() {
             </ListItem>
           ))}
         </List>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{
+          color: 'text.secondary'
+        }}>
           {rootReady
             ? t('migrate.destinationNote', 'They will move into your Drive folder, keeping their folders.')
             : t('migrate.waitingForSetup', 'Finishing Google Drive setup…')}
@@ -371,7 +377,9 @@ export function MigrateSessionDialog() {
               variant="determinate"
               value={(progress.done / Math.max(1, progress.total)) * 100}
             />
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: 'text.secondary'
+            }}>
               {t('migrate.moving', {
                 defaultValue: 'Moving {{done}} of {{total}}…',
                 done: progress.done,

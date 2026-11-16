@@ -22,7 +22,8 @@ import userEvent from '@testing-library/user-event';
 let routeParams: Record<string, string | undefined> = {};
 jest.mock('react-router-dom', () => ({
   useParams: () => routeParams,
-  useNavigate: () => jest.fn()
+  useNavigate: () => jest.fn(),
+  useLocation: () => ({ pathname: window.location.pathname, search: window.location.search, hash: '', state: null, key: 'default' })
 }));
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -218,9 +219,9 @@ describe('LIFE-13 — Load-dialog delete removes the diagram from storage', () =
     await act(async () => { h.ctx().handleOpenClick(); });
     expect(await screen.findByText('Alpha')).toBeInTheDocument();
     // LoadDialog has no test hooks; the delete is the error-coloured icon
-    // button carrying MUI's DeleteOutline icon.
+    // button carrying MUI's DeleteOutlined icon.
     const delBtn = document.querySelector(
-      'button:has(svg[data-testid="DeleteOutlineIcon"])'
+      'button:has(svg[data-testid="DeleteOutlinedIcon"])'
     ) as HTMLElement | null;
     expect(delBtn).not.toBeNull();
     await user.click(delBtn!);

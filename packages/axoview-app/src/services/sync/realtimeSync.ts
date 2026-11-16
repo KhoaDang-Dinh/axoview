@@ -1,4 +1,6 @@
+import { receiveCollaboration } from './collaborationRegistry';
 import { apiFetch } from '../apiFetch';
+import { getBrowserId } from './browserId';
 import { getDeviceId } from './deviceId';
 
 /**
@@ -8,14 +10,33 @@ import { getDeviceId } from './deviceId';
  */
 export interface SyncChange {
   seq: number;
-  kind: 'diagram' | 'folder' | 'tree' | 'resync';
-  action?: 'create' | 'save' | 'update' | 'move' | 'delete';
+  // proposal: a save under "Change needs approval" was made or decided
+  // (ADR 0057); the owner's and admins' apps refresh their waiting list.
+  kind: 'diagram' | 'folder' | 'tree' | 'resync' | 'presence' | 'proposal' | 'collaboration' | 'signal';
+  update?: string;
+  generation?: string;
+  signal?: unknown;
+  to?: string;
+  action?: 'create' | 'save' | 'update' | 'move' | 'delete' | 'join' | 'renew' | 'here' | 'leave' | 'resolve';
   id?: string;
   version?: number;
   name?: string;
   deleted?: boolean;
   /** Device (tab) that made the change; absent for writes without the header. */
   origin?: string;
+  /** Presence only: the browser that tab belongs to (services/sync/browserId.ts). */
+  browser?: string;
+  /**
+   * An AI agent's work (live notices): on a proposal `create`, the agent that
+   * proposed; on a diagram `save`, the agent whose approved change it carries.
+   */
+  agent?: string;
+  /** The diagram's name, for a notice about a diagram that is not open. */
+  diagramName?: string;
+  /** Proposal events: which proposal, how many steps, and (resolve) the decision. */
+  proposal?: string;
+  steps?: number;
+  status?: 'approved' | 'rejected';
   at?: string;
 }
 
@@ -33,6 +54,7 @@ export interface RealtimeSyncOptions {
   onUnavailable?: () => void;
   fetchImpl?: typeof apiFetch;
   deviceId?: string;
+  browserId?: string;
 }
 
 export interface RealtimeSyncConnection {
@@ -108,7 +130,14 @@ export function connectRealtimeSync(options: RealtimeSyncOptions): RealtimeSyncC
       silenceTimer = setTimeout(() => active.abort(), SILENCE_MS);
     };
     try {
-      const headers: Record<string, string> = { Accept: 'text/event-stream' };
+      // The ids make this stream announce the tab's presence (backend
+      // server.js): who else has the workspace open decides whether uploads
+      // can be batched (services/sync/presence.ts).
+      const headers: Record<string, string> = {
+        Accept: 'text/event-stream',
+        'X-Axoview-Device': deviceId,
+        'X-Axoview-Browser': options.browserId ?? getBrowserId()
+      };
       if (lastEventId !== null) headers['Last-Event-ID'] = lastEventId;
       const response = await fetchImpl(`${options.baseUrl}/api/sync/events`, {
         headers,
@@ -143,6 +172,13 @@ export function connectRealtimeSync(options: RealtimeSyncOptions): RealtimeSyncC
           try {
             change = JSON.parse(frame.data) as SyncChange;
           } catch {
+            continue;
+          }
+          if (change.kind === 'collaboration' || change.kind === 'signal') {
+            const open = receiveCollaboration(change);
+            if (!open && change.kind === 'collaboration' && change.agent && change.origin !== deviceId) {
+              options.onChange({ ...change, kind: 'diagram', action: 'save' });
+            }
             continue;
           }
           if (change.origin && change.origin === deviceId) continue;

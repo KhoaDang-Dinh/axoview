@@ -88,6 +88,15 @@ The exact dialog component is the cleanup row's choice; the contract is that **n
 
 The Local-mode share-error dialog therefore guards `/display/p/<shareUuid>` only, never `/display/<diagramId>`. The owner-readonly load failure (404, deleted diagram, network error) is surfaced by a separate `ReadonlyLoadErrorDialog` — same explicit-error contract as the share-error dialog, but a different cause and a different user-recovery path ("back to editor" rather than "this needs a session backend").
 
+**Addendum (2026-11-05): the editing route `/app/d/<diagramId>?page=<viewId>`.** With server storage, the editor keeps the open diagram and its page in the URL, so a refresh or a bookmark reopens them; before this, every refresh landed on an empty `/app`.
+- **Writing it.** Opening a diagram, or switching page, *replaces* the URL; no history entries are added. Closing the open diagram, or its deletion elsewhere, goes back to `/app`.
+- **Reading it.** On load, the diagram in the URL is opened once, on the page named if it still exists, otherwise on the first page. The "once" matters: after the diagram is closed or deleted, a URL that still names it never reopens it. A diagram that cannot be loaded (deleted, another account) shows a notice and falls back to `/app`.
+- **Scope.** Server storage only. A session diagram lives in this browser and is restored from `localStorage`; a Drive file has `/display/drive/<id>`. On a deploy without server storage, `/app/d/*` falls back to `/app`.
+- **Sign-in.** Opening a diagram link while signed out (Cognito) brings the user back to it after sign-in. The return path is kept in `sessionStorage` and only in the `/d/<id>?page=<view>` shape, so it cannot redirect anywhere else.
+- **Routing.** No change: `/app/*` already serves the SPA (nginx, Pages `_redirects`, the CloudFront router).
+
+Like `/display/<diagramId>`, `/d/<diagramId>` is an owner route, not a share route: it loads through the user's own storage.
+
 ### 4. Env-var contract — one section per target
 
 #### 4a. Self-host (Docker / compose)

@@ -3,6 +3,8 @@ import { Alert, Button, Snackbar } from '@mui/material'
 import { useNotificationStore, Notification } from '../stores/notificationStore'
 
 const SNACKBAR_SPACING = 60
+// Between the assistant (1400) and MUI tooltips (1500).
+const NOTICE_Z_INDEX = 1450
 
 interface NotificationItemProps {
   notification: Notification
@@ -22,11 +24,16 @@ function NotificationItem({ notification, index }: NotificationItemProps) {
     <Snackbar
       open
       anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-      sx={{ bottom: `${index * SNACKBAR_SPACING + 16}px !important` }}
+      // Above the AI assistant's layer (zIndex 1400, components/ai/AssistantWidget.tsx):
+      // its bubble sits bottom-right too and would cover a notice's button.
+      sx={{ bottom: `${index * SNACKBAR_SPACING + 16}px !important`, zIndex: NOTICE_Z_INDEX }}
     >
       <Alert
         severity={notification.severity}
         onClose={() => dismiss(notification.id)}
+        // A stable hook for browser tests (ADR 0008: data-axoview-id).
+        data-axoview-id="notification"
+        data-severity={notification.severity}
         sx={{ minWidth: 300 }}
         action={
           notification.action ? (

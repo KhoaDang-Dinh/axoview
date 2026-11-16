@@ -45,7 +45,9 @@ export const ToolMenu = () => {
 
   return (
     <UiElement>
-      <Stack direction="row" spacing={0.5} alignItems="center">
+      <Stack direction="row" spacing={0.5} sx={{
+        alignItems: 'center'
+      }}>
         {/* Undo/Redo Section */}
         <IconButton
           name={tooltipWithShortcut(t('undo'), 'Ctrl+Z')}

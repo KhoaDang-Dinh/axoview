@@ -13,6 +13,7 @@ interface Call {
   method: string;
   ifMatch: string | null;
   device: string | null;
+  agent: string | null;
 }
 
 function response(status: number, body: unknown, etag?: string): Response {
@@ -33,7 +34,8 @@ function script(responses: Response[]): Call[] {
       url: String(input),
       method: (init.method || 'GET').toUpperCase(),
       ifMatch: headers.get('If-Match'),
-      device: headers.get('X-Axoview-Device')
+      device: headers.get('X-Axoview-Device'),
+      agent: headers.get('X-Axoview-Agent')
     });
     return responses[index++] ?? response(500, { error: 'no more mocks' });
   };
@@ -68,6 +70,38 @@ it('on 409, re-reads the version and saves again with it', async () => {
   expect(p.knownVersion('d1')).toBe(5);
 });
 
+it('on a 409 that names the current version, saves again against it without re-reading the diagram', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { title: 'A' }, '"3"'),
+    response(409, { code: 'VERSION_CONFLICT', currentVersion: 4 }),
+    response(200, { ok: true }, '"5"')
+  ]);
+  await p.loadDiagram('d1');
+  await p.saveDiagram('d1', { title: 'mine' });
+  expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['GET -', 'PUT "3"', 'PUT "4"']);
+  expect(p.knownVersion('d1')).toBe(5);
+});
+
+it('a rename, trash or restore records the version it produced, so the next save is not stale', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { title: 'A' }, '"3"'),   // load
+    response(200, { success: true }, '"4"'), // rename
+    response(200, { ok: true }, '"5"'),      // save: goes out against 4, first time
+    response(200, { success: true }, '"6"'), // trash
+    response(200, { success: true }, '"7"')  // restore
+  ]);
+  await p.loadDiagram('d1');
+  await p.renameDiagram('d1', 'Renamed');
+  await p.saveDiagram('d1', { title: 'Renamed' });
+  expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['GET -', 'PATCH -', 'PUT "4"']);
+  await p.deleteDiagram('d1', true);
+  expect(p.knownVersion('d1')).toBe(6);
+  await p.restoreDiagram('d1');
+  expect(p.knownVersion('d1')).toBe(7);
+});
+
 it('on 428 (version never learned), learns it and saves', async () => {
   const p = await serverProvider();
   const calls = script([
@@ -78,6 +112,49 @@ it('on 428 (version never learned), learns it and saves', async () => {
   await p.saveDiagram('d2', { title: 'x' });
   expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['PUT -', 'GET -', 'PUT "7"']);
   expect(p.knownVersion('d2')).toBe(8);
+});
+
+// CloudFront compresses answers of 1,000 bytes or more and weakens their
+// ETag. Reading only "7" left a tab whose diagram is not tiny without a
+// version: every save went out without If-Match and failed (2026-11-13).
+it('behind CloudFront: a weak ETag (W/"7") is a version like "7"', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { title: 'big' }, 'W/"6"'),
+    response(200, { ok: true }, '"7"'),
+    response(428, { code: 'IF_MATCH_REQUIRED' }),
+    response(200, {}, 'W/"9"'),
+    response(200, { ok: true }, '"10"')
+  ]);
+  await p.loadDiagram('d4');
+  expect(p.knownVersion('d4')).toBe(6);
+  await p.saveDiagram('d4', { title: 'x' });
+  // And when the version must be re-read, the weak answer is enough.
+  await p.saveDiagram('d5', { title: 'y' });
+  expect(calls.map((c) => `${c.method} ${c.ifMatch ?? '-'}`)).toEqual(['GET -', 'PUT "6"', 'PUT -', 'GET -', 'PUT "9"']);
+  expect(p.knownVersion('d4')).toBe(7);
+  expect(p.knownVersion('d5')).toBe(10);
+});
+
+it('the save after an assistant change is approved names the assistant, once, retries included', async () => {
+  const p = await serverProvider();
+  const calls = script([
+    response(200, { ok: true }, '"2"'),
+    response(409, { currentVersion: 5 }),
+    response(200, { ok: true }, '"6"'),
+    response(200, { ok: true }, '"7"'),
+    response(500, {}),
+    response(200, { ok: true }, '"8"')
+  ]);
+  await p.saveDiagram('d6', { title: 'mine' });
+  p.noteAgentChange('d6', 'Nova');
+  await p.saveDiagram('d6', { title: 'with Nova' });
+  await p.saveDiagram('d6', { title: 'mine again' });
+  // A failed save keeps the note for the save that gets through.
+  p.noteAgentChange('d6', 'Nova');
+  await expect(p.saveDiagram('d6', { title: 'fails' })).rejects.toThrow('500');
+  await p.saveDiagram('d6', { title: 'gets through' });
+  expect(calls.map((c) => c.agent)).toEqual([null, 'Nova', 'Nova', null, 'Nova', 'Nova']);
 });
 
 it('retries once only: a second conflict is an error the autosave reports', async () => {

@@ -57,9 +57,11 @@ import { ItemReference } from 'src/types';
 const Hint = ({ children }: { children: React.ReactNode }) => (
   <Typography
     variant="micro"
-    color="text.secondary"
-    sx={{ fontFamily: 'monospace', ml: 3 }}
-  >
+    sx={{
+      color: 'text.secondary',
+      fontFamily: 'monospace',
+      ml: 3
+    }}>
     {children}
   </Typography>
 );
@@ -436,9 +438,10 @@ export const CanvasContextMenu = () => {
         // Right-click should not steal focus into the first item; keep the
         // canvas focused so a follow-up keystroke still routes to it.
         disableAutoFocusItem
-        slotProps={{ paper: { sx: { minWidth: 200 } } }}
-        MenuListProps={{ dense: true }}
-      >
+        slotProps={{
+          paper: { sx: { minWidth: 200 } },
+          list: { dense: true }
+        }}>
         {variant === 'item'
           ? [
               <MenuItem key="details" onClick={run(handleDetails)}>
@@ -607,8 +610,10 @@ export const CanvasContextMenu = () => {
           ? [
               <MenuItem key="count" disabled>
                 <ListItemText
-                  primaryTypographyProps={{ variant: 'caption' }}
                   sx={{ color: 'text.secondary' }}
+                  slotProps={{
+                    primary: { variant: 'caption' }
+                  }}
                 >
                   {countLabel('itemsSelectedOne', 'itemsSelectedOther')}
                 </ListItemText>
@@ -728,7 +733,9 @@ export const CanvasContextMenu = () => {
         onClose={() => setLayerAnchor(null)}
         anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-        MenuListProps={{ dense: true }}
+        slotProps={{
+          list: { dense: true }
+        }}
       >
         {layers.length === 0 && (
           <MenuItem disabled>

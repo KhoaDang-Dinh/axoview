@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { INITIAL_DATA } from '../config';
 import { constrainedStrings } from './common';
 import { modelItemsSchema } from './modelItems';

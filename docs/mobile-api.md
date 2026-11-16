@@ -20,6 +20,7 @@ GET /api/config
 {
   "authMode": "cognito",
   "serverStorage": true,
+  "sharing": true,
   "publicBaseUrl": "https://example.com",
   "cognito": {
     "domain": "https://axoview-prod-123456789012.auth.ap-southeast-1.amazoncognito.com",
@@ -187,6 +188,67 @@ Sharing:
 | `DELETE /api/diagrams/{id}/share` | `{ success }` |
 | `GET /api/public/diagrams/{uuid}` | the snapshot (no sign-in) |
 
+People a diagram is shared with ([ADR 0057](adr/0057-diagram-sharing-and-permissions.md); only when
+`/api/config` says `"sharing": true`; for the owner and Full admins, anyone else gets `404`):
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /api/diagrams/{id}/members` | — | `{ members: [{ sub, email, role, addedAt }] }` |
+| `POST /api/diagrams/{id}/members` | `{ "email": "…", "role": "viewer" \| "admin" }` (default `viewer`) | `201 { member }`; or an error with a `reason`: `no-account` (404), `already-shared` (409), `self` (422), `invalid-email` / `invalid-role` (400), `rate-limited` (429, over 20 a minute) |
+| `PATCH /api/diagrams/{id}/members/{sub}` | `{ "role": "viewer" \| "admin" }` | `{ member }` |
+| `DELETE /api/diagrams/{id}/members/{sub}` | — | `{ removed }` |
+
+Permission levels (`role`), for people only:
+
+| Level | `role` | May |
+|---|---|---|
+| Read only | `viewer` | load it (the web app opens it in the read-only viewer); every write is `403 view-only` |
+| Full admin | `admin` | everything the owner can, except moving it between the owner's folders (`403 owner-folders`) |
+
+- **Who can be added:** by email, an account whose email is verified.
+- **On their side:** a diagram shared with someone appears in their `GET /api/diagrams` with
+  `shared: { role, ownerEmail }`, and is loaded at its usual `/api/diagrams/{id}`.
+- **Live:**
+  - adding, changing or removing a person sends a `diagram` `create`, `update` or `delete` change to
+    their sync stream;
+  - every save goes to everyone who has the diagram.
+- **Headers:** `GET`/`PUT /api/diagrams/{id}` on a diagram other people have answers
+  `X-Axoview-Shared: by-you | with-you` and `X-Axoview-Role: owner | viewer | admin`.
+  The web app then uploads each save at once instead of batching.
+
+AI agents are not members: an agent works on its person's account, and that person sets once what
+it may do (ADR 0057 addendum 3; any signed-in account, server storage):
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /api/agent` | — | `{ level: "viewer" \| "proposer" }`; `viewer` (Read only) until set |
+| `PUT /api/agent` | `{ "level": "viewer" \| "proposer" }` | `{ level }`; `invalid-level` (400) for anything else |
+
+On a diagram the person may only view, the agent is Read only whatever the level says.
+
+Changes an outside agent proposed through the workspace MCP server ([ADR 0059](adr/0059-agent-sign-in-and-workspace-mcp.md))
+wait for its person alone, while they may change the diagram (owner or Full admin; anyone else gets
+`404`). A proposal holds operations in the `diagramAgent` vocabulary, not a document: the app checks
+them against the page and works out the diagram with the approved ones made. Approving is saving
+that diagram ([ADR 0059](adr/0059-agent-sign-in-and-workspace-mcp.md), addendum 2026-11-12): the
+decision is recorded only once it is stored.
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `GET /api/diagrams/{id}/proposals` | — | `{ proposals: [{ id, by: { sub, agent }, viewId, operations, note, createdAt }] }`: this person's agents' waiting ones |
+| `POST /api/diagrams/{id}/proposals/{pid}/approve` | `{ "applied": n, "document": {…} }`: how many steps were made and the diagram with them. The state it was built on: `If-Match: "<version>"`, or `"baseModified": "<lastModified>"` on a backend without versions | `{ proposal, lastModified }`, with the new `ETag` |
+| `POST /api/diagrams/{id}/proposals/{pid}/reject` | — | `{ proposal }` |
+
+Approve answers `409` with `reason: "conflict"` (or a version conflict) when the diagram changed
+since that state, `428` when no state is named and `400` without a document. In each case nothing
+is stored and the proposal keeps waiting. A decision is final: the other one afterwards is `409`
+with `reason: "already-decided"`; the same one again returns the recorded proposal.
+
+A new one sends `kind: "proposal"` `create`, and deciding one `resolve`, to that person's sync stream.
+`create` also names the agent (`agent`), the number of steps (`steps`), the diagram (`diagramName`)
+and the proposal (`proposal`); `resolve` names the proposal and its `status` (`approved` or
+`rejected`). Show a notice for `create`: "Claude Code proposes 2 changes to “Network”".
+
 ### The diagram document
 
 The same JSON the web editor saves: `title`, `items`, `views`, `icons`,
@@ -200,8 +262,15 @@ deleted for the web app too.
 
 Each diagram has a version, sent as `ETag: "<n>"` on `GET`, `POST` and `PUT`.
 Save with `If-Match: "<n>"` from the last load or save. On `409`, another
-device saved first. The web app resolves it as "latest save wins": it reloads
-the version (`GET`) and saves again. Do the same, or offer the user the choice.
+device saved first; the body's `currentVersion`, when present, is the version
+to save against. The web app resolves it as "latest save wins": it saves again
+against that version (re-reading it with `GET` only when the 409 does not name
+it). Do the same, or offer the user the choice. A rename, trash or restore
+(`PATCH`) also returns the new version.
+
+Write responses carry the document's `lastModified`, and a `PUT` whose content
+equals what is stored answers `{ "unchanged": true }`: nothing is written and
+no other device is told.
 
 ## 4. Realtime sync
 
@@ -210,7 +279,12 @@ GET /api/sync/events
 Authorization: Bearer <access token>
 Accept: text/event-stream
 Last-Event-ID: <last id received, when reconnecting>
+X-Axoview-Device: <this install's id>
+X-Axoview-Browser: <this install's id>
 ```
+
+The two ids are optional. With both, the stream announces this app as
+present (ADR 0053); use the same id for both on a phone.
 
 A Server-Sent Events stream of every change to the workspace, from any device:
 
@@ -232,12 +306,37 @@ data: {"seq":42,"kind":"diagram","action":"save","id":"diagram_…","version":7,
 | `diagram` `create` / `move` / `delete`, `update` with `name` or `deleted` | refresh the list |
 | `folder` *, `tree` | refresh the folder tree |
 | `resync` | changes were missed: refresh everything shown |
+| `presence` `join` / `renew` / `here` / `leave` | another app has the workspace open (`origin`, `browser`); nothing to refresh |
+| `proposal` `create` / `resolve` | an AI agent proposed changes, or they were decided: refresh the waiting proposals; for `create`, show a notice naming `agent` |
 
-- Ignore changes whose `origin` is your own device id.
+A `diagram` `save` that carries an AI agent's approved change also has `agent` (whose change it
+was) and `diagramName`. Do what the table says, and say whose it was: "Claude Code's approved
+changes were added to this diagram". When your app saves a change it applied for an AI agent (the
+person approved it there), send the agent's name with that save, so the other devices can say so:
+
+```http
+X-Axoview-Agent: Nova
+```
+
+Letters, digits, spaces and `. _ ( ) ' -`, at most 60 characters; anything else is ignored.
+
+- Every change arrives, in order. A stream that is a few changes behind (several
+  saves inside one poll, a reconnect with `Last-Event-ID`) is sent each of them
+  from the server's change queue, kept for an hour, up to 100 changes. Only
+  further behind than that, or ahead of the server, is it sent one `resync`.
+- If the open diagram is deleted, or moved to the trash, close it: you get
+  `delete`, or `update` with `deleted: true`.
+- Ignore changes whose `origin` is your own device id. Make the id unique per
+  app instance (the web app makes one per page load, so a duplicated tab gets
+  its own).
 - The server pings every 15 s and ends each stream after about 5 minutes.
   Reconnect with `Last-Event-ID`; also after 45 s of silence.
 - Close the stream while the app is in the background, and treat returning to
   the foreground as a `resync`.
+- Presence: while another browser or app is present, the web app uploads each
+  edit within about 2 s; alone, it uploads at most every 30 s (ADR 0054). An app
+  that shows a diagram live should therefore keep its stream open with both ids,
+  so editors know it is watching.
 - React Native's built-in `fetch` cannot read a streaming body. Use
   `expo/fetch` (streaming), or `react-native-sse`, which supports the
   `Authorization` header.

@@ -77,7 +77,12 @@ export function DriveRootFolderDialog({ open, onConfirm, onCancel }: Props) {
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            color: 'text.secondary',
+            mb: 2
+          }}>
           {t(
             'driveRoot.body',
             'Axoview keeps your diagrams in one folder in your Google Drive. It can only see the files it creates there — nothing else in your Drive.'
@@ -110,7 +115,9 @@ export function DriveRootFolderDialog({ open, onConfirm, onCancel }: Props) {
             value={customName}
             onChange={(e) => setCustomName(e.target.value)}
             sx={{ mt: 1 }}
-            inputProps={{ 'data-axoview-id': 'drive-root-custom-name' }}
+            slotProps={{
+              htmlInput: { 'data-axoview-id': 'drive-root-custom-name' }
+            }}
           />
         )}
       </DialogContent>

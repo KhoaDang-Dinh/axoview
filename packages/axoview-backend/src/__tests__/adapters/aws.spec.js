@@ -1,79 +1,5 @@
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import {
-  DeleteObjectCommand,
-  GetObjectCommand,
-  ListObjectsV2Command,
-  PutObjectCommand
-} from '@aws-sdk/client-s3';
 import { createAwsWorkspaceAdapter } from '../../adapters/aws.js';
-
-function makeAwsDoubles() {
-  const rows = new Map();
-  const objects = new Map();
-  const ddbClient = {
-    async send(command) {
-      const input = command.input;
-      const key = `${input.Key?.PK}|${input.Key?.SK}`;
-      if (command instanceof GetCommand) return { Item: rows.get(key) };
-      if (command instanceof PutCommand) {
-        const current = rows.get(`${input.Item.PK}|${input.Item.SK}`);
-        if (input.ConditionExpression === 'attribute_not_exists(PK)' && current) {
-          const error = new Error('condition'); error.name = 'ConditionalCheckFailedException'; throw error;
-        }
-        if (input.ConditionExpression?.includes('#version') && current?.version !== input.ExpressionAttributeValues[':expectedVersion']) {
-          const error = new Error('condition'); error.name = 'ConditionalCheckFailedException'; throw error;
-        }
-        if (input.ConditionExpression?.includes('workspaceId =') && current && current.workspaceId !== input.ExpressionAttributeValues[':workspaceId']) {
-          const error = new Error('condition'); error.name = 'ConditionalCheckFailedException'; throw error;
-        }
-        rows.set(`${input.Item.PK}|${input.Item.SK}`, input.Item);
-        return {};
-      }
-      if (command instanceof DeleteCommand) {
-        const current = rows.get(key);
-        if (input.ConditionExpression?.includes('#version') && current?.version !== input.ExpressionAttributeValues[':expectedVersion']) {
-          const error = new Error('condition'); error.name = 'ConditionalCheckFailedException'; throw error;
-        }
-        if (input.ConditionExpression?.includes('workspaceId =') && current?.workspaceId !== input.ExpressionAttributeValues[':workspaceId']) {
-          const error = new Error('condition'); error.name = 'ConditionalCheckFailedException'; throw error;
-        }
-        rows.delete(key);
-        return {};
-      }
-      if (command instanceof QueryCommand) {
-        const values = input.ExpressionAttributeValues;
-        const Items = [...rows.values()].filter((row) => row.PK === values[':pk'] && row.SK.startsWith(values[':prefix']));
-        return { Items };
-      }
-      throw new Error(`Unexpected DynamoDB command: ${command.constructor.name}`);
-    }
-  };
-  const s3Client = {
-    async send(command) {
-      const input = command.input;
-      if (command instanceof PutObjectCommand) {
-        objects.set(input.Key, new Uint8Array(input.Body));
-        return {};
-      }
-      if (command instanceof GetObjectCommand) {
-        const body = objects.get(input.Key);
-        if (!body) {
-          const error = new Error('missing'); error.name = 'NoSuchKey'; throw error;
-        }
-        return { Body: { transformToByteArray: async () => new Uint8Array(body) } };
-      }
-      if (command instanceof DeleteObjectCommand) {
-        objects.delete(input.Key);
-        return {};
-      }
-      if (command instanceof ListObjectsV2Command) {
-        return { Contents: [...objects.keys()].filter((key) => key.startsWith(input.Prefix)).map((Key) => ({ Key })) };
-      }
-      throw new Error(`Unexpected S3 command: ${command.constructor.name}`);
-    }
-  };
-  return { ddbClient, s3Client, rows, objects };
-}
+import { makeAwsDoubles } from '../helpers/awsDoubles.js';
 
 const asBytes = (value) => new TextEncoder().encode(JSON.stringify(value));
 const asJson = (value) => JSON.parse(new TextDecoder().decode(value));
@@ -116,5 +42,34 @@ describe('AWS workspace storage adapter', () => {
     expect(asJson(await bob.get('public/abcdefghijklmnopqrstu'))).toEqual({ title: 'shared' });
     await bob.delete('public/abcdefghijklmnopqrstu');
     expect(asJson(await alice.get('public/abcdefghijklmnopqrstu'))).toEqual({ title: 'shared' });
+  });
+});
+
+describe('AWS adapter: create only if absent', () => {
+  test('sends a conditional S3 write, and refuses diagram and public keys', async () => {
+    const doubles = makeAwsDoubles();
+    const adapter = createAwsWorkspaceAdapter({ workspaceId: 'alice', bucketName: 'data', tableName: 'app', ...doubles });
+    expect(await adapter.putIfAbsent('oauth/claims/abc', asBytes({ a: 1 }))).toBe(true);
+    expect(await adapter.putIfAbsent('oauth/claims/abc', asBytes({ a: 2 }))).toBe(false);
+    expect(asJson(await adapter.get('oauth/claims/abc'))).toEqual({ a: 1 });
+    expect([...doubles.objects.keys()]).toEqual(['workspaces/alice/objects/oauth/claims/abc.json']);
+    await expect(adapter.putIfAbsent('diagrams/d1', asBytes({}))).rejects.toThrow(/generic objects/);
+    await expect(adapter.putIfAbsent('public/abcdefghijklmnopqrstu', asBytes({}))).rejects.toThrow(/generic objects/);
+  });
+
+  test('retries S3\'s 409 "conflicting operation" and passes other failures on', async () => {
+    const doubles = makeAwsDoubles();
+    const real = doubles.s3Client.send.bind(doubles.s3Client);
+    let conflicts = 2;
+    doubles.s3Client.send = async (command) => {
+      if (command.input.IfNoneMatch === '*' && conflicts-- > 0) {
+        throw Object.assign(new Error('conflict'), { name: 'ConditionalRequestConflict', $metadata: { httpStatusCode: 409 } });
+      }
+      return real(command);
+    };
+    const adapter = createAwsWorkspaceAdapter({ workspaceId: 'alice', bucketName: 'data', tableName: 'app', ...doubles });
+    expect(await adapter.putIfAbsent('oauth/claims/abc', asBytes({}))).toBe(true);
+    doubles.s3Client.send = async () => { throw Object.assign(new Error('denied'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } }); };
+    await expect(adapter.putIfAbsent('oauth/claims/def', asBytes({}))).rejects.toThrow('denied');
   });
 });

@@ -126,6 +126,20 @@
         after <strong>90 days</strong>.
       </p>
 
+      <h3>Optional product usage statistics</h3>
+      <p>
+        If the operator enables first-party product analytics, signed-in users may
+        explicitly choose to share anonymous feature-use events. These are limited
+        to an editor session starting, a diagram opening, an AI message succeeding,
+        and an agent proposal being approved. Each event has a short-lived,
+        random browser-session ID and a random event ID; it has no account ID,
+        IP address, diagram ID, diagram contents, messages, prompts or free-form text.
+        Events are stored in encrypted Amazon S3 for no more than 90 days.
+        We do not use third-party analytics scripts. Declining does not affect the editor.
+        You can change your choice at <a href="/app?analytics=settings">analytics preferences</a>.
+        A browser Do Not Track setting is also respected.
+      </p>
+
       <h2>3. How Axoview uses this information</h2>
       <ul>
         <li>

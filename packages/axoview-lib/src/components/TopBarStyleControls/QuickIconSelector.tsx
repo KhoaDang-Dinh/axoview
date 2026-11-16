@@ -129,7 +129,9 @@ export const QuickIconSelector = ({
 
           {!filter && recentIcons.length > 0 && (
             <>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" sx={{
+                color: 'text.secondary'
+              }}>
                 {t('recentlyUsed')}
               </Typography>
               <IconGrid
@@ -146,7 +148,9 @@ export const QuickIconSelector = ({
       {filter && filteredIcons && (
         <>
           <Section sx={{ py: 1 }}>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: 'text.secondary'
+            }}>
               {t('searchResults').replace('{count}', String(filteredIcons.length))}
             </Typography>
           </Section>

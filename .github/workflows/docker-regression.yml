@@ -50,7 +50,10 @@ jobs:
   build:
     name: Build image
     if: ${{ github.event.pull_request.draft != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04 (2026-11), where Playwright cannot
+    # install Chromium ("does not support chromium on ubuntu26.04-x64").
+    # Move back once Playwright supports it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       shards: ${{ steps.matrix.outputs.shards }}
@@ -116,7 +119,7 @@ jobs:
     name: Docker regression [shard ${{ matrix.shard }}/${{ needs.build.outputs.total }}]
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       # One shard failing must not cancel the others — we want the full picture.
@@ -207,7 +210,7 @@ jobs:
     name: Docker regression summary
     if: ${{ always() && needs.build.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [build, shard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -279,7 +282,7 @@ jobs:
     name: Attribute Docker regression failures (advisory)
     if: ${{ always() && needs.build.result == 'success' && needs.shard.result == 'failure' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [build, shard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     continue-on-error: true
 
@@ -361,7 +364,7 @@ jobs:
     # ready re-triggers the workflow via the `ready_for_review` type above.
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     needs: [shard]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Assert every shard passed

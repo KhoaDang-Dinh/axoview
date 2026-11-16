@@ -49,3 +49,8 @@ packages/axoview-e2e/perf/perf-test-results/
 
 # CodeGraph index (local to each machine)
 .codegraph/
+
+# The public user manual, generated from docs/manual by scripts/build-public-docs.mjs
+packages/axoview-app/public/docs/manual/
+packages/axoview-app/public/llms.txt
+packages/axoview-app/public/llms-full.txt

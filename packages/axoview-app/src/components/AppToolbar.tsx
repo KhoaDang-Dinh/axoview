@@ -36,6 +36,8 @@ import { ExportPopover } from './ExportPopover';
 import { AuthControl } from './AuthControl';
 import { CognitoAccountControl } from './CognitoAccountControl';
 import { shareUrlFromUuid } from '../utils/shareUrl';
+import { SharePeople } from './SharePeople';
+import { ProposalPrompt } from './ProposalPrompt';
 import {
   drivePreviewUrl,
   getAccessOverview,
@@ -53,7 +55,8 @@ export function AppToolbar() {
     serverStorageAvailable,
     remoteStorageActive,
     activeProviderId,
-    storage
+    storage,
+    runtimeConfig
   } = useAppStorage();
   const driveActive = activeProviderId === 'google-drive';
   const {
@@ -126,6 +129,13 @@ export function AppToolbar() {
   const shareReqRef = useRef(0);
 
   const currentDiagramId = currentDiagram?.id;
+  // Sharing by email (ADR 0057): accounts and server storage, not Drive.
+  const peopleSharing = !!runtimeConfig?.sharing && !driveActive && remoteStorageActive;
+  // This account's level on the open diagram (the server's X-Axoview-Role):
+  // a Full admin shares like the owner; a Read only member sees a note
+  // instead of the link and the email field.
+  const myRole = peopleSharing && currentDiagramId ? storage?.sharedRole?.(currentDiagramId) : undefined;
+  const sharedWithYou = myRole === 'viewer';
 
   useEffect(() => {
     shareReqRef.current++; // invalidate any in-flight share fetch for the old id
@@ -150,6 +160,9 @@ export function AppToolbar() {
     const current = () => shareReqRef.current === reqId;
     setShowSharePopover(true);
     setShareError(null);
+    // Someone else's diagram, shared with this account: only its owner can
+    // publish a link or add people, so the popover just says so.
+    if (sharedWithYou) return;
     let url = shareUrl;
     if (!url) {
       try {
@@ -419,7 +432,13 @@ export function AppToolbar() {
         }}
       >
         {isReadonlyUrl ? (
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ ml: 1 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+              ml: 1
+            }}>
             <Chip
               label={t('dialog.readOnly.mode')}
               variant="outlined"
@@ -494,6 +513,9 @@ export function AppToolbar() {
               </Tooltip>
             )}
             <StatusCluster />
+            {peopleSharing && currentDiagramId && storage && (
+              <ProposalPrompt diagramId={currentDiagramId} role={myRole} storage={storage} />
+            )}
 
             <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
@@ -617,7 +639,12 @@ export function AppToolbar() {
           }}
         >
           <Stack spacing={1.5}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Stack
+              direction="row"
+              sx={{
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
               <Typography variant="subtitle2">
                 {t('share.title', 'Share Diagram')}
               </Typography>
@@ -629,7 +656,16 @@ export function AppToolbar() {
                 <CloseIcon />
               </IconButton>
             </Stack>
-            <Typography variant="body2" color="text.secondary">
+            {sharedWithYou ? (
+              <Typography variant="body2" sx={{ color: 'text.secondary' }} data-axoview-id="share-shared-with-you">
+                {t(
+                  'share.people.sharedWithYouViewer',
+                  'Shared with you as Read only. Only its owner or a Full admin can share it.'
+                )}
+              </Typography>
+            ) : (
+            <>
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
               {t('share.hint', 'Anyone with this link can view the diagram in read-only mode.')}
             </Typography>
             {shareError && (
@@ -642,12 +678,14 @@ export function AppToolbar() {
                 size="small"
                 fullWidth
                 value={shareLoading ? t('share.creating', 'Creating link…') : shareUrl}
-                inputProps={{
-                  readOnly: true,
-                  'data-axoview-id': 'share-url-input',
-                  style: { fontFamily: 'monospace', fontSize: 12 }
-                }}
                 onClick={handleShareUrlClick}
+                slotProps={{
+                  htmlInput: {
+                    readOnly: true,
+                    'data-axoview-id': 'share-url-input',
+                    style: { fontFamily: 'monospace', fontSize: 12 }
+                  }
+                }}
               />
               <Button
                 variant={shareCopied ? 'contained' : 'outlined'}
@@ -661,6 +699,14 @@ export function AppToolbar() {
                 {shareCopied ? t('share.copied', '✓ Copied!') : t('share.copy', 'Copy')}
               </Button>
             </Stack>
+            {peopleSharing && currentDiagramId && storage && (
+              <>
+                <Divider />
+                <SharePeople diagramId={currentDiagramId} storage={storage} />
+              </>
+            )}
+            </>
+            )}
           </Stack>
         </Popover>
       )}
@@ -674,17 +720,14 @@ export function AppToolbar() {
           onClose={() => setShareMenuAnchor(null)}
           anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          // `dense` drops the item text to body2 (14px), matching ExportPopover's
-          // <MenuList dense> — without it the app-level Menu inherits MUI's
-          // body1 (16px) default and "Copy link" reads oversized (bloat fix).
-          MenuListProps={{ dense: true }}
           slotProps={{
             paper: {
               sx: { minWidth: 248, mt: 0.5 },
               'data-axoview-id': 'share-menu'
-            } as React.ComponentProps<'div'>
-          }}
-        >
+            } as React.ComponentProps<'div'>,
+
+            list: { dense: true }
+          }}>
           <MenuItem onClick={() => void handleQuickCopyLink()} data-axoview-id="share-menu-copy-link">
             <ListItemIcon>
               <LinkIcon fontSize="small" />

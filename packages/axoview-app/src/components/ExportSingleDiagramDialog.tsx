@@ -48,7 +48,13 @@ export function ExportSingleDiagramDialog({ onExport, onClose }: Props) {
           <Typography variant="body2">
             {t('dialog.export.recommendedMessage')}
           </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              display: 'block',
+              mt: 1
+            }}>
             {t('dialog.export.noteMessage')}
           </Typography>
         </Alert>

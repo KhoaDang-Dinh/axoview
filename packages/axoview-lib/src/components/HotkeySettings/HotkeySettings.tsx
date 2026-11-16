@@ -34,8 +34,11 @@ export const HotkeySettings = () => {
     <Box sx={{ p: 2 }}>
       <Typography
         variant="caption"
-        color="text.secondary"
-        sx={{ mb: 2, display: 'block' }}
+        sx={{
+          color: 'text.secondary',
+          mb: 2,
+          display: 'block'
+        }}
       >
         {t('settings.hotkeys.note')}
       </Typography>

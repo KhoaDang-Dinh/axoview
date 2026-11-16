@@ -6,8 +6,9 @@ ENV NODE_ENV=production \
     BACKEND_PORT=3001 \
     ENABLE_SERVER_STORAGE=false
 
+COPY packages/axoview-collaboration /axoview-collaboration
 COPY packages/axoview-backend/package.json packages/axoview-backend/package-lock.json ./
-RUN npm ci --omit=dev --workspaces=false && npm cache clean --force
+RUN npm ci --omit=dev --workspaces=false --install-links && npm cache clean --force
 
 COPY packages/axoview-backend/server.js ./server.js
 COPY packages/axoview-backend/src ./src
@@ -15,6 +16,17 @@ COPY packages/axoview-backend/src ./src
 RUN mkdir -p /data/diagrams && chown -R node:node /app /data/diagrams
 
 USER node
+
+# The release this image was built from (push-images.yml passes them; src/
+# releaseInfo.js serves them to in-cluster callers of /healthz). Last, so a
+# new commit's title does not invalidate the cached layers above. Unset in
+# any other build: /healthz then reports no release.
+ARG AXOVIEW_RELEASE_COMMIT=""
+ARG AXOVIEW_RELEASE_PR=""
+ARG AXOVIEW_RELEASE_TITLE=""
+ENV AXOVIEW_RELEASE_COMMIT=$AXOVIEW_RELEASE_COMMIT \
+    AXOVIEW_RELEASE_PR=$AXOVIEW_RELEASE_PR \
+    AXOVIEW_RELEASE_TITLE=$AXOVIEW_RELEASE_TITLE
 
 EXPOSE 3001
 

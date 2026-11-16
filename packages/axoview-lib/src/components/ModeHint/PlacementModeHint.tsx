@@ -45,8 +45,8 @@ export const PlacementModeHint = () => {
       <Stack
         direction="row"
         spacing={1}
-        alignItems="center"
         sx={{
+          alignItems: 'center',
           bgcolor: 'rgba(33, 33, 33, 0.88)',
           color: 'common.white',
           px: 1.5,

@@ -376,7 +376,9 @@ const LabeledSlider = ({
           mb: 0.5
         }}
       >
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{
+          color: 'text.secondary'
+        }}>
           {label}
         </Typography>
         <Typography
@@ -1492,7 +1494,9 @@ export const TopBarStyleControls = () => {
                 <RemoveIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </Tooltip>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: 'text.secondary'
+            }}>
               {t('labelSize')}
             </Typography>
             <Tooltip title={t('increaseLabelSize')}>
@@ -1563,7 +1567,9 @@ export const TopBarStyleControls = () => {
                     <RemoveIcon sx={{ fontSize: 18 }} />
                   </IconButton>
                 </Tooltip>
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{
+                  color: 'text.secondary'
+                }}>
                   {isBulk ? t('stepAll') : t('size')}
                 </Typography>
                 <Tooltip title={t('increaseSize')}>
@@ -1897,9 +1903,11 @@ export const TopBarStyleControls = () => {
           <Box>
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', mb: 0.5 }}
-            >
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mb: 0.5
+              }}>
               {t('lineStyle')}
             </Typography>
             <ToggleButtonGroup
@@ -1941,9 +1949,12 @@ export const TopBarStyleControls = () => {
 
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', mt: 1.5, mb: 0.5 }}
-            >
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mt: 1.5,
+                mb: 0.5
+              }}>
               {t('borderColor')}
             </Typography>
             <ColorPickerBody
@@ -1985,9 +1996,11 @@ export const TopBarStyleControls = () => {
           <Box>
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', mb: 0.5 }}
-            >
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mb: 0.5
+              }}>
               {t('lineStyle')}
             </Typography>
             <ToggleButtonGroup
@@ -2024,9 +2037,12 @@ export const TopBarStyleControls = () => {
 
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', mt: 1.5, mb: 0.5 }}
-            >
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mt: 1.5,
+                mb: 0.5
+              }}>
               {t('borderColor')}
             </Typography>
             <ColorPickerBody
@@ -2089,9 +2105,11 @@ export const TopBarStyleControls = () => {
           <Box>
             <Typography
               variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', mb: 0.5 }}
-            >
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mb: 0.5
+              }}>
               {t('linkToWeb')}
             </Typography>
             {linkTextRangeActive ? (
@@ -2154,12 +2172,16 @@ export const TopBarStyleControls = () => {
               <Box sx={{ mt: 1.5 }}>
                 <Typography
                   variant="caption"
-                  color="text.secondary"
-                  sx={{ display: 'block', mb: 0.5 }}
-                >
+                  sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                    mb: 0.5
+                  }}>
                   {t('linkToDiagram')}
                 </Typography>
-                <Stack direction="row" spacing={0.5} alignItems="center">
+                <Stack direction="row" spacing={0.5} sx={{
+                  alignItems: 'center'
+                }}>
                   <Autocomplete
                     size="small"
                     sx={{ flex: 1 }}
@@ -2178,9 +2200,13 @@ export const TopBarStyleControls = () => {
                       <TextField
                         {...params}
                         placeholder={t('searchDiagrams')}
-                        inputProps={{
-                          ...params.inputProps,
-                          'data-axoview-id': 'strip-link-diagram-picker'
+                        slotProps={{
+                          ...params.slotProps,
+
+                          htmlInput: {
+                            ...params.slotProps.htmlInput,
+                            'data-axoview-id': 'strip-link-diagram-picker'
+                          }
                         }}
                       />
                     )}
@@ -2330,7 +2356,13 @@ export const TopBarStyleControls = () => {
       >
         {connStyle && (
           <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mb: 0.5
+              }}>
               {t('lineStyle')}
             </Typography>
             <ToggleButtonGroup
@@ -2350,7 +2382,14 @@ export const TopBarStyleControls = () => {
               ))}
             </ToggleButtonGroup>
 
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5, mb: 0.5 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mt: 1.5,
+                mb: 0.5
+              }}>
               {t('lineType')}
             </Typography>
             <ToggleButtonGroup

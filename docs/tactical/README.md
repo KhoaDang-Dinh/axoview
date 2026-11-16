@@ -6,6 +6,7 @@
 |---|---|
 | [adr-code-audit.md](adr-code-audit.md) | Verify all 41 ADRs' state + decisions against the code. Scaffolded 2026-07-15; verified findings remediated (see its Disposition block); **419KB — read only that block, never the whole file**. Discharge the remaining rows with **`/docs-sweep gate`**, then wrap. |
 | [release-provenance-and-notes.md](release-provenance-and-notes.md) | Fix version drift (deployed shows 3.7 vs released 3.8.3), stamp the version on the boot splash, and make release notes carry per-fix detail without dead issue links. Scaffolded 2026-07-23 — [ADR 0045](../adr/0045-release-version-provenance-and-in-app-surfacing.md) + [ADR 0046](../adr/0046-release-notes-generation-and-reference-integrity.md). |
+| [multiplayer.md](multiplayer.md) | Several people and their AI agents editing one server diagram live: id-addressed ops, a sequencer per diagram on EKS, sharing and permissions, presence UI. Scaffolded 2026-11-09 — ADRs [0055](../adr/0055-multiplayer-operation-protocol.md)–[0058](../adr/0058-multiplayer-presence-ui.md). |
 
 **Generated output is not a tactical.** The gate's worklist/prefilter/results are regenerable in ~1s and live in gitignored `reports/docs-sweep/` — the same tier as `playwright-report/`. They were briefly committed here (2026-07-15) and removed; a build artifact in a docs folder reads as a doc. See [workflow.md](../workflow.md)'s doc map.
 

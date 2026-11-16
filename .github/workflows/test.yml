@@ -49,12 +49,16 @@ jobs:
       # Dockerfile's runtime stage). The root `npm ci` above never reads that
       # file, so a dependency added to the backend with only the root lock
       # updated passes here and breaks every image build. --dry-run checks the
-      # lock against package.json without installing (~1s).
+      # lock against package.json without installing (~1s). Checked with the
+      # flags the images install with: --install-links copies the local
+      # @axoview/collaboration package (file:) instead of linking it, and a lock
+      # records the two differently, so a check without it fails on a lock the
+      # images install from fine.
       - name: Backend lockfile in sync (Docker installs it standalone)
         working-directory: packages/axoview-backend
         run: |
-          npm ci --omit=dev --workspaces=false --ignore-scripts --dry-run >/dev/null || {
-            echo "::error file=packages/axoview-backend/package-lock.json::Out of sync with packages/axoview-backend/package.json. Run: cd packages/axoview-backend && npm install --package-lock-only --workspaces=false"
+          npm ci --omit=dev --workspaces=false --install-links --ignore-scripts --dry-run >/dev/null || {
+            echo "::error file=packages/axoview-backend/package-lock.json::Out of sync with packages/axoview-backend/package.json. Run: cd packages/axoview-backend && npm install --package-lock-only --workspaces=false --install-links"
             exit 1
           }
 

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { id, constrainedStrings, ARRAY_MAX } from './common';
 
 // A node's persisted model. NOTE: this is the data shape, NOT a panel spec.

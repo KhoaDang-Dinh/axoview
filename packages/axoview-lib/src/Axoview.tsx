@@ -35,6 +35,7 @@ import {
 import { useInitialDataManager } from 'src/hooks/useInitialDataManager';
 import { useView } from 'src/hooks/useView';
 import { useDirtyTracker } from 'src/hooks/useDirtyTracker';
+import { useAgentChanges } from 'src/hooks/useAgentCommit';
 import { ClipboardProvider } from 'src/clipboard/ClipboardContext';
 import { LayerContextProvider } from 'src/hooks/useLayerContext';
 import { CanvasModeProvider } from 'src/contexts/CanvasModeContext';
@@ -78,6 +79,7 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
       width = '100%',
       height = '100%',
       onModelUpdated,
+      onActiveViewChange,
       enableDebugTools = false,
       exposeStoreBridge = false,
       editorMode = 'EDITABLE',
@@ -219,6 +221,7 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
 
     const { load } = initialDataManager;
     const { markClean } = useDirtyTracker(initialDataManager.isReady);
+    const agentChanges = useAgentChanges();
 
     // Wrap the exposed load so every programmatic load resets Axoview's
     // internal dirty flag.  Without this, axoviewRef.current.load() triggers
@@ -235,9 +238,12 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
         openExportImageDialog: (options) => {
           uiStateActions.setExportImageAngle(options?.angle ?? 'asViewed');
           uiStateActions.setDialog('EXPORT_IMAGE');
-        }
+        },
+        getActiveViewId: () => uiStore.getState().view || undefined,
+        applyAgentOperations: (operations, options) => agentChanges.apply(operations, options?.viewId),
+        prepareAgentOperations: (operations, options) => agentChanges.prepare(operations, options?.viewId)
       }),
-      [load, markClean, uiStateActions]
+      [load, markClean, uiStateActions, uiStore, agentChanges]
     );
 
     const mergedInitialData = useMemo(() => {
@@ -275,6 +281,18 @@ const App = forwardRef<AxoviewRef, AxoviewProps>(
         setWindowCursor('default');
       };
     }, []);
+
+    // The page on screen, reported to the host (onActiveViewChange) once a
+    // diagram is loaded. Through a ref, like onModelUpdated below.
+    const activeViewId = useUiStateStore((state) => state.view);
+    const onActiveViewChangeRef = useRef(onActiveViewChange);
+    useEffect(() => {
+      onActiveViewChangeRef.current = onActiveViewChange;
+    });
+    useEffect(() => {
+      if (!initialDataManager.isReady || !activeViewId) return;
+      onActiveViewChangeRef.current?.(activeViewId);
+    }, [activeViewId, initialDataManager.isReady]);
 
     // Use a ref so onModelUpdated changes never re-trigger this effect (prevents infinite re-render loop)
     const onModelUpdatedRef = useRef(onModelUpdated);

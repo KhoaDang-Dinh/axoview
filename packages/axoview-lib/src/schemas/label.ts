@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import * as z from 'zod';
 import { id, coords, constrainedStrings, NOTES_MAX_LENGTH } from './common';
 
 // Floating Label — a first-class billboard chip (ADR 0031), peer to TextBox /

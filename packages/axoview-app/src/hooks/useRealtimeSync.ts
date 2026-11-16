@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { connectRealtimeSync, type SyncChange } from '../services/sync/realtimeSync';
+import { usePresenceStore } from '../services/sync/presence';
 
 /**
  * Realtime multi-device sync for server storage (one user, many devices).
@@ -33,7 +34,12 @@ export interface SyncState {
 }
 
 /** What this tab does about one change from another device. Pure. */
+/** Window event: proposals for `detail.id` were made or decided. */
+export const PROPOSALS_CHANGED_EVENT = 'axoview-proposals-changed';
+
 export function planSyncReaction(change: SyncChange, state: SyncState): SyncReaction {
+  // Who else is here changes nothing on screen (services/sync/presence.ts).
+  if (change.kind === 'presence') return { type: 'ignore' };
   if (change.kind === 'resync') {
     if (!state.openDiagramId) return { type: 'refreshTree' };
     return state.hasUnsavedWork ? { type: 'refreshTree' } : { type: 'reloadOpen', refreshTree: true };
@@ -74,6 +80,18 @@ export interface UseRealtimeSyncOptions {
   /** User-facing notice (existing toast system); called at most once per conflict. */
   notify: (severity: 'info' | 'warning', message: string) => void;
   t: (key: string, fallback: string) => string;
+  /**
+   * True for a change this tab already holds by another route (a sibling
+   * tab's upload of a checkpoint this tab took over the tab channel): skip it.
+   */
+  alreadyHave?: (change: SyncChange) => boolean;
+  /** An AI agent proposed changes to one of this person's diagrams (live notice). */
+  onAgentProposal?: (change: SyncChange) => void;
+  /**
+   * An AI agent's approved change was saved by another device or person:
+   * `open` when it is the diagram this tab shows (reloaded already).
+   */
+  onAgentChange?: (change: SyncChange, open: boolean) => void;
 }
 
 /** Hidden this long, the stream closes (resumed on show). */
@@ -118,9 +136,31 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
     };
 
     const handle = (change: SyncChange) => {
+      if (change.kind === 'presence') {
+        usePresenceStore.getState().apply(change);
+        return;
+      }
+      if (change.kind === 'proposal') {
+        // components/ProposalPrompt.tsx re-reads the waiting proposals.
+        // A new one named by its agent gets the live notice (onAgentProposal);
+        // `announced` tells the prompt not to pop up a second time for it.
+        const announced = change.action === 'create' && typeof change.agent === 'string' && !!change.id &&
+          !!optionsRef.current.onAgentProposal;
+        window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, {
+          detail: { id: change.id, announced, action: change.action }
+        }));
+        if (announced) optionsRef.current.onAgentProposal!(change);
+        return;
+      }
       const current = optionsRef.current;
+      if (current.alreadyHave?.(change)) return;
       const state = current.getState();
       const reaction = planSyncReaction(change, state);
+      // Whose change it was, unless this tab already holds it.
+      if (change.kind === 'diagram' && change.action === 'save' && typeof change.agent === 'string' && change.id) {
+        const open = change.id === state.openDiagramId;
+        if (!(open && reaction.type === 'ignore')) current.onAgentChange?.(change, open);
+      }
       switch (reaction.type) {
         case 'ignore':
           return;
@@ -149,7 +189,7 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
           current.refreshTree();
           current.notify(
             'warning',
-            current.t('sync.deletedElsewhere', 'This diagram was deleted on another device.')
+            current.t('sync.deletedElsewhere', 'This diagram was deleted in another tab or on another device.')
           );
           return;
         case 'openRenamed':
@@ -194,6 +234,9 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
       document.removeEventListener('visibilitychange', onVisibility);
       if (hiddenTimer) clearTimeout(hiddenTimer);
       close();
+      // Without a stream nothing tells this tab who is here: assume no one
+      // until it hears again (a fresh stream's join is answered at once).
+      usePresenceStore.getState().clear();
     };
   }, [enabled, baseUrl]);
 }
