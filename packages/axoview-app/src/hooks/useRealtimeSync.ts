@@ -155,6 +155,14 @@ export function useRealtimeSync(options: UseRealtimeSyncOptions): void {
       const current = optionsRef.current;
       if (current.alreadyHave?.(change)) return;
       const state = current.getState();
+      // A resync means events were missed (the stream was closed or could not
+      // replay them), proposal events among them: the open diagram's waiting
+      // proposals are re-read, not left for a page reload.
+      if (change.kind === 'resync' && state.openDiagramId) {
+        window.dispatchEvent(new CustomEvent(PROPOSALS_CHANGED_EVENT, {
+          detail: { id: state.openDiagramId, announced: false, action: 'resync' }
+        }));
+      }
       const reaction = planSyncReaction(change, state);
       // Whose change it was, unless this tab already holds it.
       if (change.kind === 'diagram' && change.action === 'save' && typeof change.agent === 'string' && change.id) {

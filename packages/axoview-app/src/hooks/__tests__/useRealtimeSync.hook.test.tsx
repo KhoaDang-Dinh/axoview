@@ -230,6 +230,30 @@ describe('a hidden tab', () => {
     expect(streams).toHaveLength(2);
   });
 
+  it('shown again after closing: the open diagram\'s waiting proposals are re-read', () => {
+    // An agent asked in another tab proposes while this one's stream is
+    // closed; the proposal event is gone, so the prompt has to re-read.
+    setup();
+    const heard: unknown[] = [];
+    const listener = (e: Event) => heard.push((e as CustomEvent).detail);
+    window.addEventListener('axoview-proposals-changed', listener);
+    setVisibility('hidden');
+    act(() => { jest.advanceTimersByTime(60_000); });
+    setVisibility('visible');
+    window.removeEventListener('axoview-proposals-changed', listener);
+    expect(heard).toEqual([{ id: 'd1', announced: false, action: 'resync' }]);
+  });
+
+  it('a resync with no diagram open asks no prompt to re-read', () => {
+    setup({ openDiagramId: null });
+    const heard: unknown[] = [];
+    const listener = (e: Event) => heard.push((e as CustomEvent).detail);
+    window.addEventListener('axoview-proposals-changed', listener);
+    send({ kind: 'resync' });
+    window.removeEventListener('axoview-proposals-changed', listener);
+    expect(heard).toEqual([]);
+  });
+
   it('shown again after closing, with unsaved edits: the tree refreshes, the edits stay', () => {
     const { options } = setup({ hasUnsavedWork: true });
     setVisibility('hidden');

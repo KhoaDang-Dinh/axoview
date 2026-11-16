@@ -204,6 +204,47 @@ it('a new proposal on the sync stream refreshes the list, announced once', async
   expect(pushes).toHaveLength(2);
 });
 
+describe('coming back to the tab or window', () => {
+  // People ask their agent in another tab or app; a proposal made meanwhile
+  // may never have arrived live (closed stream, a proxy holding events).
+  beforeEach(() => jest.useFakeTimers({ doNotFake: ['queueMicrotask', 'nextTick'] }));
+  afterEach(() => jest.useRealTimers());
+  const returnTo = async (how: 'focus' | 'visible') => {
+    await act(async () => {
+      if (how === 'focus') window.dispatchEvent(new Event('focus'));
+      else document.dispatchEvent(new Event('visibilitychange'));
+    });
+  };
+
+  it('a proposal that never arrived live shows, and is announced once', async () => {
+    const s = storage([[], [proposal('p1')]]);
+    await show('owner', s);
+    expect(chip()).toBeNull();
+    await returnTo('focus');
+    expect(chip()?.textContent).toBe('1 to approve');
+    expect(pushes).toEqual([{ severity: 'info', message: 'A change to this diagram is waiting for your approval' }]);
+    await act(async () => { jest.advanceTimersByTime(5_000); });
+    await returnTo('visible');
+    expect(pushes).toHaveLength(1);
+  });
+
+  it('focus and visibility arriving together read once', async () => {
+    const s = storage([[]]);
+    await show('owner', s);
+    await returnTo('visible');
+    await returnTo('focus');
+    expect(s.listProposals).toHaveBeenCalledTimes(2);
+  });
+
+  it('a Read only person still never asks', async () => {
+    const s = storage([[proposal('p1')]]);
+    await show('viewer', s);
+    await returnTo('focus');
+    expect(s.listProposals).not.toHaveBeenCalled();
+    expect(chip()).toBeNull();
+  });
+});
+
 it('their own diagram, never shared (no role): checks when it opens', async () => {
   const s = storage([[proposal('p1')]]);
   await show(undefined, s);

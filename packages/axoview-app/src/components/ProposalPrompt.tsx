@@ -43,6 +43,9 @@ type PlanStep = diagramAgent.PlanStep;
 
 export type ProposalStorage = Pick<StorageProvider, 'listProposals' | 'approveProposal' | 'rejectProposal'>;
 
+/** Returning to the tab re-reads the waiting proposals at most this often. */
+const RETURN_REREAD_MS = 2_000;
+
 export function ProposalPrompt({
   diagramId,
   role,
@@ -117,6 +120,26 @@ export function ProposalPrompt({
     window.addEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
     return () => window.removeEventListener(PROPOSALS_CHANGED_EVENT, onChanged);
   }, [diagramId, refresh]);
+
+  // Coming back to this tab or window: re-read. People usually ask their agent
+  // in another tab or app, and a proposal made meanwhile may not have reached
+  // this tab live (a hidden tab's sync stream closes after a minute; a proxy
+  // can hold events back), so it would otherwise wait for a page reload.
+  // Focus and visibility often fire together: one read covers both.
+  useEffect(() => {
+    let lastRead = 0;
+    const onReturn = () => {
+      if (document.visibilityState === 'hidden' || Date.now() - lastRead < RETURN_REREAD_MS) return;
+      lastRead = Date.now();
+      void refresh();
+    };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    return () => {
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+    };
+  }, [refresh]);
 
   // Review on a live "proposes changes" notice: once this diagram shows,
   // open its waiting proposals (re-read first: the notice may be newer).
