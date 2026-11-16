@@ -217,14 +217,24 @@ export function AuthControl() {
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
         >
           <Box sx={{ px: 2, py: 1, maxWidth: 260 }}>
-            <Typography variant="body2" fontWeight={600} noWrap>
+            <Typography variant="body2" noWrap sx={{
+              fontWeight: 600
+            }}>
               {user!.name}
             </Typography>
-            <Typography variant="caption" color="text.secondary" noWrap component="div">
+            <Typography variant="caption" noWrap component="div" sx={{
+              color: 'text.secondary'
+            }}>
               {user!.email}
             </Typography>
             {needsReconnect && (
-              <Typography variant="caption" color="warning.main" component="div" sx={{ mt: 0.5 }}>
+              <Typography
+                variant="caption"
+                component="div"
+                sx={{
+                  color: 'warning.main',
+                  mt: 0.5
+                }}>
                 {t('auth.reconnectHint', 'Signed out of Google — sign in again to use Drive')}
               </Typography>
             )}
@@ -310,7 +320,9 @@ export function AuthControl() {
           {t('auth.signIn', 'Sign in with Google')}
         </MenuItem>
         <Box sx={{ px: 2, pb: 1, maxWidth: 240 }}>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: 'text.secondary'
+          }}>
             {t('auth.signInHint', 'Keep your diagrams in Google Drive — available anywhere you sign in.')}
           </Typography>
         </Box>

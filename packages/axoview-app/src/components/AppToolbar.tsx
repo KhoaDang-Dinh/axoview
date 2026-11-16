@@ -432,7 +432,13 @@ export function AppToolbar() {
         }}
       >
         {isReadonlyUrl ? (
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ ml: 1 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+              ml: 1
+            }}>
             <Chip
               label={t('dialog.readOnly.mode')}
               variant="outlined"
@@ -633,7 +639,12 @@ export function AppToolbar() {
           }}
         >
           <Stack spacing={1.5}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <Stack
+              direction="row"
+              sx={{
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
               <Typography variant="subtitle2">
                 {t('share.title', 'Share Diagram')}
               </Typography>
@@ -646,7 +657,7 @@ export function AppToolbar() {
               </IconButton>
             </Stack>
             {sharedWithYou ? (
-              <Typography variant="body2" color="text.secondary" data-axoview-id="share-shared-with-you">
+              <Typography variant="body2" sx={{ color: 'text.secondary' }} data-axoview-id="share-shared-with-you">
                 {t(
                   'share.people.sharedWithYouViewer',
                   'Shared with you as Read only. Only its owner or a Full admin can share it.'
@@ -654,7 +665,7 @@ export function AppToolbar() {
               </Typography>
             ) : (
             <>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" sx={{ color: 'text.secondary' }}>
               {t('share.hint', 'Anyone with this link can view the diagram in read-only mode.')}
             </Typography>
             {shareError && (
@@ -667,12 +678,14 @@ export function AppToolbar() {
                 size="small"
                 fullWidth
                 value={shareLoading ? t('share.creating', 'Creating link…') : shareUrl}
-                inputProps={{
-                  readOnly: true,
-                  'data-axoview-id': 'share-url-input',
-                  style: { fontFamily: 'monospace', fontSize: 12 }
-                }}
                 onClick={handleShareUrlClick}
+                slotProps={{
+                  htmlInput: {
+                    readOnly: true,
+                    'data-axoview-id': 'share-url-input',
+                    style: { fontFamily: 'monospace', fontSize: 12 }
+                  }
+                }}
               />
               <Button
                 variant={shareCopied ? 'contained' : 'outlined'}
@@ -707,17 +720,14 @@ export function AppToolbar() {
           onClose={() => setShareMenuAnchor(null)}
           anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-          // `dense` drops the item text to body2 (14px), matching ExportPopover's
-          // <MenuList dense> — without it the app-level Menu inherits MUI's
-          // body1 (16px) default and "Copy link" reads oversized (bloat fix).
-          MenuListProps={{ dense: true }}
           slotProps={{
             paper: {
               sx: { minWidth: 248, mt: 0.5 },
               'data-axoview-id': 'share-menu'
-            } as React.ComponentProps<'div'>
-          }}
-        >
+            } as React.ComponentProps<'div'>,
+
+            list: { dense: true }
+          }}>
           <MenuItem onClick={() => void handleQuickCopyLink()} data-axoview-id="share-menu-copy-link">
             <ListItemIcon>
               <LinkIcon fontSize="small" />

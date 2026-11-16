@@ -1195,7 +1195,9 @@ export function FileExplorer() {
       >
         {composedData.length === 0 && sessionTree.status === 'ready' && !dualMode && (
           <Box sx={{ px: 1.5, py: 2, textAlign: 'center' }}>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: 'text.secondary'
+            }}>
               {t('fileExplorer.empty', 'No diagrams yet. Create one to get started.')}
             </Typography>
           </Box>
@@ -1328,7 +1330,9 @@ export function FileExplorer() {
           </IconButton>
         </DialogTitle>
         <DialogContent sx={{ pt: 0 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: 'text.secondary'
+          }}>
             {(() => {
               // ADR 0036 §3 — a Drive-place delete = Drive trash (recoverable),
               // so the copy must not claim permanence. Places model: the fate
@@ -1441,12 +1445,20 @@ export function FileExplorer() {
         </DialogTitle>
         <DialogContent sx={{ pt: 0 }}>
           {/* FEX-09: the copy names what the button does. It never replaced. */}
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{
+            color: 'text.secondary'
+          }}>
             &ldquo;{collisionDialog?.name}&rdquo; already exists in this folder.
             Move it in under a new name?
           </Typography>
           {collisionQueue.length > 1 && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mt: 1
+              }}>
               {collisionQueue.length - 1} more to resolve.
             </Typography>
           )}

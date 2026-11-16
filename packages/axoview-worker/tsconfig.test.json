@@ -2,7 +2,10 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "CommonJS",
+    // ts-jest emits CommonJS here, and node10 is the only resolution TypeScript 6
+    // pairs with it outside node16/nodenext. Revisit before moving to TypeScript 7.
     "moduleResolution": "Node",
+    "ignoreDeprecations": "6.0",
     "types": ["@cloudflare/workers-types", "jest", "node"]
   },
   "include": ["src/**/*"]

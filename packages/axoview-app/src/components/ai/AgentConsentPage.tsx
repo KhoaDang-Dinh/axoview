@@ -106,15 +106,21 @@ export function AgentConsentPage({ go = (href: string) => window.location.assign
                 <FormControlLabel
                   sx={{ mt: 0.5, alignItems: 'flex-start' }}
                   control={<Checkbox size="small" checked={propose} onChange={(e) => setPropose(e.target.checked)}
-                    sx={{ pt: 0.25 }} inputProps={{ 'aria-label': 'Let it propose changes' }} />}
+                    sx={{ pt: 0.25 }} slotProps={{
+                    input: { 'aria-label': 'Let it propose changes' }
+                  }} />}
                   label={<Typography variant="body2">propose changes: nothing changes until you approve each one in Axoview</Typography>}
                 />
               )}
             </Box>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{
+              color: 'text.secondary'
+            }}>
               You can change this or disconnect it any time under Axoview AI → + → Connected apps.
             </Typography>
-            <Stack direction="row" spacing={1} justifyContent="flex-end">
+            <Stack direction="row" spacing={1} sx={{
+              justifyContent: 'flex-end'
+            }}>
               <Button onClick={() => void decide(false)} disabled={busy} data-axoview-id="agent-consent-deny">Deny</Button>
               <Button variant="contained" onClick={() => void decide(true)} disabled={busy} data-axoview-id="agent-consent-allow">
                 Allow

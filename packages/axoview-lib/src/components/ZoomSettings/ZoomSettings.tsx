@@ -26,7 +26,13 @@ export const ZoomSettings = () => {
 
   return (
     <Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 2
+        }}
+      >
         {locale.settings.zoom.description}
       </Typography>
 
@@ -44,7 +50,12 @@ export const ZoomSettings = () => {
                 <Typography variant="body1">
                   {locale.settings.zoom.zoomToCursor}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary'
+                  }}
+                >
                   {locale.settings.zoom.zoomToCursorDesc}
                 </Typography>
               </Box>

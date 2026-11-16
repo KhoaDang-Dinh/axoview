@@ -113,9 +113,11 @@ const LinkedDiagramSection = ({
   >
     <Typography
       variant="overline"
-      color="text.secondary"
-      sx={{ display: 'block', mb: 1 }}
-    >
+      sx={{
+        color: 'text.secondary',
+        display: 'block',
+        mb: 1
+      }}>
       Linked diagram
     </Typography>
     {linkedDiagramMeta ? (
@@ -243,9 +245,11 @@ const ReadOnlyNodePanel = ({
           <Box sx={{ px: 2, pt: 2, pb: 2 }}>
             <Typography
               variant="overline"
-              color="text.secondary"
-              sx={{ display: 'block', mb: 1 }}
-            >
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mb: 1
+              }}>
               {labels.notes}
             </Typography>
             <RichTextEditor value={modelItem.notes} readOnly />

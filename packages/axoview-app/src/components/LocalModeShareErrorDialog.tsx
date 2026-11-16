@@ -56,7 +56,9 @@ export function LocalModeShareErrorDialog({
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {t(
             'dialog.localModeShareError.body',
             'Share links only open on the Axoview site that created them. Ask whoever sent it for a link from that site — or, if this site is yours, open it from the address your server runs on.'

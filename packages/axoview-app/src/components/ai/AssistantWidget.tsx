@@ -311,12 +311,20 @@ export function AssistantWidget() {
           {view === 'chat' ? (
             <>
               <Box sx={{ p: 2, overflowY: 'auto', overflowX: 'hidden', flex: 1 }} aria-live="polite">
-                <Typography variant="caption" color="text.secondary">{liveEnabled
+                <Typography variant="caption" sx={{
+                  color: 'text.secondary'
+                }}>{liveEnabled
                   ? (pageOption
                     ? 'Nova chat · Sees your page only when “Include this page” is ticked · History kept 30 days'
                     : 'Nova chat · No diagram access · History retained for 30 days')
                   : 'Guest preview only — no model or diagram data is sent.'}</Typography>
-                {isShared && <Typography sx={{ mt: 1 }} variant="caption" display="block" color="text.secondary">View-only diagram: no editing access.</Typography>}
+                {isShared && <Typography
+                  variant="caption"
+                  sx={{
+                    display: 'block',
+                    color: 'text.secondary',
+                    mt: 1
+                  }}>View-only diagram: no editing access.</Typography>}
                 {(liveEnabled ? liveMessages.map((message, id) => ({ ...message, id })) : messages).map((message) => {
                   const live = message as LiveMessage & { id: number };
                   return (
@@ -332,8 +340,14 @@ export function AssistantWidget() {
                             onApprove={approving ? (indexes) => approve(live.id, indexes) : undefined} />
                         )}
                         {live.sources && live.sources.length > 0 && (
-                          <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}
-                            data-axoview-id="ai-sources">
+                          <Typography
+                            variant="caption"
+                            component="div"
+                            data-axoview-id="ai-sources"
+                            sx={{
+                              color: 'text.secondary',
+                              mt: 0.5
+                            }}>
                             From the manual: {live.sources.map((source) => source.title).join(' · ')}
                           </Typography>
                         )}
@@ -342,7 +356,9 @@ export function AssistantWidget() {
                   );
                 })}
                 {sendError && <Typography role="alert" data-axoview-id="ai-send-error" variant="body2" color="error">{sendError}</Typography>}
-                {sending && <Typography variant="caption" color="text.secondary">Nova is responding…</Typography>}
+                {sending && <Typography variant="caption" sx={{
+                  color: 'text.secondary'
+                }}>Nova is responding…</Typography>}
                 <div ref={listEndRef} />
               </Box>
               <Box component="form" onSubmit={submit} sx={{ p: 1.5, borderTop: 1, borderColor: 'divider' }}>
@@ -357,7 +373,9 @@ export function AssistantWidget() {
                 )}
                 <Box sx={{ display: 'flex', gap: 1 }}>
                   <TextField fullWidth size="small" label="Message" value={draft} onChange={(e) => setDraft(e.target.value)}
-                    inputProps={{ maxLength: 2000, 'data-axoview-id': 'ai-message-input' }} />
+                    slotProps={{
+                      htmlInput: { maxLength: 2000, 'data-axoview-id': 'ai-message-input' }
+                    }} />
                   <IconButton type="submit" color="primary" aria-label="Send message" data-axoview-id="ai-send" disabled={!draft.trim() || sending}><Send /></IconButton>
                 </Box>
               </Box>
@@ -365,7 +383,12 @@ export function AssistantWidget() {
           ) : (
             <Box sx={{ p: 2, overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
               {agentsOption && <ConnectedApps />}
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  mb: 2
+                }}>
                 {agentsOption
                   ? 'Choose your AI to see how to connect it. It signs in as you, and every change it proposes waits for your approval.'
                   : 'Choose a client. Setup is informational until the remote MCP server and OAuth flow are deployed.'}
@@ -374,7 +397,9 @@ export function AssistantWidget() {
                 <Box key={family.id} sx={{ border: 1, borderColor: 'divider', borderRadius: 2, mb: 1 }}>
                   <Button fullWidth sx={{ justifyContent: 'space-between', textTransform: 'none', p: 1.5 }}
                     onClick={() => setExpandedFamily(expandedFamily === family.id ? null : family.id)}>
-                    {family.label} <Typography variant="caption" color="text.secondary">{family.clients.map(c => c.label).join(' / ')}</Typography>
+                    {family.label} <Typography variant="caption" sx={{
+                    color: 'text.secondary'
+                  }}>{family.clients.map(c => c.label).join(' / ')}</Typography>
                   </Button>
                   {expandedFamily === family.id && family.clients.map((client) => (
                     <Button key={client.id} fullWidth endIcon={<OpenInNew />} sx={{ justifyContent: 'space-between', textTransform: 'none' }}

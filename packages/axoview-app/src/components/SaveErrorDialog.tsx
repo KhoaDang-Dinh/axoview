@@ -40,7 +40,9 @@ export function SaveErrorDialog({ open, onDismiss, onRetry }: SaveErrorDialogPro
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: 0 }}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           {t(
             'dialog.saveError.body',
             "Your changes weren't saved. Browser storage may be full. Try clearing space and saving again."

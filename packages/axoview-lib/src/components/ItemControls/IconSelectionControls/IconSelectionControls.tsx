@@ -298,8 +298,11 @@ export const IconSelectionControls = () => {
           />
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ display: 'block', mt: 0.5 }}
+            sx={{
+              color: 'text.secondary',
+              display: 'block',
+              mt: 0.5
+            }}
           >
             {t('isometricHint')}
           </Typography>

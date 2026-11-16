@@ -40,9 +40,13 @@ export function AssistantConnectionPage() {
               Add Axoview to {client.label} as a remote MCP server with this address. {client.label} then opens
               Axoview in your browser: sign in, check what it asks for, and press Allow.
             </Typography>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{
+              alignItems: 'center'
+            }}>
               <TextField size="small" fullWidth value={url} label="MCP server URL"
-                inputProps={{ readOnly: true, 'data-axoview-id': 'ai-connect-url' }} />
+                slotProps={{
+                  htmlInput: { readOnly: true, 'data-axoview-id': 'ai-connect-url' }
+                }} />
               <Button size="small" startIcon={<ContentCopy />} onClick={() => copy(url)} sx={{ flexShrink: 0 }}>
                 {copied ? 'Copied' : 'Copy'}
               </Button>
@@ -67,7 +71,13 @@ export function AssistantConnectionPage() {
               {client.family} integration with Axoview is planned. An external AI client must initiate
               the MCP OAuth connection before Axoview can display a real permission consent screen.
             </Typography>
-            <Typography color="text.secondary" variant="caption" display="block" sx={{ mb: 2 }}>
+            <Typography
+              variant="caption"
+              sx={{
+                color: 'text.secondary',
+                display: 'block',
+                mb: 2
+              }}>
               Not available on this deployment yet.
             </Typography>
           </>

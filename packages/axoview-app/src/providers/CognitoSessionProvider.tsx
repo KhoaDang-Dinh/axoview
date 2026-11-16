@@ -131,7 +131,11 @@ export function CognitoSessionProvider({ children }: { children: React.ReactNode
           <Typography variant="h5" gutterBottom>
             {sessionStatus === 'error' ? 'Could not restore your session' : 'Sign in to AxoView'}
           </Typography>
-          <Typography color="text.secondary" sx={{ mb: 2 }}>
+          <Typography
+            sx={{
+              color: 'text.secondary',
+              mb: 2
+            }}>
             {sessionStatus === 'error'
               ? 'Sign in again to continue. Your diagrams stay private to your account.'
               : 'Your diagrams are saved to your account and stay private to you.'}

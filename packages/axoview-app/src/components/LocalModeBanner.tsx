@@ -65,7 +65,9 @@ export function LocalModeBanner() {
       }}
       role="status"
     >
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="caption" sx={{
+        color: 'text.secondary'
+      }}>
         {t('status.sessionBanner')}
       </Typography>
       {driveAction && (

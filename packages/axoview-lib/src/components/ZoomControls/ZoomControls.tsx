@@ -51,7 +51,9 @@ export const ZoomControls = () => {
   const { fitToView } = useDiagramUtils();
 
   return (
-    <Stack direction="row" spacing={0} alignItems="center">
+    <Stack direction="row" spacing={0} sx={{
+      alignItems: 'center'
+    }}>
       <Tooltip title={tooltipWithShortcut(t('zoomOut'), 'Wheel ↓')} placement="top">
         <span>
           <IconButton

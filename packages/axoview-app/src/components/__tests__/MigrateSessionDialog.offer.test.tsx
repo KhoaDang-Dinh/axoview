@@ -17,6 +17,7 @@
 import { act, waitFor } from '@testing-library/react';
 import { render } from '@testing-library/react';
 
+jest.mock('react-arborist', () => require('../../testUtils/arboristStub'));
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: unknown) =>

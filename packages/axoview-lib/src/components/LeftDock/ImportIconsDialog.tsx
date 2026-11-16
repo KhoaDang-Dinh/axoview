@@ -43,7 +43,12 @@ export const ImportIconsDialog = ({
       </DialogTitle>
       <DialogContent>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            sx={{
+              color: 'text.secondary'
+            }}
+          >
             Choose how these icons should be rendered on the canvas.
           </Typography>
           <FormControlLabel
@@ -59,7 +64,12 @@ export const ImportIconsDialog = ({
                 <Typography variant="body2">
                   Apply isometric projection
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    color: 'text.secondary'
+                  }}
+                >
                   For 3D-style icons. Uncheck for flat logos (AWS, Azure, etc.)
                 </Typography>
               </Box>

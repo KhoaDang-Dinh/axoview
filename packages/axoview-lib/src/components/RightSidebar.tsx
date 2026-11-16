@@ -112,10 +112,11 @@ export const RightSidebar = ({ open, editorMode }: Props) => {
           <TuneOutlined sx={{ fontSize: 32, opacity: 0.4 }} />
           <Typography
             variant="body2"
-            color="text.disabled"
-            textAlign="center"
-            sx={{ lineHeight: 1.5 }}
-          >
+            sx={{
+              color: 'text.disabled',
+              textAlign: 'center',
+              lineHeight: 1.5
+            }}>
             {t('emptyState')}
           </Typography>
         </Box>

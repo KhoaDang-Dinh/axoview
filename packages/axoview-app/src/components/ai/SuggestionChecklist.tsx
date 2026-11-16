@@ -39,7 +39,13 @@ export function SuggestionChecklist({ steps, applied = [], onRecheck, onApprove 
 
   return (
     <Box data-axoview-id="ai-suggestions" sx={{ mt: 1, border: 1, borderColor: 'divider', borderRadius: 2, p: 1 }}>
-      <Typography variant="caption" color="text.secondary" component="div" sx={{ mb: 0.5 }}>
+      <Typography
+        variant="caption"
+        component="div"
+        sx={{
+          color: 'text.secondary',
+          mb: 0.5
+        }}>
         {onApprove
           ? 'Suggested changes — nothing changes until you approve. Undo takes an approval back.'
           : 'Suggested changes — make them yourself; nothing is changed automatically.'}
@@ -53,7 +59,9 @@ export function SuggestionChecklist({ steps, applied = [], onRecheck, onApprove 
             data-axoview-id={`ai-suggestion-${step.index}`} data-status={isApplied ? 'applied' : step.status}>
             {!onApprove && (
               <Checkbox size="small" sx={{ p: 0.25 }} disabled={!applicable} checked={done.has(step.index)}
-                onChange={() => toggle(step.index)} inputProps={{ 'aria-label': `Done: ${step.summary}` }} />
+                onChange={() => toggle(step.index)} slotProps={{
+                input: { 'aria-label': `Done: ${step.summary}` }
+              }} />
             )}
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography variant="body2" data-done={struck ? 'true' : undefined} sx={{
@@ -64,16 +72,28 @@ export function SuggestionChecklist({ steps, applied = [], onRecheck, onApprove 
                 {step.summary}
               </Typography>
               {step.reason && !isApplied && (
-                <Typography variant="caption" color="text.secondary" component="div" sx={{ fontStyle: 'italic' }}>
+                <Typography
+                  variant="caption"
+                  component="div"
+                  sx={{
+                    color: 'text.secondary',
+                    fontStyle: 'italic'
+                  }}>
                   {step.reason}
                 </Typography>
               )}
               {isApplied ? (
-                <Typography variant="caption" color="success.main" component="div">Approved and done</Typography>
+                <Typography variant="caption" component="div" sx={{
+                  color: 'success.main'
+                }}>Approved and done</Typography>
               ) : applicable ? (
-                !onApprove && <Typography variant="caption" color="text.secondary" component="div">{step.howTo}</Typography>
+                !onApprove && <Typography variant="caption" component="div" sx={{
+                  color: 'text.secondary'
+                }}>{step.howTo}</Typography>
               ) : (
-                <Typography variant="caption" color="warning.main" component="div">
+                <Typography variant="caption" component="div" sx={{
+                  color: 'warning.main'
+                }}>
                   Not applicable: {step.problem}
                 </Typography>
               )}

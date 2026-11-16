@@ -82,6 +82,18 @@
       "tripwire": "Re-review immediately if minimatch enters a production tree, or any runtime code or CI step expands a glob taken from user or PR-author input (for example a workflow that globs a path from an issue or PR body). Drop this entry once eslint, jest and the others move to minimatch >= 11.0.1.",
       "acceptedOn": "2026-11-04",
       "reviewBy": "2027-02-04"
+    },
+    {
+      "id": "GHSA-3g3m-2fjr-6pw4",
+      "package": "glob",
+      "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
+      "shipped": false,
+      "scope": "root",
+      "why": "Every glob copy is dev-only (`npm ls glob --omit=dev` is empty): 13.0.7 for jest-config / jest-runtime / @jest/reporters, 10.5.0 for test-exclude (Jest coverage), and 13.0.6 bundled inside the npm copy that @semantic-release/npm runs at release time. None passes an AbortSignal, and every pattern is repo-authored (Jest config, coverage globs, package files). Nothing ships in either bundle or the Docker images.",
+      "noForwardFix": "Fixed only in glob 14.0.2+. Jest 30 pins ^13 and test-exclude ^10, and npm bundles its own copy, so the fix waits on those releases.",
+      "tripwire": "If glob enters the prod tree, or code starts passing a user-supplied pattern or an AbortSignal-bounded walk to it, this becomes live. Drop this entry once the dependents above move to a patched release.",
+      "acceptedOn": "2026-11-16",
+      "reviewBy": "2027-02-16"
     }
   ]
 }

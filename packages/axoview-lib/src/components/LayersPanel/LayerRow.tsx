@@ -195,9 +195,10 @@ const LayerNameCell = ({
           {itemCount > 0 && (
             <Typography
               variant="micro"
-              color="text.disabled"
-              sx={{ flexShrink: 0 }}
-            >
+              sx={{
+                color: 'text.disabled',
+                flexShrink: 0
+              }}>
               {itemCount}
             </Typography>
           )}

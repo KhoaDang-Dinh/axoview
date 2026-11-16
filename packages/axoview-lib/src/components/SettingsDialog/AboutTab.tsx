@@ -5,7 +5,9 @@ export const AboutTab = () => {
   return (
     <Box sx={{ px: 2, py: 2 }}>
       <Stack spacing={2}>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{
+          color: 'text.secondary'
+        }}>
           Axoview
         </Typography>
         <Typography variant="body2">
@@ -22,10 +24,17 @@ export const AboutTab = () => {
         </Button>
         <Divider sx={{ my: 1 }} />
         <Stack spacing={0.75}>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              fontWeight: 600
+            }}>
             Lineage &amp; attribution
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: 'text.secondary'
+          }}>
             Forked from{' '}
             <Link
               href="https://github.com/stan-smith/FossFLOW"
@@ -46,7 +55,9 @@ export const AboutTab = () => {
             </Link>
             .
           </Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{
+            color: 'text.secondary'
+          }}>
             Bundled icon collections (AWS, GCP, Azure, Kubernetes, core) ship via{' '}
             <Link
               href="https://github.com/markmanx/isoflow"

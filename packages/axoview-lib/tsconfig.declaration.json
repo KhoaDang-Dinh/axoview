@@ -5,7 +5,8 @@
     "declaration": true,
     "declarationMap": false,
     "noEmit": false,
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "rootDir": "./src"
   },
   "exclude": ["node_modules", "./dist", "./docs", "**/*.test.ts", "**/*.test.tsx"],
   "include": [

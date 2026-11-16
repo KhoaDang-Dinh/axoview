@@ -161,8 +161,10 @@ function PersonRow({ p, right }: { p: DrivePermission; right: ReactNode }) {
       <ListItemText
         primary={primary}
         secondary={secondary}
-        primaryTypographyProps={{ noWrap: true, variant: 'body2' }}
-        secondaryTypographyProps={{ noWrap: true, variant: 'caption' }}
+        slotProps={{
+          primary: { noWrap: true, variant: 'body2' },
+          secondary: { noWrap: true, variant: 'caption' }
+        }}
       />
     </ListItem>
   );
@@ -402,9 +404,12 @@ export function DriveShareManageDialog({
                       {...params}
                       type="email"
                       placeholder={t('share.drive.manage.emailPlaceholder', 'name@example.com')}
-                      inputProps={{
-                        ...params.inputProps,
-                        'data-axoview-id': 'drive-share-manage-add-email'
+                      slotProps={{
+                        ...params.slotProps,
+                        htmlInput: {
+                          ...params.slotProps.htmlInput,
+                          'data-axoview-id': 'drive-share-manage-add-email'
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
@@ -456,7 +461,7 @@ export function DriveShareManageDialog({
                 {t('share.drive.manage.peopleWithAccess', 'People with access')}
               </Typography>
               {!owner && others.length === 0 ? (
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                   {t('share.drive.manage.onlyYou', 'Only you have access so far.')}
                 </Typography>
               ) : (
@@ -465,7 +470,7 @@ export function DriveShareManageDialog({
                     <PersonRow
                       p={owner}
                       right={
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                           {t('share.drive.manage.roleOwner', 'Owner')}
                         </Typography>
                       }
@@ -476,8 +481,8 @@ export function DriveShareManageDialog({
                       key={p.id}
                       p={p}
                       right={
-                        <Stack direction="row" alignItems="center" spacing={0.5}>
-                          <Typography variant="caption" color="text.secondary">
+                        <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                             {t(roleLabelKey(p.role), p.role)}
                           </Typography>
                           <IconButton
@@ -506,7 +511,7 @@ export function DriveShareManageDialog({
               >
                 {t('share.drive.manage.generalAccess', 'General access')}
               </Typography>
-              <Stack direction="row" spacing={1.5} alignItems="center">
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
                 <Avatar
                   sx={{
                     width: 32,

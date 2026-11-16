@@ -157,7 +157,9 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
 
   return (
     <Stack spacing={1} data-axoview-id="share-people">
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" sx={{
+        color: 'text.secondary'
+      }}>
         {t('share.people.hint', 'Add people by email.')}
       </Typography>
       <Stack direction="row" spacing={1}>
@@ -175,9 +177,11 @@ export function SharePeople({ diagramId, storage }: { diagramId: string; storage
               void add();
             }
           }}
-          inputProps={{
-            'data-axoview-id': 'share-email-input',
-            'aria-label': t('share.people.emailLabel', 'Email address to share with')
+          slotProps={{
+            htmlInput: {
+              'data-axoview-id': 'share-email-input',
+              'aria-label': t('share.people.emailLabel', 'Email address to share with')
+            }
           }}
         />
         <Select

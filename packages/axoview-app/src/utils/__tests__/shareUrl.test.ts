@@ -1,20 +1,16 @@
 import { shareUrlFromUuid } from '../shareUrl';
+import { setJsdomUrl } from '../../testUtils/jsdomUrl';
 
 describe('shareUrlFromUuid (MQA #24 regression)', () => {
-  const originalLocation = window.location;
+  let restoreUrl: (() => void) | undefined;
 
   afterEach(() => {
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: originalLocation,
-    });
+    restoreUrl?.();
+    restoreUrl = undefined;
   });
 
   function setOrigin(origin: string) {
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: { ...originalLocation, origin },
-    });
+    restoreUrl = setJsdomUrl(`${origin}/`);
   }
 
   it('anchors the share URL to the current window origin (under the /app base, R1)', () => {
